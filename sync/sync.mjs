@@ -75,14 +75,41 @@ function readState() {
 function writeState(s) { fs.writeFileSync(STATE_FILE, JSON.stringify(s, null, 2)); }
 
 // ── rename transform (identical to the manual de-coupling) ──────────────────
-// Scrubs every trace of the source platform: the SDK import path, the `base44`
-// identifier, and any brand mentions in comments/strings (any case).
+// Scrubs every trace of the source platform: hosted asset URLs, the SDK import
+// path, the `base44` identifier, and brand mentions in comments/strings.
+// Asset-URL rewrites run FIRST (before the identifier rename would mangle the
+// domain). Platform-hosted images map to /brand/<filename>, served from
+// client/public/brand — download the asset there (the sync logs any it finds).
 function transformCode(text) {
   return text
+    .replace(/https?:\/\/media\.base44\.com\/images\/public\/[^/"'`)\s]+\/([^"'`)\s]+)/g, '/brand/$1')
+    .replace(/https?:\/\/base44\.com\/logo_v2\.svg/g, '/favicon.svg')
     .replace(/@\/api\/base44Client/g, '@/api/client')
-    .replace(/\bbase44\b/g, 'api')       // identifier usage
-    .replace(/\bBase44\b/g, 'the backend') // Title-case brand mentions (prose)
+    .replace(/\bbase44\b/g, 'api')          // identifier usage
+    .replace(/\bBase44\b/g, 'the backend')  // Title-case brand mentions (prose)
     .replace(/\bBASE44\b/g, 'BACKEND');
+}
+
+// Download any platform-hosted images referenced in `raw` into
+// client/public/brand so the app has no external asset dependency. Best-effort:
+// logs a warning if a download fails so it can be handled manually.
+const BRAND_DIR = path.join(CLIENT, 'public', 'brand');
+function ensureBrandAssets(raw) {
+  const re = /https?:\/\/media\.base44\.com\/images\/public\/[^/"'`)\s]+\/([^"'`)\s]+)/g;
+  let m;
+  while ((m = re.exec(raw))) {
+    const url = m[0];
+    const file = m[1];
+    const dest = path.join(BRAND_DIR, file);
+    if (fs.existsSync(dest)) continue;
+    fs.mkdirSync(BRAND_DIR, { recursive: true });
+    try {
+      execFileSync('curl', ['-sSL', '-o', dest, url], { timeout: 30000 });
+      actions.push(`brand asset: ${file}`);
+    } catch (e) {
+      warnings.push(`could not download brand asset ${file} — add it to client/public/brand/ manually (${e.message.split('\n')[0]})`);
+    }
+  }
 }
 
 function backup(destAbs) {
@@ -118,7 +145,9 @@ function syncClientFile(relFromSrc) {
   fs.mkdirSync(path.dirname(to), { recursive: true });
   const ext = path.extname(from);
   if (CODE_EXT.has(ext)) {
-    fs.writeFileSync(to, transformCode(fs.readFileSync(from, 'utf8')));
+    const raw = fs.readFileSync(from, 'utf8');
+    ensureBrandAssets(raw); // localize any platform-hosted images this file references
+    fs.writeFileSync(to, transformCode(raw));
   } else {
     fs.copyFileSync(from, to);
   }
@@ -293,6 +322,36 @@ function portBackendFunction(name, { hasClaude, isNew }) {
   }
 }
 
+// Detect `api.<namespace>` usages in the client that our SDK does not provide —
+// i.e. a new platform SDK surface the upstream started using that must be
+// implemented in client/src/api/client.js (this is how api.users.inviteUser
+// first appeared). Ignores our own SDK namespaces and known non-SDK `api` vars
+// (embla carousel instances, hostnames like api.legenex.com).
+const SDK_NAMESPACES = new Set(['entities', 'auth', 'users', 'functions', 'integrations', 'request', 'getToken', 'setToken']);
+const IGNORE_API_PROPS = new Set([
+  // embla carousel instance methods
+  'on', 'off', 'canScrollNext', 'canScrollPrev', 'scrollTo', 'scrollNext', 'scrollPrev',
+  'scrollSnapList', 'selectedScrollSnap', 'reInit', 'plugins', 'internalEngine',
+  // hostname fragments that survive as api.<tld>
+  'legenex', 'com', 'io', 'net', 'org', 'app', 'tiktok',
+]);
+function checkNewSdkSurfaces() {
+  const seen = new Set();
+  const files = walk(CLIENT_SRC);
+  for (const rel of files) {
+    if (!CODE_EXT.has(path.extname(rel))) continue;
+    const text = fs.readFileSync(path.join(CLIENT_SRC, rel), 'utf8');
+    const re = /\bapi\.([a-zA-Z_$][\w$]*)/g;
+    let m;
+    while ((m = re.exec(text))) {
+      const ns = m[1];
+      if (SDK_NAMESPACES.has(ns) || IGNORE_API_PROPS.has(ns) || seen.has(ns)) continue;
+      seen.add(ns);
+      warnings.push(`possible new SDK surface "api.${ns}" in ${rel} — implement it in client/src/api/client.js (unknown namespaces will break at runtime)`);
+    }
+  }
+}
+
 // ── build + restart ──────────────────────────────────────────────────────────
 function buildClient() {
   log('building client…');
@@ -391,6 +450,8 @@ async function main() {
   if (changes.depsChanged) {
     warnings.push('upstream package.json changed — new frontend dependencies may be required. Check .sync/upstream/package.json and run "npm --prefix client install <pkg>" if the build fails.');
   }
+
+  checkNewSdkSurfaces();
 
   const nothingApplied = actions.length === 0;
   log(`applied ${actions.length} change(s)` + (warnings.length ? `, ${warnings.length} warning(s)` : ''));

@@ -36,7 +36,7 @@ export default function SettingsUsers() {
     queryKey: ['users'],
     queryFn: async () => {
       // listUsers runs with the service role so users added directly in the backend
-      // (not just the logged-in user) show up. Fall back to the role-scoped list.
+      // (not just the logged-in user) show up. Fall back to the RLS-scoped list.
       try {
         const res = await api.functions.invoke('listUsers', {});
         return res?.data?.users || [];
@@ -60,11 +60,14 @@ export default function SettingsUsers() {
     setInviting(true);
     const finalPerms = sanitizePermissions(baseRole, perms);
     await api.users.inviteUser(email, baseRole === 'owner' || baseRole === 'admin' ? 'admin' : 'user');
-    // Persist granular config on the freshly created user record once available.
-    try {
-      const list = await api.entities.User.filter({ email });
-      if (list[0]) await api.entities.User.update(list[0].id, { base_role: baseRole, permissions: JSON.stringify(finalPerms) });
-    } catch { /* record may not exist until they accept */ }
+    // Provision the User record immediately with the service role so invited
+    // users appear in the table before they accept and log in.
+    await api.functions.invoke('upsertInvitedUser', {
+      email,
+      base_role: baseRole,
+      permissions: JSON.stringify(finalPerms),
+      role: (baseRole === 'owner' || baseRole === 'admin') ? 'admin' : 'user',
+    });
     toast.success(`Invitation sent to ${email}`);
     setInviteOpen(false); setEmail(''); setInviting(false);
     qc.invalidateQueries({ queryKey: ['users'] });

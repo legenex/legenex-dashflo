@@ -120,6 +120,13 @@ export const auth = {
   },
 };
 
+// ── Users (admin) ────────────────────────────────────────────────────────────
+export const users = {
+  // Invite a user by email; the backend emails a set-password link.
+  inviteUser: (email, role = 'user') =>
+    request('/auth/invite', { method: 'POST', body: { email, role } }),
+};
+
 // ── Functions ────────────────────────────────────────────────────────────────
 // Returns { data, status } to match how callers consume function results.
 async function invokeFunction(name, body = {}) {
@@ -141,5 +148,5 @@ export const integrations = {
   },
 };
 
-export const api = { entities, auth, functions, integrations, request, getToken, setToken };
+export const api = { entities, auth, users, functions, integrations, request, getToken, setToken };
 export default api;

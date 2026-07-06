@@ -134,6 +134,58 @@ router.post('/logout', (_req, res) => {
   res.clearCookie(config.auth.cookieName).json({ success: true });
 });
 
+// Invite a user: admin-only. Creates the User record + a credential row with a
+// set-password token, and emails an invite link. The invited user sets their
+// password via /reset-password?token=... and can then log in. Profile fields
+// (base_role/permissions) are finalized by the upsertInvitedUser function the
+// UI calls right after.
+router.post('/invite', requireAuth, async (req, res) => {
+  const caller = req.user;
+  if ((caller.base_role || caller.role) !== 'owner' && caller.role !== 'admin') {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  const email = normalizeEmail(req.body?.email);
+  const role = req.body?.role === 'admin' ? 'admin' : 'user';
+  if (!email) return res.status(400).json({ error: 'email is required' });
+
+  let cred = await credByEmail(email);
+  let userId;
+  if (cred) {
+    userId = cred.user_id; // already exists — just refresh the invite token
+  } else {
+    userId = newId();
+    await repo('User').create({
+      id: userId,
+      email,
+      full_name: email.split('@')[0],
+      role,
+      base_role: role === 'admin' ? 'admin' : 'manager',
+    });
+  }
+
+  const token = crypto.randomBytes(24).toString('hex');
+  if (cred) {
+    await pool.query(
+      "UPDATE auth_credentials SET reset_token = $2, reset_expires = now() + interval '7 days' WHERE user_id = $1",
+      [userId, token]
+    );
+  } else {
+    await pool.query(
+      "INSERT INTO auth_credentials (user_id, email, reset_token, reset_expires) VALUES ($1, $2, $3, now() + interval '7 days')",
+      [userId, email, token]
+    );
+  }
+
+  const base = config.publicBaseUrl || '';
+  await sendMail({
+    to: email,
+    subject: "You've been invited to DashOS",
+    text: `You've been invited to DashOS. Set your password to get started: ${base}/reset-password?token=${token}`,
+  });
+
+  res.json({ success: true, user_id: userId });
+});
+
 router.post('/reset-password-request', async (req, res) => {
   const email = normalizeEmail(req.body?.email);
   const cred = await credByEmail(email);

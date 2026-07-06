@@ -21,7 +21,7 @@ export default function PortalSidebar() {
     <aside className="fixed left-0 top-0 bottom-0 w-[248px] bg-sidebar flex flex-col border-r border-sidebar-border z-50"
       style={{ borderTopRightRadius: '16px', borderBottomRightRadius: '16px' }}>
       <div className="flex items-center px-5 py-6">
-        <img src="https://media.api.com/images/public/6a363ed8bf1b77641238d41d/f9cc21785_LogoWideLightClear.png" alt="Legenex" className="h-10 w-auto max-w-full object-contain" />
+        <img src="/brand/f9cc21785_LogoWideLightClear.png" alt="Legenex" className="h-10 w-auto max-w-full object-contain" />
       </div>
       <div className="px-5 -mt-3 mb-2">
         <span className="text-[11px] font-semibold text-primary uppercase tracking-wider">Buyer Portal</span>

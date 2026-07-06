@@ -151,8 +151,8 @@ export default function Sidebar() {
   const { theme } = useTheme();
   const isDark = theme === 'dark' || (theme === 'system' && typeof window !== 'undefined' && window.matchMedia?.('(prefers-color-scheme: dark)').matches);
   const logoSrc = isDark
-    ? 'https://media.api.com/images/public/6a363ed8bf1b77641238d41d/f9cc21785_LogoWideLightClear.png'
-    : 'https://media.api.com/images/public/6a4957e7b03e9b10c170d29e/9eecce577_Logo-Wide-Dark-Clear.png';
+    ? '/brand/f9cc21785_LogoWideLightClear.png'
+    : '/brand/9eecce577_Logo-Wide-Dark-Clear.png';
   const groups = filterNav(navGroups, can);
   const { width, startResize } = useSidebarWidth();
   const [openGroups, setOpenGroups] = useState(() => loadOpenGroups(location));
