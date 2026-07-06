@@ -1,0 +1,87 @@
+{
+  "name": "LeadSource",
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "Display name of this lead source"
+    },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "google_sheets",
+        "ringba",
+        "truecall"
+      ],
+      "description": "Source type: Google Sheets pull, or Ringba/TrueCall inbound call webhook"
+    },
+    "enabled": {
+      "type": "boolean",
+      "default": true
+    },
+    "supplier_name": {
+      "type": "string",
+      "description": "Supplier this source's leads are attributed to"
+    },
+    "campaign_id": {
+      "type": "string",
+      "description": "Campaign this source's leads are attributed to"
+    },
+    "api_key_id": {
+      "type": "string",
+      "description": "Reference to the ApiKey record used to authenticate ingestion through processLead"
+    },
+    "mapping": {
+      "type": "string",
+      "description": "JSON object mapping source column/payload key -> our lead field name"
+    },
+    "sheet_id": {
+      "type": "string",
+      "description": "Google Sheets spreadsheet ID (extracted from URL)"
+    },
+    "worksheet": {
+      "type": "string",
+      "description": "Worksheet/tab name to read from"
+    },
+    "sync_interval": {
+      "type": "string",
+      "enum": [
+        "15m",
+        "1h",
+        "6h",
+        "daily"
+      ],
+      "default": "1h",
+      "description": "How often the scheduled sync pulls rows (Google Sheets only)"
+    },
+    "dedupe_column": {
+      "type": "string",
+      "description": "Source column used as the de-dupe key; falls back to a hash of the whole row"
+    },
+    "seen_keys": {
+      "type": "string",
+      "description": "JSON array of de-dupe markers already ingested, so the same row is not ingested twice"
+    },
+    "webhook_key": {
+      "type": "string",
+      "description": "Secret key appended to the inbound call webhook URL (Ringba/TrueCall)"
+    },
+    "last_synced_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "last_sync_status": {
+      "type": "string",
+      "description": "Short result of the last sync/event e.g. 'Ingested 4 rows'"
+    },
+    "ingested_count": {
+      "type": "number",
+      "default": 0,
+      "description": "Total leads ingested through this source"
+    }
+  },
+  "required": [
+    "name",
+    "kind"
+  ]
+}

@@ -1,0 +1,107 @@
+{
+  "name": "Buyer",
+  "type": "object",
+  "properties": {
+    "company_name": {
+      "type": "string",
+      "description": "Buyer / destination company name"
+    },
+    "email": {
+      "type": "string"
+    },
+    "phone": {
+      "type": "string"
+    },
+    "location": {
+      "type": "string"
+    },
+    "buyer_type": {
+      "type": "string",
+      "enum": [
+        "",
+        "Direct",
+        "Aggregator",
+        "Network"
+      ],
+      "default": "",
+      "description": "Type of buyer / destination"
+    },
+    "vertical": {
+      "type": "string",
+      "description": "Primary vertical code"
+    },
+    "portal_enabled": {
+      "type": "boolean",
+      "default": false,
+      "description": "When true, this buyer can log into the partner portal"
+    },
+    "billing_mode": {
+      "type": "string",
+      "enum": [
+        "lead_count",
+        "wallet"
+      ],
+      "default": "lead_count",
+      "description": "Lead Count mode (post-pay invoicing) vs Wallet mode (pre-paid balance)"
+    },
+    "billing_model": {
+      "type": "string",
+      "description": "Billing model description e.g. Net 30, Prepaid"
+    },
+    "billing_email": {
+      "type": "string"
+    },
+    "balance": {
+      "type": "number",
+      "default": 0,
+      "description": "Current wallet balance"
+    },
+    "min_balance": {
+      "type": "number",
+      "default": 0,
+      "description": "Minimum balance threshold before auto-recharge / pause"
+    },
+    "auto_recharge": {
+      "type": "boolean",
+      "default": false
+    },
+    "auto_recharge_amount": {
+      "type": "number",
+      "default": 0
+    },
+    "card_last4": {
+      "type": "string",
+      "description": "Last 4 digits of the connected card, if any"
+    },
+    "stripe_customer_id": {
+      "type": "string"
+    },
+    "notes": {
+      "type": "string"
+    },
+    "suppression_lists": {
+      "type": "string",
+      "description": "JSON array of suppression list names / references"
+    },
+    "coverage": {
+      "type": "string",
+      "description": "JSON object describing coverage by state / zip / county"
+    },
+    "campaign_ids": {
+      "type": "string",
+      "description": "JSON array of Campaign record ids assigned to this buyer"
+    },
+    "auto_created": {
+      "type": "boolean",
+      "default": false,
+      "description": "True when auto-created from a LeadByte sold response"
+    },
+    "active": {
+      "type": "boolean",
+      "default": true
+    }
+  },
+  "required": [
+    "company_name"
+  ]
+}

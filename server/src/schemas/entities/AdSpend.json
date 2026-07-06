@@ -1,0 +1,57 @@
+{
+  "name": "AdSpend",
+  "type": "object",
+  "properties": {
+    "platform": {
+      "type": "string",
+      "default": "meta"
+    },
+    "mapping_id": {
+      "type": "string",
+      "description": "Reference to AdSpendMapping"
+    },
+    "date": {
+      "type": "string",
+      "format": "date",
+      "description": "Spend date"
+    },
+    "ad_account_id": {
+      "type": "string"
+    },
+    "meta_campaign_id": {
+      "type": "string"
+    },
+    "spend": {
+      "type": "number",
+      "default": 0
+    },
+    "impressions": {
+      "type": "number",
+      "default": 0
+    },
+    "clicks": {
+      "type": "number",
+      "default": 0
+    },
+    "leads": {
+      "type": "number",
+      "default": 0
+    },
+    "vertical": {
+      "type": "string"
+    },
+    "brand": {
+      "type": "string"
+    },
+    "supplier_name": {
+      "type": "string"
+    },
+    "cost_source": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "date",
+    "spend"
+  ]
+}

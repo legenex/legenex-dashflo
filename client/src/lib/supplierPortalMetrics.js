@@ -1,0 +1,103 @@
+// Supplier-portal-scoped metrics over a supplier's own leads within a period.
+// Every number here is the supplier's own — never buyer identities or other
+// suppliers' data.
+import { resolvePeriod } from '@/lib/periodRange';
+
+function num(v) { const n = Number(v); return isNaN(n) ? 0 : n; }
+
+export function filterByPeriod(records, period, custom) {
+  const { start, end } = resolvePeriod(period, custom);
+  return records.filter(r => {
+    if (!r.created_date) return false;
+    const d = new Date(r.created_date);
+    return d >= start && d <= end;
+  });
+}
+
+// Maps a lead's final_status to the supplier-facing bucket.
+// accepted = Sold, duplicate = Duplicate, dq = Disqualified,
+// rejected = Rejected/Unsold, error = Error.
+export function statusBucket(finalStatus) {
+  const s = String(finalStatus || '');
+  if (s === 'Sold') return 'accepted';
+  if (s === 'Duplicate') return 'duplicate';
+  if (s === 'Disqualified') return 'dq';
+  if (s === 'Rejected' || s === 'Unsold' || s === 'Returned') return 'rejected';
+  if (s === 'Error') return 'error';
+  return 'other';
+}
+
+export function supplierPortalMetrics(leads) {
+  const total = leads.length;
+  let accepted = 0, duplicate = 0, dq = 0, rejected = 0, error = 0, revenue = 0, cost = 0;
+  for (const l of leads) {
+    const b = statusBucket(l.final_status);
+    if (b === 'accepted') accepted++;
+    else if (b === 'duplicate') duplicate++;
+    else if (b === 'dq') dq++;
+    else if (b === 'rejected') rejected++;
+    else if (b === 'error') error++;
+    revenue += num(l.revenue);
+    cost += num(l.cost);
+  }
+  const profit = revenue - cost;
+  return {
+    total,
+    accepted,
+    duplicate,
+    dq,
+    rejected,
+    error,
+    revenue,
+    cost,
+    profit,
+    cpl: total > 0 ? cost / total : 0,
+    acceptedPct: total > 0 ? (accepted / total) * 100 : 0,
+    duplicatePct: total > 0 ? (duplicate / total) * 100 : 0,
+    dqPct: total > 0 ? (dq / total) * 100 : 0,
+    convRate: total > 0 ? (accepted / total) * 100 : 0,
+  };
+}
+
+// Aggregates ad spend rows into totals + per-campaign breakdown for internal
+// Facebook-connected suppliers.
+export function adReportSummary(adReporting, leadCount) {
+  if (!adReporting?.enabled) return null;
+  const rows = adReporting.spend || [];
+  let spend = 0, impressions = 0, clicks = 0, leads = 0;
+  const byCampaign = {};
+  for (const r of rows) {
+    spend += num(r.spend);
+    impressions += num(r.impressions);
+    clicks += num(r.clicks);
+    leads += num(r.leads);
+    const key = r.meta_campaign_id || r.ad_account_id || 'Unmapped';
+    if (!byCampaign[key]) byCampaign[key] = { key, spend: 0, impressions: 0, clicks: 0, leads: 0 };
+    byCampaign[key].spend += num(r.spend);
+    byCampaign[key].impressions += num(r.impressions);
+    byCampaign[key].clicks += num(r.clicks);
+    byCampaign[key].leads += num(r.leads);
+  }
+  const effLeads = leads || leadCount || 0;
+  const campaigns = Object.values(byCampaign).map(c => ({
+    ...c,
+    cpl: c.leads > 0 ? c.spend / c.leads : 0,
+  })).sort((a, b) => b.spend - a.spend);
+  return {
+    spend,
+    impressions,
+    clicks,
+    leads,
+    cpl: effLeads > 0 ? spend / effLeads : 0,
+    campaigns,
+    hasData: rows.length > 0,
+  };
+}
+
+export function money(v) {
+  return `$${num(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+export function pct(v) {
+  return `${num(v).toFixed(1)}%`;
+}

@@ -1,0 +1,16 @@
+{
+  "name": "legenex-dashos",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Legenex DashOS — standalone lead-distribution & finance dashboard (client + server)",
+  "scripts": {
+    "install:all": "npm --prefix server install && npm --prefix client install",
+    "dev:server": "npm --prefix server run dev",
+    "dev:client": "npm --prefix client run dev",
+    "dev": "node scripts/dev.js",
+    "build": "npm --prefix client run build",
+    "start": "npm --prefix server start",
+    "migrate": "npm --prefix server run migrate",
+    "seed:admin": "npm --prefix server run seed:admin"
+  }
+}

@@ -1,0 +1,70 @@
+{
+  "name": "Supplier",
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string"
+    },
+    "sid": {
+      "type": "string",
+      "description": "Supplier SID used as {{sid}} token"
+    },
+    "supplier_type": {
+      "type": "string",
+      "enum": [
+        "Internal",
+        "External",
+        "Calls"
+      ],
+      "description": "Supplier type used for ApiConnector filter matching"
+    },
+    "vertical": {
+      "type": "string",
+      "description": "Optional vertical code this supplier is associated with"
+    },
+    "payout_type": {
+      "type": "string",
+      "enum": [
+        "",
+        "Flat CPL",
+        "Revenue %",
+        "Profit %",
+        "Inbound Call"
+      ],
+      "default": ""
+    },
+    "payout_value": {
+      "type": "number",
+      "description": "Price for Flat CPL, or percentage for Revenue % / Profit %"
+    },
+    "email": {
+      "type": "string"
+    },
+    "phone": {
+      "type": "string"
+    },
+    "landing_page_url": {
+      "type": "string"
+    },
+    "brand": {
+      "type": "string"
+    },
+    "portal_enabled": {
+      "type": "boolean",
+      "default": false,
+      "description": "When true, this supplier source can log into the source portal to reconcile leads sent vs received"
+    },
+    "campaign_ids": {
+      "type": "string",
+      "description": "JSON array of Campaign record ids assigned to this supplier"
+    },
+    "active": {
+      "type": "boolean",
+      "default": true
+    }
+  },
+  "required": [
+    "name",
+    "supplier_type"
+  ]
+}

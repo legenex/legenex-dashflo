@@ -1,0 +1,25 @@
+node_modules/
+dist/
+build/
+*.log
+.DS_Store
+
+# Env / secrets
+.env
+.env.local
+server/.env
+client/.env
+
+# Uploads / runtime data
+server/uploads/
+
+# Editor
+.vscode/
+.idea/
+
+# Sync system
+.sync/
+sync/state/
+
+# Original upstream export (kept locally only; not part of the standalone app)
+Reference/

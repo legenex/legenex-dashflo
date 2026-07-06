@@ -1,0 +1,186 @@
+{
+  "name": "Lead",
+  "type": "object",
+  "properties": {
+    "supplier_name": {
+      "type": "string",
+      "description": "Name of the supplier who sent this lead"
+    },
+    "supplier_key_id": {
+      "type": "string",
+      "description": "Reference to ApiKey record"
+    },
+    "buyer_id": {
+      "type": "string",
+      "description": "Reference to the Buyer record this lead was delivered to (set on sold delivery or by feedback matching)"
+    },
+    "buyer_feedback": {
+      "type": "string",
+      "description": "Latest buyer feedback disposition (from our taxonomy) for this lead, used by reporting"
+    },
+    "raw_payload": {
+      "type": "string",
+      "description": "JSON string of the original inbound payload"
+    },
+    "mapped_fields": {
+      "type": "string",
+      "description": "JSON string of normalised fields"
+    },
+    "first_name": {
+      "type": "string"
+    },
+    "last_name": {
+      "type": "string"
+    },
+    "mobile": {
+      "type": "string"
+    },
+    "email": {
+      "type": "string"
+    },
+    "email_valid": {
+      "type": "string",
+      "enum": [
+        "Yes",
+        "No"
+      ],
+      "description": "Email deliverability result from the free validation service (format + DNS MX lookup). Runs on the same lead_routes as the HLR lookup."
+    },
+    "lead_id": {
+      "type": "number",
+      "description": "Unique sequential lead identifier"
+    },
+    "revenue": {
+      "type": "number",
+      "description": "Revenue attributed to this lead"
+    },
+    "conv_value": {
+      "type": "number",
+      "description": "Conversion value attributed to this lead"
+    },
+    "hlr_request": {
+      "type": "string",
+      "description": "JSON string of HLR request body"
+    },
+    "hlr_response": {
+      "type": "string",
+      "description": "JSON string of HLR response"
+    },
+    "hlr_status": {
+      "type": "string",
+      "description": "HLR lookup result status e.g. Exact Match"
+    },
+    "hlr_summary_score": {
+      "type": "number",
+      "description": "HLR summary score 0-100"
+    },
+    "hlr_error": {
+      "type": "string",
+      "description": "HLR error message if lookup failed"
+    },
+    "leadbyte_request": {
+      "type": "string",
+      "description": "JSON string of payload sent to LeadByte"
+    },
+    "leadbyte_response": {
+      "type": "string",
+      "description": "JSON string of LeadByte response"
+    },
+    "leadbyte_queue_id": {
+      "type": "string"
+    },
+    "leadbyte_record_status": {
+      "type": "string",
+      "description": "e.g. Approved, Rejected"
+    },
+    "leadbyte_lead_id": {
+      "type": "number"
+    },
+    "leadbyte_rejection_id": {
+      "type": "string"
+    },
+    "leadbyte_process_time": {
+      "type": "number",
+      "description": "LeadByte processing time in seconds"
+    },
+    "final_status": {
+      "type": "string",
+      "enum": [
+        "Processing",
+        "Sold",
+        "Unsold",
+        "Queued",
+        "Disqualified",
+        "Returned",
+        "Duplicate",
+        "Error"
+      ],
+      "default": "Processing"
+    },
+    "queue_reason": {
+      "type": "string",
+      "description": "Reason the lead was queued for manual handling"
+    },
+    "trustedform_valid": {
+      "type": "boolean",
+      "description": "Whether the TrustedForm cert URL passed validation"
+    },
+    "cert_source": {
+      "type": "string",
+      "description": "Origin of the TrustedForm cert: inbound or backup_store"
+    },
+    "capi_log": {
+      "type": "string",
+      "description": "JSON list of {connector, event_name, pixel, http_status, fbtrace_id}"
+    },
+    "delivery_log": {
+      "type": "string",
+      "description": "JSON list of {connector, trigger, http_status, success, error, timestamp} for LeadByteConnector deliveries"
+    },
+    "error_stage": {
+      "type": "string",
+      "description": "Stage where error occurred if any"
+    },
+    "response_returned": {
+      "type": "string",
+      "description": "JSON string of response sent back to supplier"
+    },
+    "processed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "process_time_ms": {
+      "type": "number"
+    },
+    "archived": {
+      "type": "boolean",
+      "default": false
+    }
+  },
+  "required": [
+    "supplier_name",
+    "final_status"
+  ],
+  "rls": {
+    "create": {
+      "user_condition": {
+        "role": "admin"
+      }
+    },
+    "read": {
+      "user_condition": {
+        "role": "admin"
+      }
+    },
+    "update": {
+      "user_condition": {
+        "role": "admin"
+      }
+    },
+    "delete": {
+      "user_condition": {
+        "role": "admin"
+      }
+    }
+  }
+}
