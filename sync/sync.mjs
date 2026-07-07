@@ -191,13 +191,25 @@ function regenShims() {
   const fnDir = path.join(UPSTREAM, 'base44', 'functions');
   if (!fs.existsSync(fnDir)) return;
   const names = fs.readdirSync(fnDir, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name);
-  fs.mkdirSync(path.join(CLIENT_SRC, 'functions'), { recursive: true });
+  const valid = new Set(names);
+  const shimDir = path.join(CLIENT_SRC, 'functions');
+  fs.mkdirSync(shimDir, { recursive: true });
   for (const name of names) {
-    const file = path.join(CLIENT_SRC, 'functions', `${name}.js`);
+    const file = path.join(shimDir, `${name}.js`);
     const content = `// Callable wrapper for the '${name}' backend function.\nimport { functions } from '@/api/client';\nexport const ${name} = (body = {}) => functions.invoke('${name}', body);\nexport default ${name};\n`;
     if (!fs.existsSync(file) || fs.readFileSync(file, 'utf8') !== content) {
       fs.writeFileSync(file, content);
       actions.push(`shim: ${name}`);
+    }
+  }
+  // Remove shims + server ports for functions that no longer exist upstream.
+  for (const f of fs.readdirSync(shimDir)) {
+    const nm = f.replace(/\.js$/, '');
+    if (f.endsWith('.js') && !valid.has(nm)) {
+      fs.rmSync(path.join(shimDir, f));
+      const serverPort = path.join(SERVER_FUNCS, f);
+      if (fs.existsSync(serverPort)) { backup(serverPort); fs.rmSync(serverPort); }
+      actions.push(`function (removed): ${nm}`);
     }
   }
 }

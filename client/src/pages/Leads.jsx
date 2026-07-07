@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { api } from '@/api/client';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import PageHeader from '@/components/shared/PageHeader';
@@ -13,7 +13,7 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
   DialogDescription,
 } from '@/components/ui/dialog';
-import { Download, Search, Inbox } from 'lucide-react';
+import { Download, Search, Inbox, ChevronLeft, ChevronRight } from 'lucide-react';
 import { format } from 'date-fns';
 import { toast } from 'sonner';
 import { processLead } from '@/functions/processLead';
@@ -30,10 +30,13 @@ export default function Leads() {
   const [progress, setProgress] = useState(null);
   const [archiveConfirmOpen, setArchiveConfirmOpen] = useState(false);
   const [viewMode, setViewMode] = useState('all');
+  const [brandFilter, setBrandFilter] = useState('all');
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
 
   const { data: leads = [], isLoading } = useQuery({
     queryKey: ['leads'],
-    queryFn: () => api.entities.Lead.filter({ archived: false }, '-created_date', 500),
+    queryFn: () => api.entities.Lead.filter({ archived: false }, '-created_date', 2000),
   });
 
   // Fetch error log entries to enrich error pills
@@ -52,11 +55,13 @@ export default function Leads() {
   }, [errorLogs]);
 
   const suppliers = [...new Set(leads.map(l => l.supplier_name).filter(Boolean))];
+  const brands = [...new Set(leads.map(l => l.brand || l.brand_code).filter(Boolean))];
 
   const filtered = leads.filter(l => {
     if (viewMode === 'queue' && l.final_status !== 'Queued' && l.final_status !== 'Duplicate') return false;
     if (statusFilter !== 'all' && l.final_status !== statusFilter) return false;
     if (supplierFilter !== 'all' && l.supplier_name !== supplierFilter) return false;
+    if (brandFilter !== 'all' && (l.brand || l.brand_code) !== brandFilter) return false;
     if (search) {
       const q = search.toLowerCase();
       return (l.first_name || '').toLowerCase().includes(q)
@@ -67,6 +72,12 @@ export default function Leads() {
     }
     return true;
   });
+
+  // Pagination over the filtered set. Selection and bulk actions still span the full filtered set.
+  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const safePage = Math.min(page, totalPages);
+  const paged = filtered.slice((safePage - 1) * pageSize, safePage * pageSize);
+  useEffect(() => { setPage(1); }, [search, statusFilter, supplierFilter, brandFilter, viewMode, pageSize]);
 
   // Keep selection within the current filtered view
   const filteredIds = useMemo(() => new Set(filtered.map(l => l.id)), [filtered]);
@@ -221,6 +232,17 @@ export default function Leads() {
             ...suppliers.map(s => ({ value: s, label: s })),
           ]}
         />
+        {brands.length > 0 && (
+          <SearchableSelect
+            value={brandFilter}
+            onValueChange={setBrandFilter}
+            className="w-[140px] bg-card border-border"
+            options={[
+              { value: 'all', label: 'All Brands' },
+              ...brands.map(b => ({ value: b, label: b })),
+            ]}
+          />
+        )}
         <div className="text-[12px] text-muted-foreground">{filtered.length} leads</div>
       </div>
 
@@ -259,7 +281,7 @@ export default function Leads() {
               {!isLoading && filtered.length === 0 && (
                 <tr><td colSpan={9} className="px-4 py-8 text-center text-muted-foreground">No leads found</td></tr>
               )}
-              {filtered.map(lead => {
+              {paged.map(lead => {
                 const isSelected = visibleSelectedIds.has(lead.id);
                 return (
                   <tr
@@ -299,6 +321,30 @@ export default function Leads() {
           </table>
         </div>
       </div>
+
+      {/* Pagination (client-side over the filtered set) */}
+      {filtered.length > 0 && (
+        <div className="flex items-center justify-between gap-3 mt-3 flex-wrap">
+          <div className="text-[12px] text-muted-foreground">
+            Showing {(safePage - 1) * pageSize + 1}-{Math.min(safePage * pageSize, filtered.length)} of {filtered.length}
+          </div>
+          <div className="flex items-center gap-2">
+            <SearchableSelect
+              value={String(pageSize)}
+              onValueChange={(v) => setPageSize(Number(v))}
+              className="w-[120px] bg-card border-border"
+              options={[{ value: '25', label: '25 / page' }, { value: '50', label: '50 / page' }, { value: '100', label: '100 / page' }, { value: '200', label: '200 / page' }]}
+            />
+            <Button variant="outline" size="sm" className="gap-1" disabled={safePage <= 1} onClick={() => setPage(p => Math.max(1, p - 1))}>
+              <ChevronLeft className="w-4 h-4" /> Prev
+            </Button>
+            <span className="text-[12px] text-muted-foreground tabular-nums">Page {safePage} of {totalPages}</span>
+            <Button variant="outline" size="sm" className="gap-1" disabled={safePage >= totalPages} onClick={() => setPage(p => Math.min(totalPages, p + 1))}>
+              Next <ChevronRight className="w-4 h-4" />
+            </Button>
+          </div>
+        </div>
+      )}
 
       <LeadDetailModal
         lead={selectedLead}

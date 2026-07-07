@@ -37,6 +37,8 @@ export default function BankFeedTab({ win }) {
   const [selected, setSelected] = useState(null);
   const [form, setForm] = useState(null);
   const [savingTxn, setSavingTxn] = useState(false);
+  const [unmatchedOnly, setUnmatchedOnly] = useState(false);
+  const [bulkRunning, setBulkRunning] = useState(false);
 
   const { data: fsettings } = useQuery({ queryKey: ['finance-settings'], queryFn: async () => (await loadFinanceSettings()).settings });
   const { data: buyers = [] } = useQuery({ queryKey: ['buyers'], queryFn: () => api.entities.Buyer.list() });
@@ -114,6 +116,29 @@ export default function BankFeedTab({ win }) {
   const moneyIn = txns.filter(t => t.amount > 0).reduce((a, t) => a + Number(t.amount), 0);
   const moneyOut = txns.filter(t => t.amount < 0).reduce((a, t) => a + Number(t.amount), 0);
   const unmatchedTxns = unmatched(txns);
+
+  // Bulk auto-match: apply Finance Settings rules and aliases to every unmatched txn at once.
+  const bulkAutoMatch = async () => {
+    const targets = txns.filter(t => !t.matched_entity_type);
+    const jobs = targets
+      .map(t => ({ t, s: suggestMatch(t.description, fsettings) }))
+      .filter(j => j.s && j.s.entity_name);
+    if (jobs.length === 0) { toast.info('No confident matches from your rules. Add aliases in Finance Settings.'); return; }
+    setBulkRunning(true);
+    let applied = 0;
+    try {
+      for (const j of jobs) {
+        try {
+          await api.entities.BankTransaction.update(j.t.id, { matched_entity_type: j.s.entity_type, matched_entity_name: j.s.entity_name });
+          applied++;
+        } catch { /* skip a failed row, keep going */ }
+      }
+      toast.success(`Matched ${applied} of ${targets.length} unmatched transaction${targets.length !== 1 ? 's' : ''}`);
+      qc.invalidateQueries({ queryKey: ['bank-txns'] });
+    } finally { setBulkRunning(false); }
+  };
+
+  const displayTxns = unmatchedOnly ? txns.filter(t => !t.matched_entity_type) : txns;
 
   const importCsv = async (e) => {
     const file = e.target.files?.[0];
@@ -199,8 +224,20 @@ export default function BankFeedTab({ win }) {
       </div>
 
       {unmatchedTxns.length > 0 && (
-        <div className="flex items-center gap-2 text-[12px] text-muted-foreground">
-          <ArrowDownUp className="w-3.5 h-3.5" /> {unmatchedTxns.length} unmatched transaction{unmatchedTxns.length !== 1 ? 's' : ''} in the queue
+        <div className="flex flex-wrap items-center gap-3 text-[12px]">
+          <span className="inline-flex items-center gap-2 text-muted-foreground">
+            <ArrowDownUp className="w-3.5 h-3.5" /> {unmatchedTxns.length} unmatched transaction{unmatchedTxns.length !== 1 ? 's' : ''} in the queue
+          </span>
+          <Button size="sm" className="h-7 gap-1.5 text-[11px]" onClick={bulkAutoMatch} disabled={bulkRunning}>
+            <Wand2 className={`w-3.5 h-3.5 ${bulkRunning ? 'animate-pulse' : ''}`} /> {bulkRunning ? 'Matching...' : 'Auto-match all'}
+          </Button>
+          <button
+            type="button"
+            onClick={() => setUnmatchedOnly(v => !v)}
+            className={`inline-flex items-center gap-1.5 h-7 px-2.5 rounded-md border text-[11px] transition-colors ${unmatchedOnly ? 'border-primary text-primary bg-primary/10' : 'border-border text-muted-foreground hover:text-foreground'}`}
+          >
+            {unmatchedOnly ? 'Showing unmatched only' : 'Show unmatched only'}
+          </button>
         </div>
       )}
 
@@ -208,8 +245,8 @@ export default function BankFeedTab({ win }) {
         <table className="w-full text-[12px]">
           <thead><THead cols={['Date', 'Description', 'Category', 'Matched', 'Amount']} alignRight={[4]} /></thead>
           <tbody className="divide-y divide-border/60">
-            {txns.length === 0 && <tr><td colSpan={5} className="px-4 py-10 text-center text-muted-foreground">No transactions yet. Connect Mercury or import a CSV.</td></tr>}
-            {txns.map((t, i) => (
+            {displayTxns.length === 0 && <tr><td colSpan={5} className="px-4 py-10 text-center text-muted-foreground">{unmatchedOnly ? 'No unmatched transactions in this period.' : 'No transactions yet. Connect Mercury or import a CSV.'}</td></tr>}
+            {displayTxns.map((t, i) => (
               <motion.tr key={t.id} variants={rise} initial="hidden" animate="show" custom={i} onClick={() => openTxn(t)} className="hover:bg-foreground/[0.02] cursor-pointer">
                 <td className="px-4 py-2.5 font-mono text-muted-foreground">{t.date}</td>
                 <td className="px-4 py-2.5 text-foreground truncate max-w-[280px]">{t.description || '-'}</td>

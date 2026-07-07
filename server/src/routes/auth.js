@@ -112,12 +112,39 @@ router.post('/login', async (req, res) => {
   const ok = await bcrypt.compare(String(password || ''), cred.password_hash);
   if (!ok) return res.status(401).json({ error: 'Invalid email or password' });
 
-  const user = await repo('User').get(cred.user_id);
+  const user = await provisionUserOnLogin(cred, email);
   const token = signToken({ id: cred.user_id, email });
   res
     .cookie(config.auth.cookieName, token, { httpOnly: true, sameSite: 'lax', maxAge: 30 * 864e5 })
     .json({ access_token: token, user });
 });
+
+// Resolve the User record for a credential, provisioning it on first login for
+// an invited user: create the User from their pending Invitation (applying its
+// role/base_role/permissions) and mark the invitation accepted.
+async function provisionUserOnLogin(cred, email) {
+  let user = await repo('User').get(cred.user_id);
+  if (user) return user;
+
+  let invite = null;
+  try {
+    const invites = await repo('Invitation').filter({ email });
+    invite = invites.find((i) => i.status !== 'cancelled') || null;
+  } catch { /* Invitation entity may not exist */ }
+
+  user = await repo('User').create({
+    id: cred.user_id,
+    email,
+    full_name: (invite && invite.full_name) || email.split('@')[0],
+    role: invite?.role || 'user',
+    base_role: invite?.base_role || 'manager',
+    permissions: invite?.permissions || undefined,
+  });
+  if (invite && invite.status === 'pending') {
+    try { await repo('Invitation').update(invite.id, { status: 'accepted' }); } catch { /* best effort */ }
+  }
+  return user;
+}
 
 router.get('/me', requireAuth, (req, res) => {
   res.json(req.user);
@@ -134,35 +161,21 @@ router.post('/logout', (_req, res) => {
   res.clearCookie(config.auth.cookieName).json({ success: true });
 });
 
-// Invite a user: admin-only. Creates the User record + a credential row with a
-// set-password token, and emails an invite link. The invited user sets their
-// password via /reset-password?token=... and can then log in. Profile fields
-// (base_role/permissions) are finalized by the upsertInvitedUser function the
-// UI calls right after.
+// Invite a user: admin-only. Creates a credential row with a set-password token
+// and emails an invite link, but does NOT create a User record yet — the invited
+// person shows as "Pending" (via the Invitation entity recorded by the UI) until
+// they set a password and log in, at which point their User record is provisioned
+// from the pending invitation (see /login). This matches the pending-invite model.
 router.post('/invite', requireAuth, async (req, res) => {
   const caller = req.user;
   if ((caller.base_role || caller.role) !== 'owner' && caller.role !== 'admin') {
     return res.status(403).json({ error: 'Forbidden' });
   }
   const email = normalizeEmail(req.body?.email);
-  const role = req.body?.role === 'admin' ? 'admin' : 'user';
   if (!email) return res.status(400).json({ error: 'email is required' });
 
   let cred = await credByEmail(email);
-  let userId;
-  if (cred) {
-    userId = cred.user_id; // already exists — just refresh the invite token
-  } else {
-    userId = newId();
-    await repo('User').create({
-      id: userId,
-      email,
-      full_name: email.split('@')[0],
-      role,
-      base_role: role === 'admin' ? 'admin' : 'manager',
-    });
-  }
-
+  const userId = cred ? cred.user_id : newId();
   const token = crypto.randomBytes(24).toString('hex');
   if (cred) {
     await pool.query(

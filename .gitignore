@@ -23,3 +23,6 @@ sync/state/
 
 # Original upstream export (kept locally only; not part of the standalone app)
 Reference/
+
+# Stray terminal output (not part of the project)
+Response.txt

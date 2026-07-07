@@ -119,8 +119,12 @@ const AuthenticatedApp = () => {
 
   // /docs is public on the main host too — render it without redirecting to login.
   const onDocsPath = typeof window !== 'undefined' && window.location.pathname.startsWith('/docs');
+  // The app's own auth pages must render normally — never bounce them to the
+  // hosted login, or an unauthenticated visitor on /login loops forever.
+  const AUTH_PATHS = ['/login', '/register', '/forgot-password', '/reset-password'];
+  const onAuthPath = typeof window !== 'undefined' && AUTH_PATHS.some((p) => window.location.pathname.startsWith(p));
 
-  if (authError && !onDocsPath) {
+  if (authError && !onDocsPath && !onAuthPath) {
     if (authError.type === 'user_not_registered') {
       return <UserNotRegisteredError />;
     } else if (authError.type === 'auth_required') {

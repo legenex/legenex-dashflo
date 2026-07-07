@@ -129,7 +129,26 @@ export const AuthProvider = ({ children }) => {
 export const useAuth = () => {
   const context = useContext(AuthContext);
   if (!context) {
-    throw new Error('useAuth must be used within an AuthProvider');
+    // Should never happen at runtime since App wraps everything in AuthProvider.
+    // It can transiently occur during a Vite hot reload when the context module
+    // is swapped out from under a stale render. Rather than crash the whole app,
+    // return a safe loading-state shape so the tree re-renders cleanly once the
+    // provider is re-established.
+    return {
+      user: null,
+      isAuthenticated: false,
+      isLoadingAuth: true,
+      isLoadingPublicSettings: true,
+      authError: null,
+      appPublicSettings: null,
+      authChecked: false,
+      previewRole: null,
+      setPreviewRole: () => {},
+      logout: () => {},
+      navigateToLogin: () => {},
+      checkUserAuth: () => {},
+      checkAppState: () => {},
+    };
   }
   return context;
 };

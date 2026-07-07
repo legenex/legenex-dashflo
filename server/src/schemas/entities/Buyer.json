@@ -96,6 +96,17 @@
       "default": false,
       "description": "True when auto-created from a LeadByte sold response"
     },
+    "status": {
+      "type": "string",
+      "enum": [
+        "draft",
+        "active",
+        "paused",
+        "inactive"
+      ],
+      "default": "active",
+      "description": "Buyer lifecycle status. Kept in sync with the active boolean at the data layer: status active derives active true, while draft, paused, or inactive derive active false. The live pipeline reads the active boolean."
+    },
     "active": {
       "type": "boolean",
       "default": true

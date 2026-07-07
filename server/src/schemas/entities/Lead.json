@@ -155,6 +155,10 @@
     "archived": {
       "type": "boolean",
       "default": false
+    },
+    "import_batch_id": {
+      "type": "string",
+      "description": "Batch id stamped on leads created via CSV import, used for filtering and rollback"
     }
   },
   "required": [

@@ -59,6 +59,18 @@ export default function Overview() {
   }, []);
   const refreshedAgo = Math.max(0, Math.round((nowTick - refreshedAt) / 1000));
 
+  // Force Sync: invoke a sync backend function on demand, then refresh queries.
+  const runForceSync = async (fn, args, label) => {
+    try {
+      await api.functions.invoke(fn, args || {});
+      toast.success(`${label} sync started`);
+      qc.invalidateQueries();
+      setRefreshedAt(Date.now());
+    } catch {
+      toast.error(`${label} sync failed`);
+    }
+  };
+
   const win = useMemo(() => resolvePeriod(period, custom), [period, custom]);
 
   const { data: leads = [] } = useQuery({ queryKey: ['ov-leads'], queryFn: () => api.entities.Lead.list('-created_date', 2000) });
@@ -147,14 +159,18 @@ export default function Overview() {
     { label: 'Lead ingestion', at: leadSync || null },
     { label: 'Stripe', at: cfg('stripe') },
     { label: 'Xero', at: cfg('xero') },
-    { label: 'Mercury', at: cfg('mercury') },
-    { label: 'Meta Ads', at: platSync('meta') || null },
+    { label: 'Mercury', at: cfg('mercury'), onSync: () => runForceSync('syncMercury', {}, 'Mercury') },
+    { label: 'Meta Ads', at: platSync('meta') || null, onSync: () => runForceSync('syncMetaSpend', {}, 'Meta Ads') },
     { label: 'Buyer feedback', at: newest(payments, 'paid_date') || null },
     { label: 'Google Ads', at: platSync('google_ads') || null },
     { label: 'TikTok', at: platSync('tiktok') || null },
     { label: 'Supplier statements', at: newest(payouts, 'updated_date') || null },
     { label: 'Slack', at: cfg('slack') },
-    ...leadSources.filter(s => s.enabled).map(s => ({ label: s.name, at: s.last_synced_at || null })),
+    ...leadSources.filter(s => s.enabled).map(s => ({
+      label: s.name,
+      at: s.last_synced_at || null,
+      onSync: s.kind === 'google_sheets' ? () => runForceSync('syncGoogleSheets', { sourceId: s.id }, s.name) : undefined,
+    })),
   ];
 
   // ---- Live activity stream chips ----

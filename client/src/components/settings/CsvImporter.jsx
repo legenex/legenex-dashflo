@@ -14,12 +14,28 @@ const LEAD_FIELDS = ['first_name', 'last_name', 'email', 'mobile', 'supplier_nam
 const BANK_FIELDS = ['date', 'description', 'amount', 'category', 'external_id'];
 const IGNORE = '__ignore__';
 
+// Map arbitrary incoming status text to the exact Lead final_status enum.
+const STATUS_LOOKUP = {
+  sold: 'Sold',
+  unsold: 'Unsold', rejected: 'Unsold', reject: 'Unsold',
+  disqualified: 'Disqualified', dq: 'Disqualified',
+  duplicate: 'Duplicate', dupe: 'Duplicate', dup: 'Duplicate',
+  error: 'Error', err: 'Error',
+  queued: 'Queued', queue: 'Queued',
+  returned: 'Returned', return: 'Returned',
+  processing: 'Processing', new: 'Processing',
+};
+const normalizeStatus = (raw) => STATUS_LOOKUP[String(raw ?? '').trim().toLowerCase()] || 'Processing';
+const normEmail = (v) => String(v ?? '').trim().toLowerCase();
+const normMobile = (v) => String(v ?? '').replace(/\D/g, '');
+
 export default function CsvImporter() {
   const qc = useQueryClient();
   const fileRef = useRef();
   const [target, setTarget] = useState('lead');
   const [step, setStep] = useState('upload'); // upload | review
   const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState(null); // { done, total } while lead import runs
   const [rows, setRows] = useState([]);
   const [columns, setColumns] = useState([]);
   const [mapping, setMapping] = useState({});
@@ -94,14 +110,57 @@ export default function CsvImporter() {
         return out;
       });
       if (target === 'lead') {
-        const clean = records.map(r => ({
-          ...r,
-          supplier_name: r.supplier_name || 'CSV Import',
-          final_status: r.final_status || 'Processing',
-          revenue: r.revenue != null ? Number(r.revenue) || 0 : undefined,
-        }));
-        await api.entities.Lead.bulkCreate(clean);
+        // Load every existing lead's email + mobile (all time) into normalized sets for dedup.
+        const existingEmails = new Set();
+        const existingMobiles = new Set();
+        let page = 0;
+        const pageSize = 500;
+        // eslint-disable-next-line no-constant-condition
+        while (true) {
+          const batch = await api.entities.Lead.list('-created_date', pageSize, page * pageSize);
+          batch.forEach(l => {
+            const e = normEmail(l.email); if (e) existingEmails.add(e);
+            const m = normMobile(l.mobile); if (m) existingMobiles.add(m);
+          });
+          if (batch.length < pageSize) break;
+          page += 1;
+        }
+
+        const batchId = `import_${Date.now()}`;
+        const seenEmails = new Set();
+        const seenMobiles = new Set();
+        let skipped = 0;
+        const clean = [];
+        records.forEach(r => {
+          const e = normEmail(r.email);
+          const m = normMobile(r.mobile);
+          const dupExisting = (e && existingEmails.has(e)) || (m && existingMobiles.has(m));
+          const dupIntra = (e && seenEmails.has(e)) || (m && seenMobiles.has(m));
+          if (dupExisting || dupIntra) { skipped += 1; return; }
+          if (e) seenEmails.add(e);
+          if (m) seenMobiles.add(m);
+          clean.push({
+            ...r,
+            supplier_name: r.supplier_name || 'CSV Import',
+            final_status: normalizeStatus(r.final_status),
+            revenue: r.revenue != null ? Number(r.revenue) || 0 : undefined,
+            import_batch_id: batchId,
+          });
+        });
+
+        const chunkSize = 100;
+        setProgress({ done: 0, total: clean.length });
+        for (let i = 0; i < clean.length; i += chunkSize) {
+          const chunk = clean.slice(i, i + chunkSize);
+          await api.entities.Lead.bulkCreate(chunk);
+          setProgress({ done: Math.min(i + chunk.length, clean.length), total: clean.length });
+        }
+        setProgress(null);
         qc.invalidateQueries({ queryKey: ['report-leads'] });
+        toast.success(`Imported ${clean.length} leads, skipped ${skipped} duplicates`);
+        reset();
+        setBusy(false);
+        return;
       } else {
         const clean = records.filter(r => r.date && r.amount != null).map(r => ({
           source: 'csv', date: String(r.date).slice(0, 10), description: r.description || '',
@@ -109,12 +168,13 @@ export default function CsvImporter() {
         }));
         await api.entities.BankTransaction.bulkCreate(clean);
         qc.invalidateQueries({ queryKey: ['bank-txns'] });
+        toast.success(`Imported ${clean.length} transactions`);
       }
-      toast.success(`Imported ${records.length} ${target === 'lead' ? 'leads' : 'transactions'}`);
       reset();
     } catch (err) {
       toast.error('Import failed');
     }
+    setProgress(null);
     setBusy(false);
   };
 
@@ -201,10 +261,13 @@ export default function CsvImporter() {
               <Input value={templateName} onChange={e => setTemplateName(e.target.value)} placeholder="Save mapping as… (source name)" className="bg-background text-[12px] w-[240px] h-8" />
               <Button size="sm" variant="outline" onClick={saveTemplate} className="gap-1.5"><Save className="w-3.5 h-3.5" /> Save Template</Button>
             </div>
-            <Button size="sm" onClick={commit} disabled={busy} className="gap-1.5">
-              {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
-              Import {rows.length} {target === 'lead' ? 'Leads' : 'Transactions'}
-            </Button>
+            <div className="flex items-center gap-3">
+              {progress && <span className="text-[12px] text-muted-foreground">created {progress.done} of {progress.total}</span>}
+              <Button size="sm" onClick={commit} disabled={busy} className="gap-1.5">
+                {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
+                Import {rows.length} {target === 'lead' ? 'Leads' : 'Transactions'}
+              </Button>
+            </div>
           </div>
 
           {templates.length > 0 && (

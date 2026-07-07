@@ -17,7 +17,7 @@ export default function SettingsGeneral() {
     queryFn: () => api.entities.AppSettings.list(),
   });
 
-  const settings = settingsArr[0] || {};
+  const settings = (Array.isArray(settingsArr) ? settingsArr : [])[0] || {};
   const [form, setForm] = useState(null);
 
   useEffect(() => {
