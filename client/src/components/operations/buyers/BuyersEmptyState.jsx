@@ -4,8 +4,8 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Users, Plus } from 'lucide-react';
 
 // Shown when there are no buyers at all. Explains where buyers come from and
-// disables Create Buyer until the create flow lands in the next build.
-export default function BuyersEmptyState() {
+// launches the Create Buyer modal.
+export default function BuyersEmptyState({ onCreate }) {
   return (
     <Card className="bg-card border-border">
       <CardContent className="py-14 flex flex-col items-center text-center">
@@ -17,10 +17,9 @@ export default function BuyersEmptyState() {
           Buyers are created in Operations and flow through to Lead Distribution, where their
           coverage and pricing drive which states are open.
         </p>
-        <Button disabled className="gap-1.5 mt-5">
+        <Button onClick={onCreate} className="gap-1.5 mt-5">
           <Plus className="w-4 h-4" /> Create Buyer
         </Button>
-        <p className="text-[11px] text-muted-foreground mt-2">The create flow arrives in the next build.</p>
       </CardContent>
     </Card>
   );

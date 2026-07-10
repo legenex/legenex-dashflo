@@ -7,10 +7,10 @@ import BuyerCoverageTab from './BuyerCoverageTab';
 // Right side drawer for a single buyer. Header shows identity + status pill,
 // body switches between Profile and Coverage tabs. UI only; all writes are
 // scoped to the Buyer and BuyerStateCpl entities inside the tab components.
-export default function BuyerDetailDrawer({ open, onOpenChange, buyer, verticals }) {
-  const [tab, setTab] = useState('profile');
+export default function BuyerDetailDrawer({ open, onOpenChange, buyer, verticals, initialTab = 'profile' }) {
+  const [tab, setTab] = useState(initialTab);
 
-  useEffect(() => { if (open) setTab('profile'); }, [open, buyer?.id]);
+  useEffect(() => { if (open) setTab(initialTab); }, [open, buyer?.id, initialTab]);
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>

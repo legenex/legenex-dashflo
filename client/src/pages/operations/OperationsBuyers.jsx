@@ -12,6 +12,9 @@ import BuyersEmptyState from '@/components/operations/buyers/BuyersEmptyState';
 import BuyerActionDialog from '@/components/operations/buyers/BuyerActionDialog';
 import BuyerDeleteDialog from '@/components/operations/buyers/BuyerDeleteDialog';
 import BuyerDetailDrawer from '@/components/operations/buyers/BuyerDetailDrawer';
+import BuyerCreateModal from '@/components/operations/buyers/BuyerCreateModal';
+import { Button } from '@/components/ui/button';
+import { Plus } from 'lucide-react';
 import { computeBlastRadius } from '@/components/operations/buyers/buyerListModel';
 import {
   BUYER_AVAILABLE_COLUMNS, loadBuyerColumnConfig, saveBuyerColumnConfig, getBuyerColumnDef,
@@ -44,6 +47,8 @@ export default function OperationsBuyers() {
   const [actionState, setActionState] = useState(null); // { action, buyer, closesStates }
   const [deleteState, setDeleteState] = useState(null); // { buyer }
   const [drawerBuyerId, setDrawerBuyerId] = useState(null);
+  const [drawerTab, setDrawerTab] = useState('profile');
+  const [createOpen, setCreateOpen] = useState(false);
 
   const { data: buyers = [] } = useQuery({
     queryKey: ['op-buyers'],
@@ -153,6 +158,18 @@ export default function OperationsBuyers() {
     qc.invalidateQueries({ queryKey: ['op-buyers'] });
   };
 
+  const openBuyer = (buyer, atTab = 'profile') => {
+    setDrawerTab(atTab);
+    setDrawerBuyerId(buyer.id);
+  };
+
+  // After creating a buyer, refresh the table and open it on Coverage, since a
+  // buyer with no state coverage receives no leads.
+  const onCreated = async (created) => {
+    await qc.invalidateQueries({ queryKey: ['op-buyers'] });
+    openBuyer(created, 'coverage');
+  };
+
   return (
     <div className="flex flex-col gap-4">
       <SectionHeader title="Buyer Management" subtitle="Lifecycle, coverage and pricing for every buyer.">
@@ -160,10 +177,13 @@ export default function OperationsBuyers() {
           <PulseDot /> Live
         </span>
         <RefreshButton onClick={refresh} />
+        <Button onClick={() => setCreateOpen(true)} className="gap-1.5">
+          <Plus className="w-4 h-4" /> Create Buyer
+        </Button>
       </SectionHeader>
 
       {buyers.length === 0 ? (
-        <BuyersEmptyState />
+        <BuyersEmptyState onCreate={() => setCreateOpen(true)} />
       ) : (
         <>
           <div className="flex items-center justify-between gap-3 flex-wrap">
@@ -196,7 +216,7 @@ export default function OperationsBuyers() {
             onPause={openPause}
             onTerminate={openTerminate}
             onDelete={(buyer) => setDeleteState({ buyer })}
-            onRowClick={(buyer) => setDrawerBuyerId(buyer.id)}
+            onRowClick={(buyer) => openBuyer(buyer, 'profile')}
           />
         </>
       )}
@@ -222,6 +242,14 @@ export default function OperationsBuyers() {
         onOpenChange={(v) => { if (!v) setDrawerBuyerId(null); }}
         buyer={drawerBuyer}
         verticals={verticals}
+        initialTab={drawerTab}
+      />
+
+      <BuyerCreateModal
+        open={createOpen}
+        onOpenChange={setCreateOpen}
+        verticals={verticals}
+        onCreated={onCreated}
       />
     </div>
   );
