@@ -13,16 +13,17 @@ const US_STATES = [
 // Networks. A null / unclassified client_type never wins.
 const TIER_ORDER = ['Law Firm', 'Aggregator', 'Reseller', 'Network'];
 
-// Upper bound used to pull a full entity table in a single call.
-const FULL_LIMIT = 100000;
+// Upper bound used to pull an entire table in one call. The entity API
+// exposes (sort, limit) only, so a single high-limit read stands in for the
+// original page-through and still returns every row.
+const LOAD_ALL_LIMIT = 100000;
 
-// Load an entire entity list so large tables are fully loaded.
+// Load an entity list fully. filter() when a filter object is supplied,
+// otherwise list().
 async function loadAll(entity, filter) {
-  // filter() when a filter object is supplied, otherwise list().
-  const rows = filter
-    ? await entity.filter(filter, '-created_date', FULL_LIMIT)
-    : await entity.list('-created_date', FULL_LIMIT);
-  return Array.isArray(rows) ? rows : [];
+  return filter
+    ? await entity.filter(filter, '-created_date', LOAD_ALL_LIMIT)
+    : await entity.list('-created_date', LOAD_ALL_LIMIT);
 }
 
 export default async function recomputeStateStatus(ctx) {
@@ -30,12 +31,28 @@ export default async function recomputeStateStatus(ctx) {
   if (user.role !== 'admin') return ctx.json({ error: 'Forbidden' }, 403);
 
   try {
+    const db = ctx.db;
     const body = ctx.body || {};
+
     const requestedVertical = body && typeof body.vertical === 'string' && body.vertical.trim()
       ? body.vertical.trim()
       : null;
 
-    const svc = ctx.db.entities;
+    // Optional stamps carried onto every StateChangeEvent this run writes.
+    // Both default to null and never affect change detection or upserts.
+    const triggeredByBuyerId = body && typeof body.triggered_by_buyer_id === 'string' && body.triggered_by_buyer_id
+      ? body.triggered_by_buyer_id
+      : null;
+    const triggeredByUserId = body && typeof body.triggered_by_user_id === 'string' && body.triggered_by_user_id
+      ? body.triggered_by_user_id
+      : (user && user.id ? user.id : null);
+
+    // When false, StateStatus is upserted exactly as normal but no
+    // StateChangeEvent rows are written. Lets a backfill or repair run happen
+    // without generating a wave of supplier notifications. Defaults to true.
+    const emitEvents = body && body.emit_events === false ? false : true;
+
+    const svc = db.entities;
 
     // Load buyers once and index by id. Only active-status buyers can ever
     // contribute a candidate; keep the full map so we can read client_type.
@@ -81,7 +98,7 @@ export default async function recomputeStateStatus(ctx) {
       (candidatesByKey[key] = candidatesByKey[key] || []).push({ row, buyer });
     }
 
-    const summary = { created: 0, updated: 0, unchanged: 0, changes: [] };
+    const summary = { created: 0, updated: 0, unchanged: 0, events_written: 0, changes: [] };
 
     for (const vertical of verticals) {
       for (const state of US_STATES) {
@@ -174,7 +191,10 @@ export default async function recomputeStateStatus(ctx) {
           active_buyer_count: target.active_buyer_count,
         };
 
-        // Only stamp change markers when a real transition happened.
+        // Only stamp change markers when a real transition happened. This same
+        // guard drives whether a StateChangeEvent is written, so a run with no
+        // underlying data change produces zero events and the notifier stays
+        // quiet: idempotency is preserved exactly as before.
         if (direction) {
           writeData.last_change_direction = direction;
           writeData.last_changed_at = new Date().toISOString();
@@ -185,6 +205,24 @@ export default async function recomputeStateStatus(ctx) {
             old_effective_client_type: prevType,
             new_effective_client_type: target.effective_client_type,
           });
+
+          if (emitEvents) {
+            await svc.StateChangeEvent.create({
+              vertical,
+              state,
+              direction,
+              old_client_type: prevType,
+              new_client_type: target.effective_client_type,
+              old_cpl: prevHigh,
+              new_cpl: target.highest_cpl,
+              triggered_by_buyer_id: triggeredByBuyerId,
+              triggered_by_user_id: triggeredByUserId,
+              notified_supplier_ids: [],
+              notification_status: null,
+              notified_at: null,
+            });
+            summary.events_written += 1;
+          }
         }
 
         if (existing) {

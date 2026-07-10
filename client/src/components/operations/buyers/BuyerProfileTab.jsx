@@ -11,6 +11,8 @@ import {
 } from '@/components/ui/select';
 import BuyerStatusPill from './BuyerStatusPill';
 import { AlertTriangle } from 'lucide-react';
+import { useRecomputeCoverage } from './useRecomputeCoverage';
+import RecomputingIndicator from './RecomputingIndicator';
 
 const CLIENT_TYPES = ['Law Firm', 'Aggregator', 'Reseller', 'Network'];
 const BILLING_TYPES = [
@@ -24,6 +26,7 @@ const BILLING_TYPES = [
 // read only. Save writes only the fields on this form.
 export default function BuyerProfileTab({ buyer, verticals }) {
   const qc = useQueryClient();
+  const { recomputing, scheduleRecompute } = useRecomputeCoverage();
   const [form, setForm] = useState(() => initForm(buyer));
   const [saving, setSaving] = useState(false);
 
@@ -33,6 +36,11 @@ export default function BuyerProfileTab({ buyer, verticals }) {
 
   const save = async () => {
     setSaving(true);
+    // client_type determines which coverage tier this buyer can win, so a
+    // change to it must trigger a recompute after the save succeeds.
+    const prevClientType = buyer.client_type || null;
+    const nextClientType = form.client_type || null;
+    const clientTypeChanged = prevClientType !== nextClientType;
     try {
       await api.entities.Buyer.update(buyer.id, {
         company_name: form.company_name,
@@ -51,6 +59,10 @@ export default function BuyerProfileTab({ buyer, verticals }) {
       });
       toast.success('Buyer saved');
       qc.invalidateQueries({ queryKey: ['op-buyers'] });
+      if (clientTypeChanged) {
+        // Use the buyer's current vertical for the recompute stamp.
+        scheduleRecompute({ id: buyer.id, vertical: form.vertical || buyer.vertical });
+      }
     } catch (err) {
       toast.error(`Could not save buyer: ${err?.message || 'unknown error'}`);
     } finally {
@@ -165,7 +177,8 @@ export default function BuyerProfileTab({ buyer, verticals }) {
         </div>
       </div>
 
-      <div className="flex justify-end pt-2">
+      <div className="flex items-center justify-end gap-3 pt-2">
+        <RecomputingIndicator active={recomputing} />
         <Button onClick={save} disabled={saving}>
           {saving ? 'Saving...' : 'Save Profile'}
         </Button>

@@ -15,14 +15,18 @@ import {
 import { Textarea } from '@/components/ui/textarea';
 import { US_STATES } from './usStates';
 import { Pause, X } from 'lucide-react';
+import { useRecomputeCoverage } from './useRecomputeCoverage';
+import RecomputingIndicator from './RecomputingIndicator';
 
 const money = (n) => `$${Number(n || 0).toFixed(2)}`;
 
 // Coverage band editor for a single buyer. Reads and writes BuyerStateCpl rows
-// scoped to this buyer. Never writes StateStatus and never calls the engine.
+// scoped to this buyer. After a coverage change succeeds it schedules a
+// recompute of StateStatus through the shared hook (never writes StateStatus).
 export default function BuyerCoverageTab({ buyer, verticals }) {
   const qc = useQueryClient();
   const feePct = Number(buyer.ipl_fee_pct ?? 1);
+  const { recomputing, scheduleRecompute } = useRecomputeCoverage();
 
   const { data: allRows = [] } = useQuery({
     queryKey: ['op-buyer-state-cpl'],
@@ -100,6 +104,8 @@ export default function BuyerCoverageTab({ buyer, verticals }) {
       setSelectedStates([]);
       setCpl('');
       refresh();
+      // One recompute after every row write finished, not one per row.
+      scheduleRecompute(buyer);
     } catch (err) {
       toast.error(`Could not apply band: ${err?.message || 'unknown error'}`);
     } finally {
@@ -131,6 +137,7 @@ export default function BuyerCoverageTab({ buyer, verticals }) {
         });
       }
       refresh();
+      scheduleRecompute(buyer);
     } catch (err) {
       toast.error(`Could not update state: ${err?.message || 'unknown error'}`);
     }
@@ -148,6 +155,7 @@ export default function BuyerCoverageTab({ buyer, verticals }) {
       toast.success('Activated selected states');
       setSelectedTiles([]);
       refresh();
+      scheduleRecompute(buyer);
     } catch (err) {
       toast.error(`Could not activate: ${err?.message || 'unknown error'}`);
     } finally { setBusy(false); }
@@ -160,6 +168,7 @@ export default function BuyerCoverageTab({ buyer, verticals }) {
       toast.success('Removed selected states');
       setSelectedTiles([]);
       refresh();
+      scheduleRecompute(buyer);
     } catch (err) {
       toast.error(`Could not remove: ${err?.message || 'unknown error'}`);
     } finally { setBusy(false); }
@@ -178,6 +187,7 @@ export default function BuyerCoverageTab({ buyer, verticals }) {
       setRepriceValue('');
       setSelectedTiles([]);
       refresh();
+      scheduleRecompute(buyer);
     } catch (err) {
       toast.error(`Could not reprice: ${err?.message || 'unknown error'}`);
     } finally { setBusy(false); }
@@ -196,6 +206,7 @@ export default function BuyerCoverageTab({ buyer, verticals }) {
       setPauseReason('');
       setSelectedTiles([]);
       refresh();
+      scheduleRecompute(buyer);
     } catch (err) {
       toast.error(`Could not pause: ${err?.message || 'unknown error'}`);
     } finally { setBusy(false); }
@@ -206,7 +217,10 @@ export default function BuyerCoverageTab({ buyer, verticals }) {
       {/* Composer */}
       <div className="rounded-lg border border-border bg-muted/30 p-4 space-y-4">
         <div className="flex items-center justify-between">
-          <p className="text-[13px] font-semibold text-foreground">Band Composer</p>
+          <div className="flex items-center gap-3">
+            <p className="text-[13px] font-semibold text-foreground">Band Composer</p>
+            <RecomputingIndicator active={recomputing} />
+          </div>
           {liveIpl !== null && (
             <span className="text-[12px] text-muted-foreground">
               IPL: <span className="font-mono tabular-nums text-foreground">{money(liveIpl)}</span>

@@ -15,6 +15,7 @@ import ForgotPassword from '@/pages/ForgotPassword';
 import ResetPassword from '@/pages/ResetPassword';
 
 import ApiStatus from '@/pages/ApiStatus';
+import Apply from '@/pages/Apply';
 import DocsLayout from '@/components/docs/DocsLayout';
 import { DOCS_ROUTES } from '@/components/docs/docsConfig';
 import AppLayout from '@/components/layout/AppLayout';
@@ -122,8 +123,9 @@ const AuthenticatedApp = () => {
     );
   }
 
-  // /docs is public on the main host too — render it without redirecting to login.
-  const onDocsPath = typeof window !== 'undefined' && window.location.pathname.startsWith('/docs');
+  // /docs and /apply are public on the main host too — render them without redirecting to login.
+  const onDocsPath = typeof window !== 'undefined' &&
+    (window.location.pathname.startsWith('/docs') || window.location.pathname.startsWith('/apply'));
   // The app's own auth pages must render normally — never bounce them to the
   // hosted login, or an unauthenticated visitor on /login loops forever.
   const AUTH_PATHS = ['/login', '/register', '/forgot-password', '/reset-password'];
@@ -147,6 +149,9 @@ const AuthenticatedApp = () => {
 
       {/* Public documentation — no auth, outside ProtectedRoute and AppLayout */}
       {DocsRoutes()}
+
+      {/* Public buyer onboarding — no auth, outside ProtectedRoute and AppLayout */}
+      <Route path="/apply" element={<Apply />} />
 
       <Route element={<ProtectedRoute unauthenticatedElement={<Navigate to="/login" replace />} />}>
         {/* Buyer portal: separate shell, its own sidebar, buyer-scoped. Not wrapped by the operator AppLayout. */}

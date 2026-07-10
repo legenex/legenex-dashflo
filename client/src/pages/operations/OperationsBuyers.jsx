@@ -14,8 +14,10 @@ import BuyerDeleteDialog from '@/components/operations/buyers/BuyerDeleteDialog'
 import BuyerDetailDrawer from '@/components/operations/buyers/BuyerDetailDrawer';
 import BuyerCreateModal from '@/components/operations/buyers/BuyerCreateModal';
 import { Button } from '@/components/ui/button';
-import { Plus } from 'lucide-react';
+import { Plus, RefreshCw } from 'lucide-react';
 import { computeBlastRadius } from '@/components/operations/buyers/buyerListModel';
+import { useRecomputeCoverage } from '@/components/operations/buyers/useRecomputeCoverage';
+import RecomputingIndicator from '@/components/operations/buyers/RecomputingIndicator';
 import {
   BUYER_AVAILABLE_COLUMNS, loadBuyerColumnConfig, saveBuyerColumnConfig, getBuyerColumnDef,
 } from '@/components/operations/buyers/buyerColumns';
@@ -49,6 +51,8 @@ export default function OperationsBuyers() {
   const [drawerBuyerId, setDrawerBuyerId] = useState(null);
   const [drawerTab, setDrawerTab] = useState('profile');
   const [createOpen, setCreateOpen] = useState(false);
+  const [manualRecomputing, setManualRecomputing] = useState(false);
+  const { recomputing, scheduleRecompute } = useRecomputeCoverage();
 
   const { data: buyers = [] } = useQuery({
     queryKey: ['op-buyers'],
@@ -121,6 +125,9 @@ export default function OperationsBuyers() {
     await api.entities.Buyer.update(buyer.id, { status: nextStatus });
     toast.success(`Buyer set to ${nextStatus}`);
     qc.invalidateQueries({ queryKey: ['op-buyers'] });
+    // A status change flips the buyer's active flag, which changes which states
+    // it can cover. Recompute after the write succeeds.
+    scheduleRecompute(buyer);
   };
 
   const openPause = (buyer) => {
@@ -150,17 +157,38 @@ export default function OperationsBuyers() {
     toast.success(action === 'pause' ? 'Buyer paused' : 'Buyer terminated');
     qc.invalidateQueries({ queryKey: ['op-buyers'] });
     qc.invalidateQueries({ queryKey: ['op-buyer-state-cpl'] });
+    scheduleRecompute(buyer);
   };
 
   const confirmDelete = async () => {
-    await api.entities.Buyer.delete(deleteState.buyer.id);
+    const buyer = deleteState.buyer;
+    await api.entities.Buyer.delete(buyer.id);
     toast.success('Buyer deleted');
     qc.invalidateQueries({ queryKey: ['op-buyers'] });
+    scheduleRecompute(buyer);
   };
 
   const openBuyer = (buyer, atTab = 'profile') => {
     setDrawerTab(atTab);
     setDrawerBuyerId(buyer.id);
+  };
+
+  // Manual full recompute across all verticals. No buyer id, events enabled.
+  // Reports the returned summary as a toast and refreshes the affected caches.
+  const manualRecompute = async () => {
+    setManualRecomputing(true);
+    try {
+      const res = await api.functions.invoke('recomputeStateStatus', { emit_events: true });
+      const s = res?.data || {};
+      toast.success(
+        `Coverage recomputed. ${s.created ?? 0} created, ${s.updated ?? 0} updated, ${s.unchanged ?? 0} unchanged, ${s.events_written ?? 0} events written.`
+      );
+      await refresh();
+    } catch (err) {
+      toast.error(`Could not recompute coverage: ${err?.message || 'unknown error'}`);
+    } finally {
+      setManualRecomputing(false);
+    }
   };
 
   // After creating a buyer, refresh the table and open it on Coverage, since a
@@ -173,10 +201,15 @@ export default function OperationsBuyers() {
   return (
     <div className="flex flex-col gap-4">
       <SectionHeader title="Buyer Management" subtitle="Lifecycle, coverage and pricing for every buyer.">
+        <RecomputingIndicator active={recomputing} className="mr-1" />
         <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-2.5 py-1 text-[11px] font-medium text-muted-foreground">
           <PulseDot /> Live
         </span>
         <RefreshButton onClick={refresh} />
+        <Button variant="outline" onClick={manualRecompute} disabled={manualRecomputing} className="gap-1.5">
+          <RefreshCw className={`w-4 h-4 ${manualRecomputing ? 'animate-spin' : ''}`} />
+          {manualRecomputing ? 'Recomputing...' : 'Recompute coverage'}
+        </Button>
         <Button onClick={() => setCreateOpen(true)} className="gap-1.5">
           <Plus className="w-4 h-4" /> Create Buyer
         </Button>
