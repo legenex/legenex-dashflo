@@ -85,7 +85,7 @@ build automatically. Two macOS `launchd` agents handle it:
 | Agent | What it does |
 |---|---|
 | `com.legenex.dashos.server` | Keeps the API server running (auto-restart, serves `client/dist`) |
-| `com.legenex.dashos.sync` | Every hour: pulls the repo, replicates changes, rebuilds, restarts the server |
+| `com.legenex.dashos.sync` | Every hour: pulls the repo, replicates changes, rebuilds, restarts the server, and commits + pushes to this project's repo |
 
 **Install / update the agents:**
 ```bash
@@ -109,8 +109,15 @@ bash scripts/uninstall-scheduler.sh
    with the `claude` CLI (mechanical fallback) and applied; changed existing
    functions are ported into `sync/state/pending/` and flagged, so a careful
    hand-port is never silently clobbered.
-6. Rebuilds `client/dist` and restarts the server (only if something changed and
+6. Installs any new frontend dependencies the upstream added.
+7. Rebuilds `client/dist` and restarts the server (only if something changed and
    the build succeeded — a failed build keeps the previous working `dist`).
+8. Commits the replicated changes and pushes them to `origin/main`, so the repo
+   stays current with the source automatically. Skips this on a failed build or
+   an empty change, and never crashes the sync on a git error (logs a warning and
+   retries next run). Disable with `--no-push` or `DASHOS_SYNC_NO_PUSH=1`; the
+   commit identity/branch is overridable via `DASHOS_GIT_NAME` / `DASHOS_GIT_EMAIL`
+   / `DASHOS_GIT_BRANCH`. Push auth uses the `gh`-configured git credentials.
 
 **Manual controls:**
 ```bash
