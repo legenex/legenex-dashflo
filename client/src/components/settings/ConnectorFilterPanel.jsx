@@ -72,7 +72,7 @@ export default function ConnectorFilterPanel({ editing, onFieldChange, brandOpti
     <Card className="bg-card border-border">
       <CardContent className="p-4 space-y-3">
         <div className="text-[13px] font-semibold text-foreground">Filters</div>
-        <p className="text-[11px] text-muted-foreground">Empty = match all. Pills within each group are OR (lead matches ANY selected pill). All non-empty groups must match. Field conditions below are the primary AND gate.</p>
+        <p className="text-[11px] text-muted-foreground">Empty = match all. Pills within each group are OR (lead matches ANY selected pill). All non-empty groups must match. Field conditions below are evaluated as a nested AND / OR group.</p>
 
         {/* Quick filter pills - inline flow, wraps naturally */}
         <div className="flex flex-wrap gap-x-6 gap-y-3">
@@ -97,7 +97,7 @@ export default function ConnectorFilterPanel({ editing, onFieldChange, brandOpti
         {/* Field Conditions - separate section */}
         <div className="pt-3 border-t border-border">
           <Label className="text-[12px]">Field Conditions</Label>
-          <p className="text-[11px] text-muted-foreground mt-0.5">Only match when all conditions match the enriched lead data including calculated fields. Empty = no conditions.</p>
+          <p className="text-[11px] text-muted-foreground mt-0.5">Match against the enriched lead data including calculated fields. Combine conditions with AND or OR, and nest groups for more complex logic. Empty = no conditions.</p>
           <div className="mt-2">
             <ConnectorConditionsEditor
               value={editing.filter_conditions || '[]'}

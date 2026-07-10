@@ -10,6 +10,7 @@ import { SearchableSelect } from '@/components/ui/searchable-select';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
 import JsonViewer from '@/components/shared/JsonViewer';
 import { testLeadByteConnector } from '@/functions/testLeadByteConnector';
 import DeliveryLogsTab from '@/components/settings/DeliveryLogsTab';
@@ -19,6 +20,7 @@ import TokenReferencePanel from '@/components/settings/TokenReferencePanel';
 import ConnectorFilterPanel from '@/components/settings/ConnectorFilterPanel';
 import { buildTriggerOptions, statusLabelFor } from '@/lib/leadStatus';
 import { verticalColor, triggerTagClass, TAG_NEUTRAL, statusTextClass } from '@/lib/tagColors';
+import { countConditions, normalizeConditionTree } from '@/lib/conditionGroups';
 import { Plus, Save, Play, Loader2, Trash2, Copy, ChevronDown, ChevronRight, ArrowDownUp } from 'lucide-react';
 import { toast } from 'sonner';
 import ImportExportDialog from '@/components/shared/ImportExportDialog';
@@ -199,6 +201,7 @@ export default function SettingsLeadByte() {
 
   const [editingMapping, setEditingMapping] = useState(null);
   const [savingMapping, setSavingMapping] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState(null);
 
   const { data: connectors = [] } = useQuery({
     queryKey: ['lb-connectors-all'],
@@ -335,6 +338,12 @@ export default function SettingsLeadByte() {
     qc.invalidateQueries({ queryKey: ['lb-connectors-all'] });
   };
 
+  const confirmDelete = async () => {
+    if (!deleteTarget) return;
+    await deleteConnector(deleteTarget.id);
+    setDeleteTarget(null);
+  };
+
   const duplicateConnector = async (conn) => {
     const { id, created_date, updated_date, created_by_id, ...rest } = conn;
     await api.entities.LeadByteConnector.create({
@@ -399,7 +408,7 @@ export default function SettingsLeadByte() {
     return (
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 space-y-4">
-          <div className="flex items-center justify-between">
+          <div className="sticky top-0 z-30 flex items-center justify-between bg-background/95 backdrop-blur-sm border-b border-border py-3">
             <h3 className="text-[15px] font-semibold text-foreground">{editing.id ? 'Edit Destination' : 'New Destination'}</h3>
             <div className="flex gap-2">
               <Button variant="ghost" onClick={() => setEditing(null)}>Cancel</Button>
@@ -624,7 +633,7 @@ export default function SettingsLeadByte() {
   // ── List view ────────────────────────────────────────────────────────────
   return (
     <div>
-      <div className="flex gap-1 border-b border-border mb-5">
+      <div className="sticky top-0 z-30 flex gap-1 border-b border-border bg-background/95 backdrop-blur-sm py-2">
         {[{ k: 'connectors', l: 'Destinations' }, { k: 'responses', l: 'Response Builder' }, { k: 'logs', l: 'Delivery Logs' }].map(({ k, l }) => (
           <button key={k} onClick={() => setActiveTab(k)}
             className={`px-4 py-2 text-[13px] font-medium transition-colors border-b-2 -mb-px
@@ -636,7 +645,7 @@ export default function SettingsLeadByte() {
 
       {activeTab === 'connectors' && (
         <div>
-          <div className="flex justify-between items-center mb-4 gap-3">
+          <div className="sticky top-[49px] z-20 flex justify-between items-center gap-3 bg-background/95 backdrop-blur-sm border-b border-border py-3">
             <div className="flex items-center gap-2">
               <Label className="text-[12px] whitespace-nowrap">Vertical</Label>
               <SearchableSelect
@@ -678,7 +687,7 @@ export default function SettingsLeadByte() {
               const triggers = parseJsonArray(conn.triggers);
               const brands = parseJsonArray(conn.filter_brands);
               const verticals = parseJsonArray(conn.filter_verticals);
-              const conditions = parseJsonArray(conn.filter_conditions);
+              const conditionCount = countConditions(normalizeConditionTree(conn.filter_conditions));
               return (
               <motion.div key={conn.id} variants={rise} initial="hidden" animate="show" custom={i}>
                 <Panel className="px-5 py-4 flex flex-col md:flex-row md:items-center gap-3">
@@ -705,8 +714,8 @@ export default function SettingsLeadByte() {
                       {triggers.map(t => <Badge key={t} className={`text-[9px] ${triggerTagClass(t)}`}>{statusLabelFor(t)}</Badge>)}
                       {conn.is_default && <Badge className={`text-[9px] ${TAG_NEUTRAL}`}>Default</Badge>}
                       {brands.length > 0 && <Badge className={`text-[9px] ${TAG_NEUTRAL}`}>Brands: {brands.join(', ')}</Badge>}
-                      {conditions.length > 0 && <Badge className={`text-[9px] ${TAG_NEUTRAL}`}>{conditions.length} condition(s)</Badge>}
-                      {triggers.length === 0 && brands.length === 0 && conditions.length === 0 && <Badge className={`text-[9px] ${TAG_NEUTRAL}`}>All leads</Badge>}
+                      {conditionCount > 0 && <Badge className={`text-[9px] ${TAG_NEUTRAL}`}>{conditionCount} condition(s)</Badge>}
+                      {triggers.length === 0 && brands.length === 0 && conditionCount === 0 && <Badge className={`text-[9px] ${TAG_NEUTRAL}`}>All leads</Badge>}
                     </div>
                   </div>
                   <div className="flex items-center gap-2 shrink-0 md:justify-end flex-wrap">
@@ -718,7 +727,7 @@ export default function SettingsLeadByte() {
                     <Button size="sm" variant="ghost" onClick={() => toggleEnabled(conn)} className="text-[11px]">
                       {conn.enabled ? 'Disable' : 'Enable'}
                     </Button>
-                    <Button size="sm" variant="ghost" onClick={() => deleteConnector(conn.id)} className="h-7 w-7 p-0 text-destructive"><Trash2 className="w-3.5 h-3.5" /></Button>
+                    <Button size="sm" variant="ghost" onClick={() => setDeleteTarget(conn)} className="h-7 w-7 p-0 text-destructive"><Trash2 className="w-3.5 h-3.5" /></Button>
                   </div>
                 </Panel>
               </motion.div>
@@ -742,6 +751,23 @@ export default function SettingsLeadByte() {
       )}
 
       {activeTab === 'logs' && <DeliveryLogsTab />}
+
+      <AlertDialog open={!!deleteTarget} onOpenChange={(v) => { if (!v) setDeleteTarget(null); }}>
+        <AlertDialogContent className="bg-popover border-border">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete destination?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will permanently delete "{deleteTarget?.api_name}". This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={confirmDelete} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

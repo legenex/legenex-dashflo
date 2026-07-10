@@ -12,6 +12,7 @@ import { SearchableSelect } from '@/components/ui/searchable-select';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
 import JsonViewer from '@/components/shared/JsonViewer';
 import { testCapiConnector } from '@/functions/testCapiConnector';
 import EventLogsTab from '@/components/settings/EventLogsTab';
@@ -22,6 +23,7 @@ import ConnectorFilterPanel from '@/components/settings/ConnectorFilterPanel';
 import { HighlightedPayloadEditor } from '@/components/settings/HighlightedPayloadEditor';
 import { buildTriggerOptions, statusLabelFor } from '@/lib/leadStatus';
 import { verticalColor, triggerTagClass, TAG_NEUTRAL } from '@/lib/tagColors';
+import { flattenConditions, normalizeConditionTree } from '@/lib/conditionGroups';
 import { Plus, Save, Trash2, Play, Loader2, Eye, EyeOff, Zap, Globe, Copy, GripVertical, ArrowDownUp } from 'lucide-react';
 import { toast } from 'sonner';
 import ImportExportDialog from '@/components/shared/ImportExportDialog';
@@ -192,6 +194,7 @@ export default function SettingsApiConnectors() {
   const [ioOpen, setIoOpen] = useState(false);
   const [rowTesting, setRowTesting] = useState(null);
   const [rowResult, setRowResult] = useState({});
+  const [deleteTarget, setDeleteTarget] = useState(null);
 
   const { data: connectors = [] } = useQuery({
     queryKey: ['api-connectors'],
@@ -292,6 +295,12 @@ export default function SettingsApiConnectors() {
     qc.invalidateQueries({ queryKey: ['api-connectors'] });
   };
 
+  const confirmDelete = async () => {
+    if (!deleteTarget) return;
+    await deleteConnector(deleteTarget.id);
+    setDeleteTarget(null);
+  };
+
   const toggleEnabled = async (conn) => {
     await api.entities.ApiConnector.update(conn.id, { enabled: !conn.enabled });
     qc.invalidateQueries({ queryKey: ['api-connectors'] });
@@ -359,7 +368,7 @@ export default function SettingsApiConnectors() {
 
     return (
       <div className="space-y-4">
-        <div className="flex items-center justify-between">
+        <div className="sticky top-0 z-30 flex items-center justify-between bg-background/95 backdrop-blur-sm border-b border-border py-3">
           <h3 className="text-[15px] font-semibold text-foreground">{editing.id ? 'Edit Connector' : 'New Connector'}</h3>
           <div className="flex gap-2">
             <Button variant="ghost" onClick={() => setEditing(null)}>Cancel</Button>
@@ -599,7 +608,7 @@ export default function SettingsApiConnectors() {
   return (
     <div>
       {/* Platform tabs */}
-      <div className="flex gap-1 border-b border-border mb-4 overflow-x-auto">
+      <div className="sticky top-0 z-30 flex gap-1 border-b border-border overflow-x-auto bg-background/95 backdrop-blur-sm py-2">
         {PLATFORMS.map(p => (
           <button key={p.value} onClick={() => setActivePlatform(p.value)}
             className={`px-4 py-2 text-[13px] font-medium transition-colors border-b-2 -mb-px whitespace-nowrap
@@ -619,7 +628,7 @@ export default function SettingsApiConnectors() {
       ) : (
       <>
       {/* Status filter + Add */}
-      <div className="flex justify-between items-center mb-4 gap-3">
+      <div className="sticky top-[45px] z-20 flex justify-between items-center gap-3 bg-background/95 backdrop-blur-sm border-b border-border py-3">
         <div className="flex items-center gap-2">
           <Label className="text-[12px] whitespace-nowrap">Status</Label>
           <SearchableSelect
@@ -692,10 +701,10 @@ export default function SettingsApiConnectors() {
                                   {brands.length > 0 && <Badge className={`text-[9px] ${TAG_NEUTRAL}`}>Brands: {brands.join(', ')}</Badge>}
                                   {suppliersFiltered.length > 0 && <Badge className={`text-[9px] ${TAG_NEUTRAL}`}>Suppliers: {suppliersFiltered.length}</Badge>}
                                   {types.length > 0 && <Badge className={`text-[9px] ${TAG_NEUTRAL}`}>Types: {types.join(', ')}</Badge>}
-                                  {parseJsonArray(conn.filter_conditions).map((c, i) => (
+                                  {flattenConditions(normalizeConditionTree(conn.filter_conditions)).map((c, i) => (
                                     <Badge key={i} className={`text-[9px] ${TAG_NEUTRAL}`}>{c.field} {c.operator} {c.value || ''}</Badge>
                                   ))}
-                                  {brands.length === 0 && suppliersFiltered.length === 0 && types.length === 0 && parseJsonArray(conn.filter_conditions).length === 0 && <Badge className={`text-[9px] ${TAG_NEUTRAL}`}>All leads</Badge>}
+                                  {brands.length === 0 && suppliersFiltered.length === 0 && types.length === 0 && flattenConditions(normalizeConditionTree(conn.filter_conditions)).length === 0 && <Badge className={`text-[9px] ${TAG_NEUTRAL}`}>All leads</Badge>}
                                 </div>
                                 {isCapi && <div className="font-mono text-[11px] text-muted-foreground mt-1">Pixel: {conn.fb_pixel_id || 'not set'}</div>}
                                 {!isCapi && <div className="font-mono text-[11px] text-muted-foreground mt-1 truncate max-w-[400px]">{conn.target_url || 'not set'}</div>}
@@ -715,7 +724,7 @@ export default function SettingsApiConnectors() {
                               <Button size="sm" variant="ghost" onClick={() => toggleEnabled(conn)} className="text-[11px]">
                                 {conn.enabled ? 'Disable' : 'Enable'}
                               </Button>
-                              <Button size="sm" variant="ghost" onClick={() => deleteConnector(conn.id)} className="h-7 w-7 p-0 text-destructive"><Trash2 className="w-3.5 h-3.5" /></Button>
+                              <Button size="sm" variant="ghost" onClick={() => setDeleteTarget(conn)} className="h-7 w-7 p-0 text-destructive"><Trash2 className="w-3.5 h-3.5" /></Button>
                             </div>
                           </div>
                           {isCapi && rowResult[conn.id] && (() => {
@@ -766,6 +775,23 @@ export default function SettingsApiConnectors() {
       </DragDropContext>
       </>
       )}
+
+      <AlertDialog open={!!deleteTarget} onOpenChange={(v) => { if (!v) setDeleteTarget(null); }}>
+        <AlertDialogContent className="bg-popover border-border">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete conversion event?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will permanently delete "{deleteTarget?.name}". This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={confirmDelete} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

@@ -1,13 +1,228 @@
-import React from 'react';
+import React, { useState, useMemo } from 'react';
+import { api } from '@/api/client';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useTheme } from '@/lib/theme';
+import { toast } from 'sonner';
+import SectionHeader from '@/components/shared/SectionHeader';
+import RefreshButton from '@/components/shared/RefreshButton';
+import ColumnManager from '@/components/leads/ColumnManager';
+import { PulseDot } from '@/components/settings/settingsUi';
+import BuyerTable from '@/components/operations/buyers/BuyerTable';
+import BuyersEmptyState from '@/components/operations/buyers/BuyersEmptyState';
+import BuyerActionDialog from '@/components/operations/buyers/BuyerActionDialog';
+import BuyerDeleteDialog from '@/components/operations/buyers/BuyerDeleteDialog';
+import BuyerDetailDrawer from '@/components/operations/buyers/BuyerDetailDrawer';
+import { computeBlastRadius } from '@/components/operations/buyers/buyerListModel';
+import {
+  BUYER_AVAILABLE_COLUMNS, loadBuyerColumnConfig, saveBuyerColumnConfig, getBuyerColumnDef,
+} from '@/components/operations/buyers/buyerColumns';
+
+const TABS = [
+  { key: 'all', label: 'All' },
+  { key: 'Law Firm', label: 'Law Firms' },
+  { key: 'Aggregator', label: 'Aggregators' },
+  { key: 'Network', label: 'Networks' },
+  { key: 'Reseller', label: 'Resellers' },
+  { key: 'unclassified', label: 'Unclassified' },
+];
+
+// Match a buyer against a tab. Unclassified = client_type is null/empty.
+function matchesTab(buyer, tabKey) {
+  if (tabKey === 'all') return true;
+  if (tabKey === 'unclassified') return !buyer.client_type;
+  return buyer.client_type === tabKey;
+}
 
 export default function OperationsBuyers() {
+  useTheme();
+  const qc = useQueryClient();
+  const [tab, setTab] = useState('all');
+  const [sortKey, setSortKey] = useState('company_name');
+  const [sortDir, setSortDir] = useState('asc');
+  const [config, setConfig] = useState(loadBuyerColumnConfig);
+
+  const [actionState, setActionState] = useState(null); // { action, buyer, closesStates }
+  const [deleteState, setDeleteState] = useState(null); // { buyer }
+  const [drawerBuyerId, setDrawerBuyerId] = useState(null);
+
+  const { data: buyers = [] } = useQuery({
+    queryKey: ['op-buyers'],
+    queryFn: () => api.entities.Buyer.list('-updated_date', 500),
+  });
+
+  const { data: cplRows = [] } = useQuery({
+    queryKey: ['op-buyer-state-cpl'],
+    queryFn: () => api.entities.BuyerStateCpl.list('', 2000),
+  });
+
+  const { data: stateStatuses = [] } = useQuery({
+    queryKey: ['op-state-status'],
+    queryFn: () => api.entities.StateStatus.list('', 2000),
+  });
+
+  const { data: verticals = [] } = useQuery({
+    queryKey: ['op-verticals'],
+    queryFn: () => api.entities.Vertical.filter({ active: true }, 'sort_order', 200),
+  });
+
+  // Resolve the drawer's buyer from the live list so edits reflect immediately.
+  const drawerBuyer = buyers.find((b) => b.id === drawerBuyerId) || null;
+
+  const ctx = { cplRows };
+
+  const tabCounts = useMemo(() => {
+    const counts = {};
+    for (const t of TABS) counts[t.key] = buyers.filter((b) => matchesTab(b, t.key)).length;
+    return counts;
+  }, [buyers]);
+
+  const rows = useMemo(() => {
+    const filtered = buyers.filter((b) => matchesTab(b, tab));
+    const col = getBuyerColumnDef(sortKey);
+    if (!col) return filtered;
+    const sorted = [...filtered].sort((a, b) => {
+      const av = col.sortValue(a, ctx);
+      const bv = col.sortValue(b, ctx);
+      if (av < bv) return -1;
+      if (av > bv) return 1;
+      return 0;
+    });
+    return sortDir === 'asc' ? sorted : sorted.reverse();
+  }, [buyers, tab, sortKey, sortDir, cplRows]);
+
+  const onSort = (key) => {
+    if (sortKey === key) {
+      setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setSortKey(key);
+      setSortDir('asc');
+    }
+  };
+
+  const onConfigChange = (next) => {
+    setConfig(next);
+    saveBuyerColumnConfig(next);
+  };
+
+  const refresh = () => Promise.all([
+    qc.invalidateQueries({ queryKey: ['op-buyers'] }),
+    qc.invalidateQueries({ queryKey: ['op-buyer-state-cpl'] }),
+    qc.invalidateQueries({ queryKey: ['op-state-status'] }),
+  ]);
+
+  // Instant status-only transition. The active boolean is derived at the data
+  // layer, so it is never written from the UI.
+  const transition = async (buyer, nextStatus) => {
+    await api.entities.Buyer.update(buyer.id, { status: nextStatus });
+    toast.success(`Buyer set to ${nextStatus}`);
+    qc.invalidateQueries({ queryKey: ['op-buyers'] });
+  };
+
+  const openPause = (buyer) => {
+    setActionState({ action: 'pause', buyer, closesStates: computeBlastRadius(buyer.id, cplRows, stateStatuses) });
+  };
+  const openTerminate = (buyer) => {
+    setActionState({ action: 'terminate', buyer, closesStates: computeBlastRadius(buyer.id, cplRows, stateStatuses) });
+  };
+
+  // Pause / Terminate: write the buyer status, then stamp the reason and paused
+  // metadata on every BuyerStateCpl row belonging to this buyer. No engine call
+  // and no notification are triggered from this page.
+  const confirmAction = async (reason) => {
+    const { action, buyer } = actionState;
+    const nextStatus = action === 'pause' ? 'paused' : 'terminated';
+    await api.entities.Buyer.update(buyer.id, { status: nextStatus });
+
+    let me = null;
+    try { me = await api.auth.me(); } catch {}
+    const mine = cplRows.filter((r) => r.buyer_id === buyer.id);
+    await Promise.all(mine.map((r) => api.entities.BuyerStateCpl.update(r.id, {
+      paused_reason: reason,
+      paused_at: new Date().toISOString(),
+      paused_by: me?.id || '',
+    })));
+
+    toast.success(action === 'pause' ? 'Buyer paused' : 'Buyer terminated');
+    qc.invalidateQueries({ queryKey: ['op-buyers'] });
+    qc.invalidateQueries({ queryKey: ['op-buyer-state-cpl'] });
+  };
+
+  const confirmDelete = async () => {
+    await api.entities.Buyer.delete(deleteState.buyer.id);
+    toast.success('Buyer deleted');
+    qc.invalidateQueries({ queryKey: ['op-buyers'] });
+  };
+
   return (
     <div className="flex flex-col gap-4">
-      <div>
-        <h1 className="text-[19px] font-semibold text-foreground">
-          Operations <span className="text-muted-foreground/70 font-normal">/ Buyers</span>
-        </h1>
-      </div>
+      <SectionHeader title="Buyer Management" subtitle="Lifecycle, coverage and pricing for every buyer.">
+        <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-2.5 py-1 text-[11px] font-medium text-muted-foreground">
+          <PulseDot /> Live
+        </span>
+        <RefreshButton onClick={refresh} />
+      </SectionHeader>
+
+      {buyers.length === 0 ? (
+        <BuyersEmptyState />
+      ) : (
+        <>
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <div className="flex gap-1 border-b border-border flex-wrap">
+              {TABS.map((t) => (
+                <button
+                  key={t.key}
+                  onClick={() => setTab(t.key)}
+                  className={`px-3.5 py-2 text-[13px] font-medium transition-colors border-b-2 -mb-px inline-flex items-center gap-1.5
+                    ${tab === t.key ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground'}`}
+                >
+                  {t.label}
+                  <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-mono tabular-nums ${tab === t.key ? 'bg-primary/15 text-primary' : 'bg-muted text-muted-foreground'}`}>
+                    {tabCounts[t.key] ?? 0}
+                  </span>
+                </button>
+              ))}
+            </div>
+            <ColumnManager config={config} availableColumns={BUYER_AVAILABLE_COLUMNS} onChange={onConfigChange} />
+          </div>
+
+          <BuyerTable
+            buyers={rows}
+            config={config}
+            ctx={ctx}
+            sortKey={sortKey}
+            sortDir={sortDir}
+            onSort={onSort}
+            onTransition={transition}
+            onPause={openPause}
+            onTerminate={openTerminate}
+            onDelete={(buyer) => setDeleteState({ buyer })}
+            onRowClick={(buyer) => setDrawerBuyerId(buyer.id)}
+          />
+        </>
+      )}
+
+      <BuyerActionDialog
+        open={!!actionState}
+        onOpenChange={(v) => { if (!v) setActionState(null); }}
+        action={actionState?.action}
+        buyer={actionState?.buyer}
+        closesStates={actionState?.closesStates || []}
+        onConfirm={confirmAction}
+      />
+
+      <BuyerDeleteDialog
+        open={!!deleteState}
+        onOpenChange={(v) => { if (!v) setDeleteState(null); }}
+        buyer={deleteState?.buyer}
+        onConfirm={confirmDelete}
+      />
+
+      <BuyerDetailDrawer
+        open={!!drawerBuyer}
+        onOpenChange={(v) => { if (!v) setDrawerBuyerId(null); }}
+        buyer={drawerBuyer}
+        verticals={verticals}
+      />
     </div>
   );
 }
