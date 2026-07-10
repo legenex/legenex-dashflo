@@ -412,6 +412,42 @@ function restartServer() {
   }
 }
 
+// Commit the replicated changes and push to the project repo (origin/main).
+// Disabled with --no-push or DASHOS_SYNC_NO_PUSH=1. Never throws — a git/push
+// failure is logged as a warning so the sync itself still succeeds.
+function commitAndPush(oldRev, remoteRev) {
+  if (flag('--no-push') || /^(1|true|yes)$/i.test(process.env.DASHOS_SYNC_NO_PUSH || '')) {
+    log('auto-push disabled — skipping git commit/push');
+    return;
+  }
+  const name = process.env.DASHOS_GIT_NAME || 'legenex';
+  const email = process.env.DASHOS_GIT_EMAIL || 'team@legenex.com';
+  const branch = process.env.DASHOS_GIT_BRANCH || 'main';
+  const git = (args, opts = {}) => execFileSync('git', args, { cwd: ROOT, encoding: 'utf8', ...opts });
+  try {
+    // Ensure this is a git repo with a remote before attempting anything.
+    try { git(['rev-parse', '--is-inside-work-tree']); } catch { log('not a git repo — skipping auto-push'); return; }
+    git(['add', '-A']);
+    // Nothing staged? (all changes were gitignored) -> nothing to commit.
+    try { git(['diff', '--cached', '--quiet']); log('nothing to commit'); return; } catch { /* staged changes exist */ }
+
+    const range = oldRev ? `${oldRev.slice(0, 8)}..${remoteRev.slice(0, 8)}` : remoteRev.slice(0, 8);
+    const summary = actions.slice(0, 20).map((a) => `- ${a}`).join('\n');
+    const msg = `Auto-sync upstream ${range} (${actions.length} change${actions.length === 1 ? '' : 's'})\n\n${summary}`;
+    git(['-c', `user.name=${name}`, '-c', `user.email=${email}`, 'commit', '-q', '-m', msg]);
+    log(`committed ${actions.length} change(s)`);
+
+    try {
+      git(['push', 'origin', branch]);
+      log(`pushed to origin/${branch}`);
+    } catch (e) {
+      warnings.push(`git push failed — commit is local only, will push next run: ${String(e.stderr || e.message).split('\n').filter(Boolean).slice(-1)[0]}`);
+    }
+  } catch (e) {
+    warnings.push(`auto commit/push failed: ${String(e.stderr || e.message).split('\n').filter(Boolean).slice(-1)[0]}`);
+  }
+}
+
 // ── main ─────────────────────────────────────────────────────────────────────
 function classifyChanges(oldRev, newRev, full) {
   // Returns { clientFiles:Set, clientDeletes:Set, schemas:Set, schemaDeletes:Set, funcs:Set, funcDeletes:Set, depsChanged, indexChanged }
@@ -504,6 +540,10 @@ async function main() {
   }
   const buildFailed = warnings.some((w) => w.startsWith('client build FAILED'));
   if (!flag('--no-restart') && !nothingApplied && !buildFailed) restartServer();
+
+  // Commit + push the replicated changes to the project repo (unless disabled or
+  // the build failed — we never push a broken build).
+  if (!nothingApplied && !buildFailed) commitAndPush(oldRev, remoteRev);
 
   writeState({ lastCommit: remoteRev, lastSyncAt: new Date().toISOString(), applied: actions.length, warnings });
   log(`done (${remoteRev.slice(0, 8)})`);
