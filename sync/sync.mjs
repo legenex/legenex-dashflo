@@ -216,7 +216,7 @@ function regenShims() {
 
 // ── backend function porting ─────────────────────────────────────────────────
 function claudeAvailable() {
-  try { execFileSync('claude', ['--version'], { encoding: 'utf8' }); return true; } catch { return false; }
+  try { execFileSync('claude', ['--version'], { encoding: 'utf8', env: { ...process.env, CLAUDE_NOTIFIER_DISABLE: '1' } }); return true; } catch { return false; }
 }
 
 function mechanicalPort(src, name) {
@@ -264,7 +264,14 @@ function claudePort(entrySrc, name) {
   const out = execFileSync(
     'claude',
     ['-p', prompt, '--output-format', 'text', '--disallowedTools', 'Write', 'Edit', 'Read', 'Bash', 'Glob', 'Grep'],
-    { cwd: os.tmpdir(), encoding: 'utf8', timeout: 240000, maxBuffer: 32 * 1024 * 1024 }
+    {
+      cwd: os.tmpdir(),
+      encoding: 'utf8',
+      timeout: 240000,
+      maxBuffer: 32 * 1024 * 1024,
+      // Silence the desktop notifier hooks for these automated invocations.
+      env: { ...process.env, CLAUDE_NOTIFIER_DISABLE: '1' },
+    }
   );
   return sanitizeGeneratedCode(out);
 }

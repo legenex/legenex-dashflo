@@ -87,6 +87,7 @@ cat > "$SYNC_PLIST" <<PLIST
   <dict>
     <key>PATH</key><string>$AGENT_PATH</string>
     <key>HOME</key><string>$HOME_DIR</string>
+    <key>CLAUDE_NOTIFIER_DISABLE</key><string>1</string>
   </dict>
   <key>StartInterval</key><integer>3600</integer>
   <key>RunAtLoad</key><false/>
