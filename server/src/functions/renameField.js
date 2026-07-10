@@ -1,30 +1,28 @@
-import { requireUser } from './_runtime.js';
-
 // Renames a custom field's token (field_name) and/or label across the whole system.
 // When the token changes, every {{old}} placeholder, mapping key, calculation input,
 // and stored field reference is rewritten to the new token so nothing breaks downstream.
 export default async function renameField(ctx) {
   try {
-    const user = requireUser(ctx);
-    if (user.role !== 'admin') {
+    const db = ctx.db;
+    const user = ctx.user;
+    if (!user || user.role !== 'admin') {
       return ctx.json({ error: 'Forbidden' }, 403);
     }
 
     const { field_id, old_name, new_name, new_label } = ctx.body || {};
     if (!field_id) return ctx.json({ error: 'field_id is required' }, 400);
 
-    const svc = ctx.db;
     const changed = [];
 
     // 1. Update the CustomField record itself.
     const fieldUpdate = {};
     if (typeof new_name === 'string') fieldUpdate.field_name = new_name;
     if (typeof new_label === 'string') fieldUpdate.label = new_label;
-    await svc.entities.CustomField.update(field_id, fieldUpdate);
+    await db.entities.CustomField.update(field_id, fieldUpdate);
 
     const nameChanged = old_name && new_name && old_name !== new_name;
     if (!nameChanged) {
-      return ctx.json({ ok: true, name_changed: false, updated: [] }, 200);
+      return { ok: true, name_changed: false, updated: [] };
     }
 
     // Replace {{old}} tokens (and bare old references) inside a JSON string blob.
@@ -52,23 +50,46 @@ export default async function renameField(ctx) {
       } catch { return jsonStr; }
     };
 
-    // Rewrite condition arrays [{field, operator, value}] where field === old_name.
+    // Rewrite condition field references where field === old_name. Handles both the
+    // legacy flat array [{field, operator, value}] and the newer nested group tree
+    // { type: 'group', match, name, children: [ ...condition or nested group nodes ] }.
     const rewriteConditions = (jsonStr) => {
       if (!jsonStr) return jsonStr;
+      let root;
       try {
-        const arr = JSON.parse(jsonStr);
-        if (!Array.isArray(arr)) return jsonStr;
-        let touched = false;
-        const next = arr.map((c) => {
-          if (c && c.field === old_name) { touched = true; return { ...c, field: new_name }; }
-          return c;
-        });
-        return touched ? JSON.stringify(next) : jsonStr;
+        root = JSON.parse(jsonStr);
       } catch { return jsonStr; }
+
+      let touched = false;
+      const rewriteNode = (node) => {
+        // Legacy flat shape: an array of plain condition objects.
+        if (Array.isArray(node)) {
+          return node.map((el) => {
+            if (el && el.field === old_name) { touched = true; return { ...el, field: new_name }; }
+            return el;
+          });
+        }
+        if (node && typeof node === 'object') {
+          if (node.type === 'condition') {
+            if (node.field === old_name) { touched = true; return { ...node, field: new_name }; }
+            return node;
+          }
+          if (node.type === 'group') {
+            return {
+              ...node,
+              children: Array.isArray(node.children) ? node.children.map(rewriteNode) : node.children,
+            };
+          }
+        }
+        return node;
+      };
+
+      const next = rewriteNode(root);
+      return touched ? JSON.stringify(next) : jsonStr;
     };
 
     // 2. LeadByteConnector payload templates.
-    const lbConns = await svc.entities.LeadByteConnector.list();
+    const lbConns = await db.entities.LeadByteConnector.list();
     for (const c of lbConns) {
       const patch = {};
       const newTemplate = rewriteTokens(c.payload_template);
@@ -76,13 +97,13 @@ export default async function renameField(ctx) {
       const newConds = rewriteConditions(c.filter_conditions);
       if (newConds !== c.filter_conditions) patch.filter_conditions = newConds;
       if (Object.keys(patch).length) {
-        await svc.entities.LeadByteConnector.update(c.id, patch);
+        await db.entities.LeadByteConnector.update(c.id, patch);
         changed.push(`LeadByteConnector:${c.api_name}`);
       }
     }
 
     // 3. ApiConnector payload templates, conditions, and trigger overrides.
-    const apiConns = await svc.entities.ApiConnector.list();
+    const apiConns = await db.entities.ApiConnector.list();
     for (const c of apiConns) {
       const patch = {};
       const newTemplate = rewriteTokens(c.payload_template);
@@ -92,13 +113,13 @@ export default async function renameField(ctx) {
       const newConds = rewriteConditions(c.filter_conditions);
       if (newConds !== c.filter_conditions) patch.filter_conditions = newConds;
       if (Object.keys(patch).length) {
-        await svc.entities.ApiConnector.update(c.id, patch);
+        await db.entities.ApiConnector.update(c.id, patch);
         changed.push(`ApiConnector:${c.name}`);
       }
     }
 
     // 4. CustomCalculation input/output token references.
-    const calcs = await svc.entities.CustomCalculation.list();
+    const calcs = await db.entities.CustomCalculation.list();
     for (const c of calcs) {
       const patch = {};
       if (c.input_field === old_name) patch.input_field = new_name;
@@ -106,23 +127,22 @@ export default async function renameField(ctx) {
       const newConfig = rewriteTokens(c.config);
       if (newConfig !== c.config) patch.config = newConfig;
       if (Object.keys(patch).length) {
-        await svc.entities.CustomCalculation.update(c.id, patch);
+        await db.entities.CustomCalculation.update(c.id, patch);
         changed.push(`CustomCalculation:${c.output_token}`);
       }
     }
 
     // 5. FieldMapping target references.
-    const mappings = await svc.entities.FieldMapping.list();
+    const mappings = await db.entities.FieldMapping.list();
     for (const m of mappings) {
       if (m.target_field === old_name) {
-        await svc.entities.FieldMapping.update(m.id, { target_field: new_name });
+        await db.entities.FieldMapping.update(m.id, { target_field: new_name });
         changed.push(`FieldMapping:${m.source_field}`);
       }
     }
 
-    return ctx.json({ ok: true, name_changed: true, updated: changed }, 200);
+    return { ok: true, name_changed: true, updated: changed };
   } catch (error) {
-    if (error?.status && error?.body) return ctx.json(error.body, error.status);
     return ctx.json({ error: error.message }, 500);
   }
 }

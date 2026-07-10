@@ -18,6 +18,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Plus, Pencil, Trash2, Calculator, GripVertical, ArrowDownUp } from 'lucide-react';
 import { toast } from 'sonner';
 import { OutputFieldPicker } from '@/components/calculations/OutputFieldPicker';
+import CalcConditionGroupEditor, { flattenCalcConditions } from '@/components/calculations/CalcConditionGroupEditor';
 import ReferenceKeyPanel from '@/components/calculations/ReferenceKeyPanel';
 import ImportExportDialog from '@/components/shared/ImportExportDialog';
 
@@ -99,11 +100,9 @@ function formToRecord(form) {
   } else if (form.transform_type === 'conditional') {
     config = {
       rules: form.conditional_rules
-        .filter(r => (r.output || '').trim() !== '' && r.conditions.some(c => (c.field || '').trim() !== ''))
+        .filter(r => (r.output || '').trim() !== '' && flattenCalcConditions(r.conditions).some(c => (c.field || '').trim() !== ''))
         .map(r => ({
-          conditions: r.conditions
-            .filter(c => (c.field || '').trim() !== '')
-            .map(c => ({ field: c.field, operator: c.operator, value: c.value })),
+          conditions: r.conditions,
           output: r.output,
         })),
       fallback: form.conditional_fallback,
@@ -289,31 +288,10 @@ export default function CustomCalculations() {
     });
   }
 
-  function addCondition(ruleIndex) {
+  function updateRuleConditions(ruleIndex, tree) {
     setForm(f => {
       const conditional_rules = [...f.conditional_rules];
-      const rule = conditional_rules[ruleIndex];
-      conditional_rules[ruleIndex] = { ...rule, conditions: [...rule.conditions, { field: '', operator: 'equals', value: '' }] };
-      return { ...f, conditional_rules };
-    });
-  }
-
-  function removeCondition(ruleIndex, condIndex) {
-    setForm(f => {
-      const conditional_rules = [...f.conditional_rules];
-      const rule = conditional_rules[ruleIndex];
-      conditional_rules[ruleIndex] = { ...rule, conditions: rule.conditions.filter((_, idx) => idx !== condIndex) };
-      return { ...f, conditional_rules };
-    });
-  }
-
-  function updateCondition(ruleIndex, condIndex, key, value) {
-    setForm(f => {
-      const conditional_rules = [...f.conditional_rules];
-      const rule = conditional_rules[ruleIndex];
-      const conditions = [...rule.conditions];
-      conditions[condIndex] = { ...conditions[condIndex], [key]: value };
-      conditional_rules[ruleIndex] = { ...rule, conditions };
+      conditional_rules[ruleIndex] = { ...conditional_rules[ruleIndex], conditions: tree };
       return { ...f, conditional_rules };
     });
   }
@@ -325,7 +303,7 @@ export default function CustomCalculations() {
 
   const conditionalValid =
     form.transform_type === 'conditional' &&
-    form.conditional_rules.some(r => (r.output || '').trim() !== '' && r.conditions.some(c => (c.field || '').trim() !== ''));
+    form.conditional_rules.some(r => (r.output || '').trim() !== '' && flattenCalcConditions(r.conditions).some(c => (c.field || '').trim() !== ''));
 
   const typeLabels = { date_age_bucket: 'Date Transformer', value_map: 'Value Map', clone: 'Clone', script: 'Script' };
   const existingTokens = new Set(calcs.map(c => c.output_token));
@@ -524,44 +502,14 @@ export default function CustomCalculations() {
                 <div className="space-y-3">
                   {form.conditional_rules.map((rule, ri) => (
                     <div key={ri} className="rounded-lg border border-border bg-muted/20 p-3 space-y-2.5">
-                      <div className="flex items-center justify-between">
-                        <span className="text-[11px] font-medium text-muted-foreground">When all of these match:</span>
+                      <div className="flex items-center justify-end">
                         <Button size="icon" variant="ghost" className="h-7 w-7 text-destructive shrink-0" onClick={() => removeRule(ri)}><Trash2 className="w-3.5 h-3.5" /></Button>
                       </div>
-                      <div className="space-y-2">
-                        {rule.conditions.map((cond, ci) => {
-                          const noValue = cond.operator === 'exists' || cond.operator === 'not_exists';
-                          return (
-                            <div key={ci} className="flex items-center gap-2">
-                              <div className="flex-1 min-w-0">
-                                <SearchableSelect
-                                  value={cond.field}
-                                  onValueChange={v => updateCondition(ri, ci, 'field', v)}
-                                  options={conditionFieldOptions}
-                                  placeholder="Field…"
-                                />
-                              </div>
-                              <Select value={cond.operator} onValueChange={v => updateCondition(ri, ci, 'operator', v)}>
-                                <SelectTrigger className="w-44 shrink-0"><SelectValue /></SelectTrigger>
-                                <SelectContent>
-                                  {CONDITION_OPERATORS.map(op => (
-                                    <SelectItem key={op.value} value={op.value}>{op.label}</SelectItem>
-                                  ))}
-                                </SelectContent>
-                              </Select>
-                              <Input
-                                className="flex-1 min-w-0"
-                                value={cond.value}
-                                onChange={e => updateCondition(ri, ci, 'value', e.target.value)}
-                                disabled={noValue}
-                                placeholder="Value"
-                              />
-                              <Button size="icon" variant="ghost" className="h-7 w-7 text-destructive shrink-0" onClick={() => removeCondition(ri, ci)}><Trash2 className="w-3.5 h-3.5" /></Button>
-                            </div>
-                          );
-                        })}
-                        <Button size="sm" variant="outline" onClick={() => addCondition(ri)} className="gap-1"><Plus className="w-3.5 h-3.5" />Add condition</Button>
-                      </div>
+                      <CalcConditionGroupEditor
+                        value={rule.conditions}
+                        onChange={tree => updateRuleConditions(ri, tree)}
+                        fieldOptions={conditionFieldOptions}
+                      />
                       <div className="flex items-center gap-2 pt-1">
                         <Label className="text-[12px] whitespace-nowrap">Set output to</Label>
                         <Input className="flex-1" value={rule.output} onChange={e => updateRuleOutput(ri, e.target.value)} placeholder="Output value" />
