@@ -6,8 +6,9 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Upload, Loader2, Sparkles, Check, ArrowRight, Save } from 'lucide-react';
+import { Upload, Loader2, Sparkles, Check, ArrowRight, Save, Copy, AlertTriangle } from 'lucide-react';
 import { toast } from 'sonner';
+import Papa from 'papaparse';
 
 // Core target fields per entity. Custom fields (for leads) are appended at runtime.
 const LEAD_FIELDS = ['first_name', 'last_name', 'email', 'mobile', 'supplier_name', 'revenue', 'conv_value', 'final_status', 'email_valid'];
@@ -29,6 +30,87 @@ const normalizeStatus = (raw) => STATUS_LOOKUP[String(raw ?? '').trim().toLowerC
 const normEmail = (v) => String(v ?? '').trim().toLowerCase();
 const normMobile = (v) => String(v ?? '').replace(/\D/g, '');
 
+// ---- Deterministic auto-mapping helpers -------------------------------------
+
+// Lowercase and strip everything except a-z0-9 so "First Name", "first_name"
+// and "FirstName" all collapse to the same key.
+const normKey = (s) => String(s ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
+
+// Source columns whose normalized key means "lead status / disposition" always
+// map to final_status (the field that drives Sold/Unsold/Disqualified), never
+// to a lead_status custom field.
+const STATUS_COLUMN_KEYS = new Set([
+  'leadstatus', 'status', 'disposition', 'dispo', 'leaddisposition', 'outcome', 'result', 'finalstatus',
+]);
+
+// Synonyms / abbreviations -> target field_name. Keys are normalized.
+const SYNONYMS = {
+  phone: 'mobile', tel: 'mobile', telephone: 'mobile', cell: 'mobile', cellphone: 'mobile', phonenumber: 'mobile',
+  fname: 'first_name', first: 'first_name', givenname: 'first_name',
+  lname: 'last_name', surname: 'last_name', last: 'last_name',
+  email: 'email', mail: 'email', emailaddress: 'email',
+  postal: 'zip', postcode: 'zip', postalcode: 'zip', zipcode: 'zip',
+  rev: 'revenue', amount: 'revenue',
+};
+
+// Dice coefficient on character bigrams -> similarity ratio 0..1.
+const diceCoefficient = (a, b) => {
+  if (!a || !b) return 0;
+  if (a === b) return 1;
+  if (a.length < 2 || b.length < 2) return 0;
+  const bigrams = (s) => {
+    const m = new Map();
+    for (let i = 0; i < s.length - 1; i++) {
+      const g = s.slice(i, i + 2);
+      m.set(g, (m.get(g) || 0) + 1);
+    }
+    return m;
+  };
+  const aB = bigrams(a);
+  const bB = bigrams(b);
+  let overlap = 0;
+  let total = 0;
+  aB.forEach((count, g) => { total += count; });
+  bB.forEach((count, g) => {
+    total += count;
+    const inA = aB.get(g) || 0;
+    if (inA > 0) overlap += Math.min(inA, count);
+  });
+  return (2 * overlap) / total;
+};
+
+// Layered matcher: decides one source column, stopping at the first hit.
+// entries: [{ field, keys: [normKey(field_name), normKey(label)] }]. Returns a
+// target field_name or null when nothing confident matched (leave as Ignore).
+const matchColumn = (col, entries) => {
+  const key = normKey(col);
+  if (!key) return null;
+
+  // 1. Status override.
+  if (STATUS_COLUMN_KEYS.has(key)) {
+    return entries.some(e => e.field === 'final_status') ? 'final_status' : null;
+  }
+
+  const byKey = new Map();
+  entries.forEach(e => e.keys.forEach(k => { if (k && !byKey.has(k)) byKey.set(k, e.field); }));
+
+  // 2. Normalized exact match against field_name or label.
+  if (byKey.has(key)) return byKey.get(key);
+
+  // 3. Synonym / abbreviation dictionary (only if the target field exists).
+  const syn = SYNONYMS[key];
+  if (syn && entries.some(e => e.field === syn)) return syn;
+
+  // 4. Fuzzy similarity, accept only above ~0.82.
+  let best = null;
+  let bestScore = 0;
+  byKey.forEach((field, k) => {
+    const score = diceCoefficient(key, k);
+    if (score > bestScore) { bestScore = score; best = field; }
+  });
+  return bestScore >= 0.82 ? best : null;
+};
+
 export default function CsvImporter() {
   const qc = useQueryClient();
   const fileRef = useRef();
@@ -40,6 +122,8 @@ export default function CsvImporter() {
   const [columns, setColumns] = useState([]);
   const [mapping, setMapping] = useState({});
   const [templateName, setTemplateName] = useState('');
+  const [dupChecking, setDupChecking] = useState(false);
+  const [dupResult, setDupResult] = useState(null); // { newCount, dupCount }
 
   const { data: customFields = [] } = useQuery({ queryKey: ['custom-fields'], queryFn: () => api.entities.CustomField.list('sort_order') });
   const { data: templates = [] } = useQuery({ queryKey: ['import-templates'], queryFn: () => api.entities.ImportTemplate.list('-created_date') });
@@ -48,32 +132,136 @@ export default function CsvImporter() {
     ? [...LEAD_FIELDS, ...customFields.map(f => f.field_name).filter(n => n && !LEAD_FIELDS.includes(n))]
     : BANK_FIELDS;
 
-  const reset = () => { setStep('upload'); setRows([]); setColumns([]); setMapping({}); setTemplateName(''); if (fileRef.current) fileRef.current.value = ''; };
+  // Matcher entries: each target field plus the normalized keys to match on
+  // (field_name, and the custom field label when present).
+  const fieldEntries = targetFields.map(f => {
+    const cf = customFields.find(c => c.field_name === f);
+    const keys = [normKey(f)];
+    if (cf?.label) keys.push(normKey(cf.label));
+    return { field: f, keys };
+  });
+
+  const reset = () => { setStep('upload'); setRows([]); setColumns([]); setMapping({}); setTemplateName(''); setDupResult(null); if (fileRef.current) fileRef.current.value = ''; };
+
+  // First few non-empty sample values for a source column.
+  const sampleValues = (col, max = 3) => {
+    const out = [];
+    for (const r of rows) {
+      const v = r?.[col];
+      if (v != null && String(v).trim() !== '') out.push(String(v).trim());
+      if (out.length >= max) break;
+    }
+    return out;
+  };
+
+  // Which target fields are currently mapped.
+  const mappedFields = new Set(Object.values(mapping).filter(f => f && f !== IGNORE));
+  // Required-field validation. Returns a list of human-readable missing requirements.
+  const missingRequired = (() => {
+    if (target === 'lead') {
+      return mappedFields.has('email') || mappedFields.has('mobile') ? [] : ['email or mobile'];
+    }
+    const miss = [];
+    if (!mappedFields.has('date')) miss.push('date');
+    if (!mappedFields.has('amount')) miss.push('amount');
+    return miss;
+  })();
+
+  const checkDuplicates = async () => {
+    setDupChecking(true);
+    try {
+      const records = rows.map(r => {
+        const out = {};
+        Object.entries(mapping).forEach(([col, field]) => { if (field && field !== IGNORE) out[field] = r[col]; });
+        return out;
+      });
+      let existingEmails = new Set();
+      let existingMobiles = new Set();
+      if (target === 'lead') {
+        let page = 0;
+        const pageSize = 500;
+        // eslint-disable-next-line no-constant-condition
+        while (true) {
+          const batch = await api.entities.Lead.list('-created_date', pageSize, page * pageSize);
+          batch.forEach(l => {
+            const e = normEmail(l.email); if (e) existingEmails.add(e);
+            const m = normMobile(l.mobile); if (m) existingMobiles.add(m);
+          });
+          if (batch.length < pageSize) break;
+          page += 1;
+        }
+      }
+      const seenEmails = new Set();
+      const seenMobiles = new Set();
+      let newCount = 0;
+      let dupCount = 0;
+      records.forEach(r => {
+        const e = normEmail(r.email);
+        const m = normMobile(r.mobile);
+        const dupExisting = (e && existingEmails.has(e)) || (m && existingMobiles.has(m));
+        const dupIntra = (e && seenEmails.has(e)) || (m && seenMobiles.has(m));
+        if (dupExisting || dupIntra) { dupCount += 1; return; }
+        if (e) seenEmails.add(e);
+        if (m) seenMobiles.add(m);
+        newCount += 1;
+      });
+      setDupResult({ newCount, dupCount });
+    } catch {
+      toast.error('Could not check duplicates');
+    }
+    setDupChecking(false);
+  };
 
   const handleFile = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
     setBusy(true);
     try {
-      const { file_url } = await api.integrations.Core.UploadFile({ file });
-      const extract = await api.integrations.Core.ExtractDataFromUploadedFile({
-        file_url,
-        json_schema: { type: 'object', properties: { rows: { type: 'array', items: { type: 'object', additionalProperties: true } } } },
-      });
-      const parsed = extract?.output?.rows || extract?.output || [];
-      const list = Array.isArray(parsed) ? parsed : [];
+      const name = (file.name || '').toLowerCase();
+      const isDelimited = name.endsWith('.csv') || name.endsWith('.tsv');
+      let list = [];
+      if (isDelimited) {
+        // Parse CSV/TSV in the browser. Reliable on large or wide files with
+        // quoted fields containing line breaks, where AI extraction fails.
+        const text = await file.text();
+        const result = Papa.parse(text, { header: true, skipEmptyLines: true });
+        list = Array.isArray(result?.data) ? result.data : [];
+      } else {
+        const { file_url } = await api.integrations.Core.UploadFile({ file });
+        const extract = await api.integrations.Core.ExtractDataFromUploadedFile({
+          file_url,
+          json_schema: { type: 'object', properties: { rows: { type: 'array', items: { type: 'object', additionalProperties: true } } } },
+        });
+        const parsed = extract?.output?.rows || extract?.output || [];
+        list = Array.isArray(parsed) ? parsed : [];
+      }
       if (!list.length) { toast.error('No rows found in the file'); setBusy(false); return; }
       const cols = Object.keys(list[0] || {});
       setRows(list); setColumns(cols);
 
-      // AI auto-map the columns to our target fields.
-      const ai = await api.integrations.Core.InvokeLLM({
-        prompt: `Map each source CSV column to the best matching target field. Source columns: ${JSON.stringify(cols)}. Target fields: ${JSON.stringify(targetFields)}. If a column has no good match, map it to "${IGNORE}". Return a JSON object of source column -> target field.`,
-        response_json_schema: { type: 'object', properties: { mapping: { type: 'object', additionalProperties: { type: 'string' } } } },
-      });
-      const auto = ai?.mapping || {};
+      // Deterministic layered auto-map: status override -> normalized exact ->
+      // synonyms -> fuzzy. Each column stops at the first confident hit.
       const finalMap = {};
-      cols.forEach(c => { finalMap[c] = targetFields.includes(auto[c]) ? auto[c] : IGNORE; });
+      const unmatched = [];
+      cols.forEach(c => {
+        const hit = matchColumn(c, fieldEntries);
+        if (hit) finalMap[c] = hit;
+        else { finalMap[c] = IGNORE; unmatched.push(c); }
+      });
+
+      // AI fallback ONLY for columns still unmatched after the deterministic layers.
+      if (unmatched.length) {
+        try {
+          const ai = await api.integrations.Core.InvokeLLM({
+            prompt: `Map each source CSV column to the best matching target field. Source columns: ${JSON.stringify(unmatched)}. Target fields: ${JSON.stringify(targetFields)}. If a column has no good match, map it to "${IGNORE}". Return a JSON object of source column -> target field.`,
+            response_json_schema: { type: 'object', properties: { mapping: { type: 'object', additionalProperties: { type: 'string' } } } },
+          });
+          const auto = ai?.mapping || {};
+          unmatched.forEach(c => { if (targetFields.includes(auto[c])) finalMap[c] = auto[c]; });
+        } catch {
+          // Deterministic mapping already applied; leave unmatched as Ignore.
+        }
+      }
       setMapping(finalMap);
       setStep('review');
     } catch (err) {
@@ -104,9 +292,21 @@ export default function CsvImporter() {
     try {
       const records = rows.map(r => {
         const out = {};
+        const mapped = {};
         Object.entries(mapping).forEach(([col, field]) => {
-          if (field && field !== IGNORE) out[field] = r[col];
+          if (!field || field === IGNORE) return;
+          // Core lead fields become top-level columns; anything else is a
+          // custom field the Lead entity does not persist as a column, so it
+          // is collected into the mapped_fields JSON the app reads from.
+          if (target === 'lead' && !LEAD_FIELDS.includes(field)) {
+            mapped[field] = r[col];
+          } else {
+            out[field] = r[col];
+          }
         });
+        if (target === 'lead' && Object.keys(mapped).length) {
+          out.mapped_fields = JSON.stringify(mapped);
+        }
         return out;
       });
       if (target === 'lead') {
@@ -150,14 +350,33 @@ export default function CsvImporter() {
 
         const chunkSize = 100;
         setProgress({ done: 0, total: clean.length });
+        let createdCount = 0;
+        let failedCount = 0;
+        const failedRecords = [];
         for (let i = 0; i < clean.length; i += chunkSize) {
           const chunk = clean.slice(i, i + chunkSize);
-          await api.entities.Lead.bulkCreate(chunk);
+          try {
+            await api.entities.Lead.bulkCreate(chunk);
+            createdCount += chunk.length;
+          } catch {
+            // One bad row can fail the whole chunk, so retry the chunk one
+            // record at a time and skip only the genuinely bad rows.
+            for (const rec of chunk) {
+              try {
+                await api.entities.Lead.create(rec);
+                createdCount += 1;
+              } catch {
+                failedCount += 1;
+                failedRecords.push(rec.email || `${rec.first_name || ''} ${rec.last_name || ''}`.trim() || '(no email)');
+              }
+            }
+          }
           setProgress({ done: Math.min(i + chunk.length, clean.length), total: clean.length });
         }
         setProgress(null);
         qc.invalidateQueries({ queryKey: ['report-leads'] });
-        toast.success(`Imported ${clean.length} leads, skipped ${skipped} duplicates`);
+        if (failedCount) console.warn('CSV import failed records:', failedRecords);
+        toast.success(`Imported ${createdCount} leads, skipped ${skipped} duplicates${failedCount ? `, ${failedCount} failed` : ''}`);
         reset();
         setBusy(false);
         return;
@@ -202,7 +421,7 @@ export default function CsvImporter() {
               </Select>
             </div>
           </div>
-          <input ref={fileRef} type="file" accept=".csv,.xlsx,.xls,.json" className="hidden" onChange={handleFile} />
+          <input ref={fileRef} type="file" accept=".csv,.tsv,.xlsx,.xls,.json" className="hidden" onChange={handleFile} />
           <button
             onClick={() => fileRef.current?.click()}
             disabled={busy}
@@ -238,11 +457,21 @@ export default function CsvImporter() {
               <tbody className="divide-y divide-border">
                 {columns.map(col => (
                   <tr key={col}>
-                    <td className="px-4 py-2 font-mono text-foreground">{col}</td>
-                    <td className="px-4 py-2 text-muted-foreground truncate max-w-[160px]">{String(rows[0]?.[col] ?? '')}</td>
-                    <td className="px-4 py-2 text-muted-foreground"><ArrowRight className="w-3.5 h-3.5" /></td>
-                    <td className="px-4 py-2">
-                      <Select value={mapping[col]} onValueChange={v => setMapping(p => ({ ...p, [col]: v }))}>
+                    <td className="px-4 py-2 font-mono text-foreground align-top">{col}</td>
+                    <td className="px-4 py-2 text-muted-foreground max-w-[200px] align-top">
+                      {(() => {
+                        const vals = sampleValues(col);
+                        if (!vals.length) return <span className="italic opacity-60">empty</span>;
+                        return (
+                          <div className="space-y-0.5">
+                            {vals.map((v, i) => <div key={i} className="truncate">{v}</div>)}
+                          </div>
+                        );
+                      })()}
+                    </td>
+                    <td className="px-4 py-2 text-muted-foreground align-top"><ArrowRight className="w-3.5 h-3.5" /></td>
+                    <td className="px-4 py-2 align-top">
+                      <Select value={mapping[col]} onValueChange={v => { setMapping(p => ({ ...p, [col]: v })); setDupResult(null); }}>
                         <SelectTrigger className="bg-background text-[12px] h-8 w-[220px]"><SelectValue /></SelectTrigger>
                         <SelectContent>
                           <SelectItem value={IGNORE}>— Ignore —</SelectItem>
@@ -263,12 +492,24 @@ export default function CsvImporter() {
             </div>
             <div className="flex items-center gap-3">
               {progress && <span className="text-[12px] text-muted-foreground">created {progress.done} of {progress.total}</span>}
-              <Button size="sm" onClick={commit} disabled={busy} className="gap-1.5">
+              {dupResult && <span className="text-[12px] text-muted-foreground">{dupResult.newCount} new, {dupResult.dupCount} duplicates</span>}
+              <Button size="sm" variant="outline" onClick={checkDuplicates} disabled={dupChecking || busy} className="gap-1.5">
+                {dupChecking ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Copy className="w-3.5 h-3.5" />}
+                Check duplicates
+              </Button>
+              <Button size="sm" onClick={commit} disabled={busy || missingRequired.length > 0} className="gap-1.5">
                 {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
                 Import {rows.length} {target === 'lead' ? 'Leads' : 'Transactions'}
               </Button>
             </div>
           </div>
+
+          {missingRequired.length > 0 && (
+            <div className="flex items-center gap-2 text-[12px] text-primary bg-status-error-bg rounded-[8px] px-3 py-2">
+              <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+              <span>Map {missingRequired.join(' and ')} before importing.</span>
+            </div>
+          )}
 
           {templates.length > 0 && (
             <div className="flex flex-wrap gap-1.5 pt-1">

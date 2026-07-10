@@ -190,6 +190,8 @@ export default function SettingsApiConnectors() {
   const [statusFilter, setStatusFilter] = useState('all');
   const [testTrigger, setTestTrigger] = useState('on_received');
   const [ioOpen, setIoOpen] = useState(false);
+  const [rowTesting, setRowTesting] = useState(null);
+  const [rowResult, setRowResult] = useState({});
 
   const { data: connectors = [] } = useQuery({
     queryKey: ['api-connectors'],
@@ -321,6 +323,21 @@ export default function SettingsApiConnectors() {
       toast.error('Test failed: ' + (err.message || 'unknown error'));
     }
     setSendingTest(false);
+  };
+
+  const sendRowTestEvent = async (conn) => {
+    setRowTesting(conn.id);
+    setRowResult(p => ({ ...p, [conn.id]: null }));
+    try {
+      const resp = await testCapiConnector({ connector_id: conn.id, trigger: 'on_received' });
+      setRowResult(p => ({ ...p, [conn.id]: resp.data }));
+      if (resp.data?.error) toast.error(resp.data.error);
+      else toast.success('Test event sent');
+    } catch (err) {
+      setRowResult(p => ({ ...p, [conn.id]: { error: err.message || 'unknown error' } }));
+      toast.error('Test failed: ' + (err.message || 'unknown error'));
+    }
+    setRowTesting(null);
   };
 
   const addHeaderRow = () => setHeaderRows(p => [...p, { key: '', value: '' }]);
@@ -688,6 +705,11 @@ export default function SettingsApiConnectors() {
                               <Badge variant="outline" className={conn.enabled ? 'status-sold bg-status-sold' : 'text-muted-foreground'}>
                                 {conn.enabled ? 'Active' : 'Disabled'}
                               </Badge>
+                              {isCapi && (
+                                <Button size="sm" variant="outline" onClick={() => sendRowTestEvent(conn)} disabled={rowTesting === conn.id} className="gap-1 text-[11px]">
+                                  {rowTesting === conn.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Play className="w-3 h-3" />} Send Test Event
+                                </Button>
+                              )}
                               <Button size="sm" variant="ghost" onClick={() => openEdit(conn)}>Edit</Button>
                               <Button size="sm" variant="ghost" onClick={() => duplicateConnector(conn)} className="gap-1 text-[11px]"><Copy className="w-3 h-3" /> Duplicate</Button>
                               <Button size="sm" variant="ghost" onClick={() => toggleEnabled(conn)} className="text-[11px]">
@@ -696,6 +718,41 @@ export default function SettingsApiConnectors() {
                               <Button size="sm" variant="ghost" onClick={() => deleteConnector(conn.id)} className="h-7 w-7 p-0 text-destructive"><Trash2 className="w-3.5 h-3.5" /></Button>
                             </div>
                           </div>
+                          {isCapi && rowResult[conn.id] && (() => {
+                            const r = rowResult[conn.id];
+                            const fb = r.fb_response || {};
+                            const fbError = fb.error;
+                            const ok = !r.error && !fbError && r.http_status && r.http_status < 300;
+                            return (
+                              <div className="mt-3 pt-3 border-t border-border text-[12px] space-y-1.5">
+                                {ok ? (
+                                  <div className="space-y-1">
+                                    <div className="flex items-center gap-2 flex-wrap">
+                                      <Badge className="bg-status-sold status-sold text-[10px]">Success</Badge>
+                                      {typeof fb.events_received !== 'undefined' && (
+                                        <span className="text-muted-foreground">Events received: <span className="text-foreground font-medium">{fb.events_received}</span></span>
+                                      )}
+                                    </div>
+                                    {Array.isArray(fb.messages) && fb.messages.length > 0 && (
+                                      <div className="text-muted-foreground">Messages: <span className="text-foreground font-mono">{fb.messages.join('; ')}</span></div>
+                                    )}
+                                    {r.fbtrace_id && (
+                                      <div className="text-muted-foreground">fbtrace_id: <span className="text-foreground font-mono">{r.fbtrace_id}</span></div>
+                                    )}
+                                  </div>
+                                ) : (
+                                  <div className="space-y-1">
+                                    <Badge className="bg-status-error status-error text-[10px]">Failed{r.http_status ? ` (HTTP ${r.http_status})` : ''}</Badge>
+                                    <div className="text-status-error font-mono break-all">
+                                      {fbError
+                                        ? `${fbError.message || 'Error'}${fbError.error_user_title ? ' - ' + fbError.error_user_title : ''}${fbError.fbtrace_id ? ' (fbtrace_id: ' + fbError.fbtrace_id + ')' : ''}`
+                                        : (r.error || 'Unknown error')}
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })()}
                         </CardContent>
                       </Card>
                     )}

@@ -8,6 +8,7 @@ import LeadDetailModal from '@/components/leads/LeadDetailModal';
 import LeadsFilterBar from '@/components/leads/LeadsFilterBar';
 import LeadsShell from '@/components/leads/LeadsShell';
 import BulkActionBar from '@/components/leads/BulkActionBar';
+import LeadCard from '@/components/leads/LeadCard';
 import { Panel, Tag, riseIn } from '@/components/settings/settingsUi';
 import { Checkbox } from '@/components/ui/checkbox';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
@@ -187,6 +188,8 @@ export default function LeadsTable({ view }) {
   const [statusFilter, setStatusFilter] = useState('');
   const [supplierFilter, setSupplierFilter] = useState('');
   const [sourceFilter, setSourceFilter] = useState('');
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
 
   useEffect(() => {
     setSearch('');
@@ -216,7 +219,21 @@ export default function LeadsTable({ view }) {
 
   const { data: leads = [], isLoading } = useQuery({
     queryKey: ['leads-all-non-archived'],
-    queryFn: () => api.entities.Lead.filter({ archived: false }, '-created_date', 500),
+    queryFn: async () => {
+      // Page through all matching leads. A single call is capped at 500, so
+      // loop until a page returns fewer than 500 rows.
+      const all = [];
+      let p = 0;
+      const size = 500;
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
+        const batch = await api.entities.Lead.filter({ archived: false }, '-created_date', size, p * size);
+        all.push(...batch);
+        if (batch.length < size) break;
+        p += 1;
+      }
+      return all;
+    },
   });
 
   const { data: errorLogs = [] } = useQuery({
@@ -300,6 +317,17 @@ export default function LeadsTable({ view }) {
       return true;
     });
   }, [leads, view, dateRange, customDate, customFilters, search, statusFilter, supplierFilter, sourceFilter]);
+
+  // Client-side pagination over the filtered set. Selection and bulk actions
+  // still span the whole filtered set; only the rendered rows are sliced.
+  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const safePage = Math.min(page, totalPages);
+  const paged = useMemo(
+    () => filtered.slice((safePage - 1) * pageSize, safePage * pageSize),
+    [filtered, safePage, pageSize]
+  );
+  // Reset to page 1 whenever the view, search, or any filter changes.
+  useEffect(() => { setPage(1); }, [view, search, dateRange, customDate, customFilters, statusFilter, supplierFilter, sourceFilter, pageSize]);
 
   // Real telemetry for the shell footer, computed across all loaded leads.
   const telemetry = useMemo(() => ({
@@ -491,8 +519,21 @@ export default function LeadsTable({ view }) {
       />
       </div>
 
-      <Panel className="flex-1 min-h-0 overflow-auto" i={1}>
-          <table className="w-full text-[13px]">
+      {/* Mobile card list: below lg only */}
+      <div className="lg:hidden flex-1 min-h-0 overflow-y-auto space-y-2">
+        {isLoading && (
+          <div className="px-4 py-8 text-center text-muted-foreground">Loading...</div>
+        )}
+        {!isLoading && filtered.length === 0 && (
+          <div className="px-4 py-8 text-center text-muted-foreground">No leads found</div>
+        )}
+        {paged.map((lead) => (
+          <LeadCard key={lead.id} lead={lead} onOpen={openLeadDetail} />
+        ))}
+      </div>
+
+      <Panel className="hidden lg:block flex-1 min-h-0 overflow-auto" i={1}>
+          <table className="min-w-full w-max text-[13px]">
             <thead>
               <tr className="border-b border-border bg-muted sticky top-0 z-10">
                 <th className="px-4 py-3 w-[40px]">
@@ -530,7 +571,7 @@ export default function LeadsTable({ view }) {
               {!isLoading && filtered.length === 0 && (
                 <tr><td colSpan={columns.length + 1} className="px-4 py-8 text-center text-muted-foreground">No leads found</td></tr>
               )}
-              {filtered.map((lead, idx) => (
+              {paged.map((lead, idx) => (
                 <motion.tr
                   key={lead.id}
                   variants={riseIn}
@@ -597,6 +638,38 @@ export default function LeadsTable({ view }) {
             </tbody>
           </table>
       </Panel>
+
+      {filtered.length > 0 && (
+        <div className="shrink-0 flex items-center justify-between gap-3 mt-3 flex-wrap">
+          <div className="text-[12px] text-muted-foreground">
+            Showing {(safePage - 1) * pageSize + 1} to {Math.min(safePage * pageSize, filtered.length)} of {filtered.length}
+          </div>
+          <div className="flex items-center gap-2">
+            <select
+              value={pageSize}
+              onChange={(e) => setPageSize(Number(e.target.value))}
+              className="h-8 rounded-md border border-border bg-card text-foreground text-[12px] px-2"
+            >
+              {[20, 50, 100, 200].map(n => <option key={n} value={n}>{n} / page</option>)}
+            </select>
+            <button
+              onClick={() => setPage(p => Math.max(1, p - 1))}
+              disabled={safePage <= 1}
+              className="h-8 px-3 rounded-md border border-border bg-card text-foreground text-[12px] disabled:opacity-40 disabled:pointer-events-none hover:bg-accent transition-colors"
+            >
+              Prev
+            </button>
+            <span className="text-[12px] text-muted-foreground tabular-nums">Page {safePage} of {totalPages}</span>
+            <button
+              onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+              disabled={safePage >= totalPages}
+              className="h-8 px-3 rounded-md border border-border bg-card text-foreground text-[12px] disabled:opacity-40 disabled:pointer-events-none hover:bg-accent transition-colors"
+            >
+              Next
+            </button>
+          </div>
+        </div>
+      )}
 
       <AlertDialog open={bulkDeleteOpen} onOpenChange={setBulkDeleteOpen}>
         <AlertDialogContent className="bg-popover border-border">

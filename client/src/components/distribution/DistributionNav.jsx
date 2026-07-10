@@ -30,8 +30,10 @@ export default function DistributionNav() {
   const [campaignsOpen, setCampaignsOpen] = useState(onCampaigns);
   useEffect(() => { if (onCampaigns) setCampaignsOpen(true); }, [onCampaigns]);
 
+  const railItems = ITEMS.map(item => ({ label: item.label, to: item.path, active: location.pathname === item.path }));
+
   return (
-    <SubNavShell>
+    <SubNavShell items={railItems}>
       <div className="space-y-0.5">
         {ITEMS.map(item => {
           const Icon = item.icon;

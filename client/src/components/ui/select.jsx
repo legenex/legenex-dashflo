@@ -54,17 +54,23 @@ const SelectContent = React.forwardRef(({ className, children, position = "poppe
     <SelectPrimitive.Content
       ref={ref}
       className={cn(
+        // Desktop (lg+): standard popover positioned by Radix.
         "relative z-50 max-h-96 min-w-[8rem] overflow-hidden rounded-md border bg-popover text-popover-foreground shadow-md data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2",
         position === "popper" &&
-          "data-[side=bottom]:translate-y-1 data-[side=left]:-translate-x-1 data-[side=right]:translate-x-1 data-[side=top]:-translate-y-1",
+          "lg:data-[side=bottom]:translate-y-1 lg:data-[side=left]:-translate-x-1 lg:data-[side=right]:translate-x-1 lg:data-[side=top]:-translate-y-1",
+        // Mobile: pin to the bottom edge as a full-width sheet, cap at 70vh.
+        "max-lg:!fixed max-lg:!inset-x-0 max-lg:!bottom-0 max-lg:!top-auto max-lg:!left-0 max-lg:!translate-x-0 max-lg:!translate-y-0 max-lg:!w-full max-lg:!min-w-0 max-lg:!max-w-none max-lg:max-h-[70vh] max-lg:rounded-t-2xl max-lg:rounded-b-none max-lg:border-t",
         className
       )}
       position={position}
       {...props}>
       <SelectScrollUpButton />
       <SelectPrimitive.Viewport
-        className={cn("p-1", position === "popper" &&
-          "h-[var(--radix-select-trigger-height)] w-full min-w-[var(--radix-select-trigger-width)]")}>
+        className={cn(
+          "p-1 max-lg:pb-[env(safe-area-inset-bottom)]",
+          position === "popper" &&
+            "lg:h-[var(--radix-select-trigger-height)] lg:w-full lg:min-w-[var(--radix-select-trigger-width)]"
+        )}>
         {children}
       </SelectPrimitive.Viewport>
       <SelectScrollDownButton />
@@ -86,6 +92,7 @@ const SelectItem = React.forwardRef(({ className, children, ...props }, ref) => 
     ref={ref}
     className={cn(
       "relative flex w-full cursor-default select-none items-center rounded-sm py-1.5 pl-2 pr-8 text-sm outline-none focus:bg-accent focus:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
+      "max-lg:min-h-[44px] max-lg:text-[15px]",
       className
     )}
     {...props}>

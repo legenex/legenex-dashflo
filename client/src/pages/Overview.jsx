@@ -15,6 +15,10 @@ import Reveal from '@/components/overview/Reveal';
 import PanelSectionHeader from '@/components/overview/PanelSectionHeader';
 import CountUpText from '@/components/overview/CountUpText';
 import AnimatedPanel from '@/components/overview/AnimatedPanel';
+import PipelineHealthStrip from '@/components/overview/PipelineHealthStrip';
+import LeadVolumeByStatus from '@/components/overview/LeadVolumeByStatus';
+import OverviewRejectionReasons from '@/components/overview/OverviewRejectionReasons';
+import SupplierLeaderboard from '@/components/overview/SupplierLeaderboard';
 import { Badge } from '@/components/ui/badge';
 import {
   Bar, Line, ComposedChart, XAxis, YAxis, Tooltip, Legend,
@@ -22,7 +26,7 @@ import {
 } from 'recharts';
 import {
   DollarSign, TrendingUp, Megaphone, Users, PieChart as PieIcon, Trophy, ShieldAlert, ArrowUpRight,
-  CheckCircle2, AlertTriangle, Activity,
+  CheckCircle2, AlertTriangle, Activity, GitBranch, BarChart3, ListFilter, Award,
 } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { resolvePeriod, PERIOD_LABELS } from '@/lib/periodRange';
@@ -46,7 +50,7 @@ const RISK_LABEL = { Overdue: 'Short Paid', Outstanding: 'No Payment Source', Ov
 export default function Overview() {
   const qc = useQueryClient();
   const navigate = useNavigate();
-  const [period, setPeriod] = useState('last60');
+  const [period, setPeriod] = useState('this_month');
   const [custom, setCustom] = useState({ from: '', to: '' });
   const [compare, setCompare] = useState(false);
 
@@ -94,6 +98,13 @@ export default function Overview() {
   const daily = useMemo(() => dailyFinance({ wLeads: truth.wLeads, payments, adSpend }, win), [truth, payments, adSpend, win]);
   const campaigns = useMemo(() => topCampaigns(truth.wLeads), [truth]);
   const risk = useMemo(() => buyerRisk(truth.reconRows), [truth]);
+
+  // Period-filtered leads for the lead-side widgets. Respects the same window
+  // that drives the KPI cards; filters on created_date.
+  const periodLeads = useMemo(
+    () => leads.filter(l => l.created_date && new Date(l.created_date) >= win.start && new Date(l.created_date) <= win.end),
+    [leads, win]
+  );
 
   // Compare vs prior window of equal length.
   const priorTruth = useMemo(() => {
@@ -328,6 +339,45 @@ export default function Overview() {
         ))}
       </motion.div>
 
+      {/* Lead-side widgets */}
+      <Reveal delay={0.05} className="mt-6 block">
+        <AnimatedPanel duration={6.2}>
+          <div className="overflow-hidden">
+            <PanelSectionHeader icon={GitBranch} title="Pipeline Health" meta={PERIOD_LABELS[period]} />
+            <PipelineHealthStrip leads={periodLeads} />
+          </div>
+        </AnimatedPanel>
+      </Reveal>
+
+      <Reveal delay={0.05} className="mt-4 block">
+        <AnimatedPanel duration={6.5}>
+          <div className="overflow-hidden">
+            <PanelSectionHeader icon={BarChart3} title="Lead Volume by Status" meta={PERIOD_LABELS[period]} />
+            <LeadVolumeByStatus leads={periodLeads} />
+          </div>
+        </AnimatedPanel>
+      </Reveal>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-4">
+        <Reveal delay={0.05}>
+          <AnimatedPanel duration={6.2}>
+            <div className="overflow-hidden">
+              <PanelSectionHeader icon={ListFilter} title="Top Rejection Reasons" meta={PERIOD_LABELS[period]} />
+              <OverviewRejectionReasons leads={periodLeads} />
+            </div>
+          </AnimatedPanel>
+        </Reveal>
+
+        <Reveal delay={0.1}>
+          <AnimatedPanel duration={5.8}>
+            <div className="overflow-hidden">
+              <PanelSectionHeader icon={Award} title="Supplier Leaderboard" meta={PERIOD_LABELS[period]} />
+              <SupplierLeaderboard leads={periodLeads} />
+            </div>
+          </AnimatedPanel>
+        </Reveal>
+      </div>
+
       {/* Daily finance chart */}
       <Reveal delay={0.05} className="mt-6 block">
         <AnimatedPanel duration={6.5}>
@@ -373,7 +423,7 @@ export default function Overview() {
             <div className="border border-[#3DD68C]/40 bg-[#3DD68C]/10 px-5 py-4 flex items-center gap-3">
               <CheckCircle2 className="w-5 h-5 status-sold shrink-0" />
               <div className="flex-1 min-w-0">
-                <div className="text-[13px] font-semibold text-foreground">Everything reconciles — no open variances.</div>
+                <div className="text-[13px] font-semibold text-foreground">Everything reconciles, no open variances.</div>
                 <div className="text-[11px] text-muted-foreground mt-0.5">The bigger risk is not variance. It is missing or stale data ingestion.</div>
               </div>
               <span className="text-[10px] font-semibold px-2.5 py-1 rounded-md status-sold-bg status-sold shrink-0">Clean</span>

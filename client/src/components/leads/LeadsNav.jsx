@@ -50,8 +50,10 @@ export default function LeadsNav() {
     return leads.filter(l => l.final_status === 'Queued' && l.created_date && differenceInHours(now, new Date(l.created_date)) >= 5).length;
   }, [leads]);
 
+  const railItems = ITEMS.map(item => ({ label: item.label, to: item.path, active: location.pathname === item.path }));
+
   return (
-    <SubNavShell>
+    <SubNavShell items={railItems}>
       <div className="flex flex-col h-full">
         <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider px-2 mb-1.5">Leads</div>
         <div className="space-y-0.5">

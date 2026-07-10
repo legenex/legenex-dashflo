@@ -43,7 +43,7 @@ export default function DataBotWidget() {
   };
 
   return (
-    <div className="fixed bottom-5 right-5 z-[60]">
+    <div className="fixed bottom-[calc(72px+env(safe-area-inset-bottom))] right-5 lg:bottom-5 z-[60]">
       {open && (
         <div className="mb-3 w-[380px] max-w-[calc(100vw-2.5rem)] h-[520px] max-h-[calc(100vh-6rem)] bg-popover border border-border rounded-[16px] shadow-2xl flex flex-col overflow-hidden">
           <div className="flex items-center justify-between px-4 py-3 border-b border-border bg-card">

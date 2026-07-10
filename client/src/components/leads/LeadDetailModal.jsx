@@ -34,6 +34,12 @@ export default function LeadDetailModal({ lead, open, onClose, initialTab = 'sum
   let lbResp = {};
   try { lbResp = JSON.parse(lead.leadbyte_response || '{}'); } catch {}
 
+  // Imported custom fields live in mapped_fields as a JSON string.
+  let mappedFields = {};
+  try { mappedFields = JSON.parse(lead.mapped_fields || '{}') || {}; } catch {}
+  const toTitleCase = (k) => String(k).replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+  const mappedEntries = Object.entries(mappedFields).filter(([, v]) => v != null && String(v).trim() !== '');
+
   const handleCopyPayload = () => {
     navigator.clipboard.writeText(lead.raw_payload || '{}');
     toast.success('Payload copied');
@@ -137,6 +143,19 @@ export default function LeadDetailModal({ lead, open, onClose, initialTab = 'sum
                     <div className="text-[13px] text-foreground font-medium mt-0.5 font-mono">{val || '-'}</div>
                   </div>
                 ))}
+              </div>
+            )}
+            {!editing && mappedEntries.length > 0 && (
+              <div className="mt-4 pt-4 border-t border-border">
+                <div className="text-[11px] text-muted-foreground uppercase tracking-wider mb-3">Lead Fields</div>
+                <div className="grid grid-cols-2 gap-3">
+                  {mappedEntries.map(([key, val]) => (
+                    <div key={key}>
+                      <div className="text-[11px] text-muted-foreground uppercase tracking-wider">{toTitleCase(key)}</div>
+                      <div className="text-[13px] text-foreground font-medium mt-0.5 font-mono">{String(val) || '-'}</div>
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
             <div className="mt-4 pt-4 border-t border-border">

@@ -18,6 +18,39 @@
       ],
       "description": "Supplier type used for ApiConnector filter matching"
     },
+    "status": {
+      "type": "string",
+      "enum": [
+        "new",
+        "active",
+        "paused",
+        "terminated"
+      ],
+      "default": "new",
+      "description": "Supplier lifecycle status"
+    },
+    "is_call_source": {
+      "type": "boolean",
+      "default": false,
+      "description": "True when this supplier delivers inbound calls rather than form leads"
+    },
+    "notify_email": {
+      "type": "string",
+      "description": "Email address for supplier notifications. Nullable."
+    },
+    "notify_whatsapp": {
+      "type": "string",
+      "description": "WhatsApp number for supplier notifications. Nullable."
+    },
+    "notify_slack_channel": {
+      "type": "string",
+      "description": "Slack channel for supplier notifications. Nullable."
+    },
+    "notify_on_state_change": {
+      "type": "boolean",
+      "default": true,
+      "description": "When true, notify this supplier on state coverage changes"
+    },
     "vertical": {
       "type": "string",
       "description": "Optional vertical code this supplier is associated with"
@@ -25,13 +58,12 @@
     "payout_type": {
       "type": "string",
       "enum": [
-        "",
+        "None",
         "Flat CPL",
-        "Revenue %",
         "Profit %",
-        "Inbound Call"
+        "Revenue %"
       ],
-      "default": ""
+      "default": "None"
     },
     "payout_value": {
       "type": "number",

@@ -59,7 +59,9 @@ export default function LeadsShell({
           >
             <RefreshCw className="w-3.5 h-3.5" /> Refresh
           </button>
-          <ColumnManager config={columnConfig} availableColumns={availableColumns} onChange={onColumnChange} />
+          <div className="hidden lg:block">
+            <ColumnManager config={columnConfig} availableColumns={availableColumns} onChange={onColumnChange} />
+          </div>
           <button
             onClick={onExport}
             className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-2.5 h-8 text-[12px] text-muted-foreground hover:text-foreground transition-colors"

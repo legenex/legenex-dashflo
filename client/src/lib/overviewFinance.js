@@ -1,7 +1,7 @@
 // Financial-truth aggregation for the main Overview dashboard.
 // Reuses reconcile() / workbench() from financeMetrics so numbers match the Finances section.
 import { reconcile, workbench, unmatched } from '@/lib/financeMetrics';
-import { leadField } from '@/lib/reportMetrics';
+import { leadField, leadEventInstant, leadEventDayKey } from '@/lib/reportMetrics';
 import { format, isWithinInterval, startOfDay, subDays } from 'date-fns';
 
 function num(v) { const n = Number(v); return isNaN(n) ? 0 : n; }
@@ -9,7 +9,10 @@ const inWin = (d, win) => d && isWithinInterval(new Date(d), { start: win.start,
 
 // The full financial picture for a period window.
 export function financialTruth({ leads, buyers, suppliers, invoices, payments, payouts, adSpend, txns }, win) {
-  const wLeads = leads.filter(l => inWin(l.created_date, win));
+  const wLeads = leads.filter(l => {
+    const t = leadEventInstant(l);
+    return t instanceof Date && !isNaN(t.getTime()) && t >= win.start && t <= win.end;
+  });
 
   const reconRows = reconcile({ leads: wLeads, buyers, suppliers, invoices, payments, payouts, adSpend });
   const wb = workbench(reconRows, invoices);
@@ -125,7 +128,7 @@ export function dailyFinance({ wLeads, payments, adSpend }, win) {
     const day = startOfDay(subDays(win.end, i));
     const next = subDays(win.end, i - 1);
     const dayStr = format(day, 'MMM dd');
-    const booked = wLeads.filter(l => { const d = new Date(l.created_date); return d >= day && d < next; }).reduce((a, l) => a + num(l.revenue), 0);
+    const booked = wLeads.filter(l => { const d = leadEventInstant(l); return d >= day && d < next; }).reduce((a, l) => a + num(l.revenue), 0);
     const verified = (payments || []).filter(p => { const d = p.paid_date ? new Date(p.paid_date) : null; return d && d >= day && d < next; }).reduce((a, p) => a + num(p.amount), 0);
     const spend = (adSpend || []).filter(a => { const d = a.date ? new Date(a.date) : null; return d && d >= day && d < next; }).reduce((a, r) => a + num(r.spend), 0);
     days.push({ date: dayStr, Booked: Math.round(booked), Verified: Math.round(verified), Spend: Math.round(spend) });

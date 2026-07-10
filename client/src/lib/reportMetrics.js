@@ -2,6 +2,9 @@
 // Reads Lead + AdSpend records and computes every metric surfaced on cards/widgets.
 // Pure functions, no fetching - callers pass in already-loaded records.
 
+import { fromZonedTime, formatInTimeZone } from 'date-fns-tz';
+import { APP_TZ } from '@/lib/periodRange';
+
 function num(v) { const n = Number(v); return isNaN(n) ? 0 : n; }
 
 export function money(v) {
@@ -32,14 +35,34 @@ export function leadField(lead, field) {
 
 const S = (l) => String(l.final_status || '');
 
+// The lead's real event time. mapped_fields.timestamp is a naive local string
+// like "2026-06-01 22:18:03" already in APP_TZ; interpret it as APP_TZ. If it
+// is missing, fall back to the the backend created_date (import time).
+export function leadEventInstant(lead) {
+  const ts = leadField(lead, 'timestamp');
+  if (typeof ts === 'string' && /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}/.test(ts.trim())) {
+    const d = fromZonedTime(ts.trim().replace(' ', 'T'), APP_TZ);
+    if (!isNaN(d.getTime())) return d;
+  }
+  const created = new Date(lead.created_date);
+  return isNaN(created.getTime()) ? null : created;
+}
+
+// The lead's APP_TZ calendar day as "yyyy-MM-dd", or null if it has no valid date.
+export function leadEventDayKey(lead) {
+  const d = leadEventInstant(lead);
+  if (!d || isNaN(d.getTime())) return null;
+  return formatInTimeZone(d, APP_TZ, 'yyyy-MM-dd');
+}
+
 // Apply a filter object { field: value } to a list of leads.
 export function applyFilters(leads, filters = {}) {
   const entries = Object.entries(filters).filter(([, v]) => v != null && v !== '' && v !== 'all');
   if (entries.length === 0) return leads;
   return leads.filter((l) =>
     entries.every(([field, value]) => {
-      if (field === 'date_from') return !l.created_date || new Date(l.created_date) >= new Date(value);
-      if (field === 'date_to') return !l.created_date || new Date(l.created_date) <= new Date(value + 'T23:59:59');
+      if (field === 'date_from') return leadEventInstant(l) >= fromZonedTime(value + 'T00:00:00', APP_TZ);
+      if (field === 'date_to') return leadEventInstant(l) <= fromZonedTime(value + 'T23:59:59', APP_TZ);
       const lv = leadField(l, field);
       return String(lv ?? '').toLowerCase() === String(value).toLowerCase();
     })
@@ -136,12 +159,12 @@ export function dailySeries(leads, adSpendRows = [], days = 14) {
   const today = new Date();
   for (let i = days - 1; i >= 0; i--) {
     const d = new Date(today); d.setDate(today.getDate() - i);
-    const key = d.toISOString().slice(0, 10);
+    const key = formatInTimeZone(d, APP_TZ, 'yyyy-MM-dd');
     map[key] = { date: key, revenue: 0, cost: 0, spend: 0, leads: 0, sold: 0 };
   }
   for (const l of leads) {
-    const key = (l.created_date || '').slice(0, 10);
-    if (!map[key]) continue;
+    const key = leadEventDayKey(l);
+    if (!key || !map[key]) continue;
     map[key].revenue += num(l.revenue);
     map[key].cost += num(l.cost);
     map[key].leads += 1;

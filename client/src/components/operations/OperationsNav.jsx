@@ -16,8 +16,10 @@ const ITEMS = [
 export default function OperationsNav() {
   const location = useLocation();
 
+  const railItems = ITEMS.map(item => ({ label: item.label, to: item.path, active: location.pathname === item.path }));
+
   return (
-    <SubNavShell>
+    <SubNavShell items={railItems}>
       <div className="text-[9.5px] font-semibold tracking-[0.14em] uppercase text-muted-foreground/70 px-3 pb-2">Operations</div>
       <div className="space-y-0.5">
         {ITEMS.map(item => {

@@ -4,9 +4,10 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { SearchableSelect } from '@/components/ui/searchable-select';
 import { Panel } from '@/components/settings/settingsUi';
+import MobileFilterSheet from '@/components/shared/MobileFilterSheet';
 import { Filter, Plus, X } from 'lucide-react';
-import { format } from 'date-fns';
-import { STANDARD_PERIODS, resolvePeriod } from '@/lib/periodRange';
+import { formatInTimeZone } from 'date-fns-tz';
+import { STANDARD_PERIODS, resolvePeriod, APP_TZ } from '@/lib/periodRange';
 
 const OPTIONAL_FILTERS = [
   { key: 'utm_source', label: 'UTM Source' },
@@ -14,7 +15,7 @@ const OPTIONAL_FILTERS = [
   { key: 'state', label: 'State' },
 ];
 
-const fmt = (d) => format(d, 'yyyy-MM-dd');
+const fmt = (d) => formatInTimeZone(d, APP_TZ, 'yyyy-MM-dd');
 
 // Report-level filter bar. Matches the Leads filter bar styling.
 // value = { date_from, date_to, campaign, vertical, supplier_name, buyer_id, brand, ...optional }
@@ -55,43 +56,49 @@ export default function ReportFilterBar({ value, onChange, options }) {
 
   const opt = (all, items) => [{ value: '', label: all }, ...items];
 
+  // Count active filters for the mobile Filters badge.
+  const activeCount = extra.length + (value.campaign ? 1 : 0) + (value.vertical ? 1 : 0) +
+    (value.supplier_name ? 1 : 0) + (value.buyer_id ? 1 : 0) + (value.brand ? 1 : 0);
+
   return (
     <div className="mb-5 space-y-3">
       <Panel className="p-3 flex items-center gap-3 flex-wrap" i={0}>
+        <MobileFilterSheet activeCount={activeCount} onClearAll={clearAll}>
         <SearchableSelect
           value={period}
           onValueChange={pickPeriod}
-          className="w-[150px] bg-card border-border"
+          className="w-full lg:w-[150px] bg-card border-border"
           options={STANDARD_PERIODS.map(p => ({ value: p.value, label: p.label }))}
         />
 
         {period === 'custom' && (
           <div className="flex items-center gap-2">
-            <Input type="date" value={value.date_from || ''} onChange={e => setDates(e.target.value, value.date_to)} className="bg-card border-border w-[140px]" />
+            <Input type="date" value={value.date_from || ''} onChange={e => setDates(e.target.value, value.date_to)} className="bg-card border-border w-full lg:w-[140px]" />
             <span className="text-muted-foreground text-xs">to</span>
-            <Input type="date" value={value.date_to || ''} onChange={e => setDates(value.date_from, e.target.value)} className="bg-card border-border w-[140px]" />
+            <Input type="date" value={value.date_to || ''} onChange={e => setDates(value.date_from, e.target.value)} className="bg-card border-border w-full lg:w-[140px]" />
           </div>
         )}
 
-        <SearchableSelect value={value.campaign || ''} onValueChange={v => set('campaign', v)} className="w-[150px] bg-card border-border" options={opt('Campaign: All', campaigns.map(c => ({ value: c.name, label: c.name })))} />
-        <SearchableSelect value={value.vertical || ''} onValueChange={v => set('vertical', v)} className="w-[140px] bg-card border-border" options={opt('Vertical: All', verticals.map(v => ({ value: v.code, label: v.name })))} />
-        <SearchableSelect value={value.supplier_name || ''} onValueChange={v => set('supplier_name', v)} className="w-[150px] bg-card border-border" options={opt('Supplier: All', suppliers.map(s => ({ value: s.name, label: s.name })))} />
-        <SearchableSelect value={value.buyer_id || ''} onValueChange={v => set('buyer_id', v)} className="w-[150px] bg-card border-border" options={opt('Buyer: All', buyers.map(b => ({ value: b.company_name, label: b.company_name })))} />
-        <SearchableSelect value={value.brand || ''} onValueChange={v => set('brand', v)} className="w-[140px] bg-card border-border" options={opt('Brand: All', brands.map(b => ({ value: b.brand_code, label: b.brand_name })))} />
+        <SearchableSelect value={value.campaign || ''} onValueChange={v => set('campaign', v)} className="w-full lg:w-[150px] bg-card border-border" options={opt('Campaign: All', campaigns.map(c => ({ value: c.name, label: c.name })))} />
+        <SearchableSelect value={value.vertical || ''} onValueChange={v => set('vertical', v)} className="w-full lg:w-[140px] bg-card border-border" options={opt('Vertical: All', verticals.map(v => ({ value: v.code, label: v.name })))} />
+        <SearchableSelect value={value.supplier_name || ''} onValueChange={v => set('supplier_name', v)} className="w-full lg:w-[150px] bg-card border-border" options={opt('Supplier: All', suppliers.map(s => ({ value: s.name, label: s.name })))} />
+        <SearchableSelect value={value.buyer_id || ''} onValueChange={v => set('buyer_id', v)} className="w-full lg:w-[150px] bg-card border-border" options={opt('Buyer: All', buyers.map(b => ({ value: b.company_name, label: b.company_name })))} />
+        <SearchableSelect value={value.brand || ''} onValueChange={v => set('brand', v)} className="w-full lg:w-[140px] bg-card border-border" options={opt('Brand: All', brands.map(b => ({ value: b.brand_code, label: b.brand_name })))} />
 
         <Button
           variant={showFilters || extra.length > 0 ? 'default' : 'outline'}
           size="sm"
           onClick={() => setShowFilters(!showFilters)}
-          className="gap-1.5"
+          className="gap-1.5 w-full lg:w-auto"
         >
           <Filter className="w-3.5 h-3.5" /> Filters
           {extra.length > 0 && <Badge variant="secondary" className="ml-1">{extra.length}</Badge>}
         </Button>
 
-        <Button variant="ghost" size="sm" onClick={clearAll} className="gap-1 text-muted-foreground ml-auto">
+        <Button variant="ghost" size="sm" onClick={clearAll} className="gap-1 text-muted-foreground ml-auto hidden lg:flex">
           <X className="w-3.5 h-3.5" /> Clear
         </Button>
+        </MobileFilterSheet>
       </Panel>
 
       {showFilters && (

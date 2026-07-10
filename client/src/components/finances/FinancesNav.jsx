@@ -28,8 +28,12 @@ export default function FinancesNav() {
   });
   const mercuryConnected = !!mercuryCfg;
 
+  const railItems = ITEMS
+    .filter(item => !item.perm || can(item.perm))
+    .map(item => ({ label: item.label, to: `/finances?tab=${item.tab}`, active: active === item.tab }));
+
   return (
-    <SubNavShell>
+    <SubNavShell items={railItems}>
       <div className="text-[9.5px] font-semibold tracking-[0.14em] uppercase text-muted-foreground/70 px-3 pb-2">Finances</div>
       <div className="space-y-0.5">
         {ITEMS.filter(item => !item.perm || can(item.perm)).map(item => {

@@ -99,6 +99,35 @@
   }
   body {
     @apply bg-background text-foreground font-body;
+    overscroll-behavior: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+  /* Main scrollable container: keep scroll chaining from bouncing the webview */
+  .app-scroll {
+    overscroll-behavior: contain;
+  }
+  /* Respect device notches below lg only. Desktop padding is untouched. */
+  @media (max-width: 1023px) {
+    .app-scroll {
+      padding-bottom: calc(60px + env(safe-area-inset-bottom) + 1rem);
+      padding-left: max(1rem, env(safe-area-inset-left));
+      padding-right: max(1rem, env(safe-area-inset-right));
+    }
+  }
+  /* Prevent accidental text selection on interactive controls */
+  button,
+  [role="tab"],
+  [data-radix-collection-item] {
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  /* Rescue: operators must be able to copy ids, emails, phones, endpoint URLs */
+  td, code, pre, .font-mono {
+    user-select: text;
+    -webkit-user-select: text;
   }
   /* Faint 1px line grid across the app canvas, behind all content */
   .dark body::before {
@@ -156,6 +185,16 @@
 
 /* Neutral grey tag for operation / meta tags (Default, conditions, etc.) */
 .tag-neutral { color: #8B95A8; background-color: rgba(139, 149, 168, 0.12); }
+
+/* Utility: hide scrollbar while keeping scroll (used by the mobile sub-nav rail and tab strips) */
+@layer utilities {
+  .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+  .no-scrollbar::-webkit-scrollbar { display: none; }
+  /* Minimum comfortable touch target, mobile only */
+  @media (max-width: 1023px) {
+    .tap-target { min-height: 44px; min-width: 44px; }
+  }
+}
 
 /* Scrollbar styling — light theme: thin, soft red */
 ::-webkit-scrollbar { width: 4px; height: 4px; }

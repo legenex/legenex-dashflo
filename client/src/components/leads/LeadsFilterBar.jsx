@@ -5,6 +5,7 @@ import { Badge } from '@/components/ui/badge';
 import { SearchableSelect } from '@/components/ui/searchable-select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { Panel } from '@/components/settings/settingsUi';
+import MobileFilterSheet from '@/components/shared/MobileFilterSheet';
 import { Search, Filter, Plus, X, Save, Trash2 } from 'lucide-react';
 
 const DATE_RANGES = [
@@ -98,104 +99,163 @@ export default function LeadsFilterBar({
 
   const hasActiveFilters = search || dateRange !== 'all' || customFilters.length > 0 || statusFilter || supplierFilter || sourceFilter;
 
+  // Count active filters for the mobile Filters badge (search is separate).
+  const activeCount = (dateRange !== 'all' ? 1 : 0) + customFilters.length +
+    (statusFilter ? 1 : 0) + (supplierFilter ? 1 : 0) + (sourceFilter ? 1 : 0);
+
+  // Status / Suppliers / Sources / Time / Filters / Save controls. Rendered
+  // inline on desktop and inside the mobile sheet. Identical markup either way.
+  const controls = (
+    <>
+      <SearchableSelect
+        value={statusFilter || ''}
+        onValueChange={setStatusFilter}
+        className="w-full lg:w-[140px] bg-card border-border"
+        options={statusOptions}
+      />
+      <SearchableSelect
+        value={supplierFilter || ''}
+        onValueChange={setSupplierFilter}
+        className="w-full lg:w-[160px] bg-card border-border"
+        options={supplierOptions}
+      />
+      <SearchableSelect
+        value={sourceFilter || ''}
+        onValueChange={setSourceFilter}
+        className="w-full lg:w-[150px] bg-card border-border"
+        options={sourceOptions}
+      />
+
+      <SearchableSelect
+        value={dateRange}
+        onValueChange={setDateRange}
+        className="w-full lg:w-[140px] bg-card border-border"
+        options={DATE_RANGES}
+      />
+
+      {dateRange === 'custom' && (
+        <div className="flex items-center gap-2">
+          <Input
+            type="date"
+            value={customDate.start}
+            onChange={e => setCustomDate(p => ({ ...p, start: e.target.value }))}
+            className="bg-card border-border w-full lg:w-[140px]"
+          />
+          <span className="text-muted-foreground text-xs">→</span>
+          <Input
+            type="date"
+            value={customDate.end}
+            onChange={e => setCustomDate(p => ({ ...p, end: e.target.value }))}
+            className="bg-card border-border w-full lg:w-[140px]"
+          />
+        </div>
+      )}
+
+      {savedSets.length > 0 && (
+        <div className="flex items-center gap-1">
+          <SearchableSelect
+            value={activeSetId}
+            onValueChange={handleApplySet}
+            className="w-full lg:w-[160px] bg-card border-border"
+            options={[{ value: '', label: 'Saved Filters' }, ...savedSets.map(s => ({ value: s.id, label: s.name }))]}
+          />
+          {activeSetId && (
+            <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => handleDeleteSet(activeSetId)}>
+              <Trash2 className="w-3.5 h-3.5" />
+            </Button>
+          )}
+        </div>
+      )}
+
+      <Button
+        variant={showFilters || customFilters.length > 0 ? 'default' : 'outline'}
+        size="sm"
+        onClick={() => setShowFilters(!showFilters)}
+        className="gap-1.5 w-full lg:w-auto"
+      >
+        <Filter className="w-3.5 h-3.5" /> Filters
+        {customFilters.length > 0 && <Badge variant="secondary" className="ml-1">{customFilters.length}</Badge>}
+      </Button>
+
+      <Button variant="outline" size="sm" onClick={() => setShowSaveDialog(true)} className="gap-1.5 w-full lg:w-auto">
+        <Save className="w-3.5 h-3.5" /> Save
+      </Button>
+
+      {hasActiveFilters && (
+        <Button variant="ghost" size="sm" onClick={clearAll} className="gap-1 text-muted-foreground hidden lg:flex">
+          <X className="w-3.5 h-3.5" /> Clear
+        </Button>
+      )}
+
+      {showFilters && (
+        <div className="bg-card border border-border rounded-[10px] p-4 space-y-2 w-full lg:hidden">
+          {customFilters.length === 0 && (
+            <div className="text-[13px] text-muted-foreground py-2">No custom filters. Click "Add Filter" to create one.</div>
+          )}
+          {customFilters.map((filter, i) => (
+            <div key={i} className="flex items-center gap-2">
+              <SearchableSelect
+                value={filter.field}
+                onValueChange={v => updateFilter(i, { field: v })}
+                className="flex-1 bg-background"
+                options={filterFields}
+                placeholder="Field"
+              />
+              <SearchableSelect
+                value={filter.operator}
+                onValueChange={v => updateFilter(i, { operator: v })}
+                className="w-[120px] bg-background"
+                options={OPERATORS}
+              />
+              {!NO_VALUE_OPERATORS.includes(filter.operator) && (
+                <Input
+                  value={filter.value}
+                  onChange={e => updateFilter(i, { value: e.target.value })}
+                  placeholder="Value"
+                  className="flex-1 bg-background"
+                />
+              )}
+              <Button size="icon" variant="ghost" className="text-destructive shrink-0" onClick={() => removeFilter(i)}>
+                <X className="w-3.5 h-3.5" />
+              </Button>
+            </div>
+          ))}
+          <Button variant="outline" size="sm" onClick={addFilter} className="gap-1.5">
+            <Plus className="w-3.5 h-3.5" /> Add Filter
+          </Button>
+        </div>
+      )}
+    </>
+  );
+
   return (
     <div className="mb-4 space-y-3">
       <Panel className="p-3 flex items-center gap-3 flex-wrap" i={0}>
-        <div className="relative flex-1 max-w-xs">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-          <Input
-            placeholder="Search name, mobile, email, supplier..."
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-            className="pl-9 bg-card border-border"
-          />
-        </div>
-
-        <SearchableSelect
-          value={statusFilter || ''}
-          onValueChange={setStatusFilter}
-          className="w-[140px] bg-card border-border"
-          options={statusOptions}
-        />
-        <SearchableSelect
-          value={supplierFilter || ''}
-          onValueChange={setSupplierFilter}
-          className="w-[160px] bg-card border-border"
-          options={supplierOptions}
-        />
-        <SearchableSelect
-          value={sourceFilter || ''}
-          onValueChange={setSourceFilter}
-          className="w-[150px] bg-card border-border"
-          options={sourceOptions}
-        />
-
-        <SearchableSelect
-          value={dateRange}
-          onValueChange={setDateRange}
-          className="w-[140px] bg-card border-border"
-          options={DATE_RANGES}
-        />
-
-        {dateRange === 'custom' && (
-          <div className="flex items-center gap-2">
-            <Input
-              type="date"
-              value={customDate.start}
-              onChange={e => setCustomDate(p => ({ ...p, start: e.target.value }))}
-              className="bg-card border-border w-[140px]"
-            />
-            <span className="text-muted-foreground text-xs">→</span>
-            <Input
-              type="date"
-              value={customDate.end}
-              onChange={e => setCustomDate(p => ({ ...p, end: e.target.value }))}
-              className="bg-card border-border w-[140px]"
-            />
-          </div>
-        )}
-
-        {savedSets.length > 0 && (
-          <div className="flex items-center gap-1">
-            <SearchableSelect
-              value={activeSetId}
-              onValueChange={handleApplySet}
-              className="w-[160px] bg-card border-border"
-              options={[{ value: '', label: 'Saved Filters' }, ...savedSets.map(s => ({ value: s.id, label: s.name }))]}
-            />
-            {activeSetId && (
-              <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => handleDeleteSet(activeSetId)}>
-                <Trash2 className="w-3.5 h-3.5" />
-              </Button>
-            )}
-          </div>
-        )}
-
-        <Button
-          variant={showFilters || customFilters.length > 0 ? 'default' : 'outline'}
-          size="sm"
-          onClick={() => setShowFilters(!showFilters)}
-          className="gap-1.5"
+        <MobileFilterSheet
+          search={search}
+          onSearchChange={setSearch}
+          searchPlaceholder="Search name, mobile, email, supplier..."
+          activeCount={activeCount}
+          onClearAll={clearAll}
         >
-          <Filter className="w-3.5 h-3.5" /> Filters
-          {customFilters.length > 0 && <Badge variant="secondary" className="ml-1">{customFilters.length}</Badge>}
-        </Button>
+          <div className="relative flex-1 max-w-xs hidden lg:block">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+            <Input
+              placeholder="Search name, mobile, email, supplier..."
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              className="pl-9 bg-card border-border"
+            />
+          </div>
+          {controls}
+        </MobileFilterSheet>
 
-        <Button variant="outline" size="sm" onClick={() => setShowSaveDialog(true)} className="gap-1.5">
-          <Save className="w-3.5 h-3.5" /> Save
-        </Button>
-
-        {hasActiveFilters && (
-          <Button variant="ghost" size="sm" onClick={clearAll} className="gap-1 text-muted-foreground">
-            <X className="w-3.5 h-3.5" /> Clear
-          </Button>
-        )}
-
-        <div className="text-[12px] text-muted-foreground ml-auto">{resultCount} leads</div>
+        <div className="text-[12px] text-muted-foreground ml-auto hidden lg:block">{resultCount} leads</div>
       </Panel>
 
+      {/* Desktop custom-filters block. On mobile these controls live in the sheet above. */}
       {showFilters && (
-        <div className="bg-card border border-border rounded-[10px] p-4 space-y-2">
+        <div className="hidden lg:block bg-card border border-border rounded-[10px] p-4 space-y-2">
           {customFilters.length === 0 && (
             <div className="text-[13px] text-muted-foreground py-2">No custom filters. Click "Add Filter" to create one.</div>
           )}

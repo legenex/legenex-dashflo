@@ -39,6 +39,7 @@ export const PERMISSION_GROUPS = [
       { key: 'finances', label: 'Finances' },
       { key: 'bank_feed', label: 'Bank Feed' },
       { key: 'operations', label: 'Operations' },
+      { key: 'ad_manager', label: 'Ad Manager' },
       { key: 'tools', label: 'Tools' },
     ],
   },
@@ -69,7 +70,7 @@ export const ALL_KEYS = PERMISSION_GROUPS.flatMap(g => g.items.map(i => i.key));
 // Keys that Supplier/Buyer roles must NEVER have (enforced hard).
 const DIST_KEYS = PERMISSION_GROUPS.find(g => g.group === 'Lead Distribution').items.map(i => i.key);
 const FINANCE_KEYS = ['finances', 'bank_feed'];
-const OPERATIONS_KEYS = ['operations'];
+const OPERATIONS_KEYS = ['operations', 'ad_manager'];
 export const RESTRICTED_FOR_PARTNERS = [...DIST_KEYS, ...FINANCE_KEYS, ...OPERATIONS_KEYS];
 
 const all = () => Object.fromEntries(ALL_KEYS.map(k => [k, true]));
@@ -105,6 +106,10 @@ export const PATH_KEYS = {
   '/operations/active-states': 'operations',
   '/operations/billing-reports': 'operations',
   '/operations/buyer-onboarding': 'operations',
+  '/ad-manager': 'ad_manager',
+  '/ad-manager/reports': 'ad_manager',
+  '/ad-manager/creative-analyzer': 'ad_manager',
+  '/ad-manager/builder': 'ad_manager',
   '/tools': 'tools',
   '/notifications': 'tools',
   '/calculated-fields': 'tools',

@@ -96,6 +96,20 @@ export default function LeadEditForm({ lead, onSaved, onCancel }) {
         }
       }
       update.mapped_fields = JSON.stringify(mapped);
+
+      // Patch raw_payload so Resend replays edited values. Only inbound data is
+      // merged: the four contact keys plus every mapped field (utm_source, s1,
+      // sid, etc). Pipeline outputs are never written into the inbound payload.
+      let patchedPayload = {};
+      try { patchedPayload = JSON.parse(lead.raw_payload || '{}'); } catch { patchedPayload = {}; }
+      for (const k of ['first_name', 'last_name', 'mobile', 'email']) {
+        patchedPayload[k] = direct[k];
+      }
+      for (const [k, v] of Object.entries(mapped)) {
+        patchedPayload[k] = v;
+      }
+      update.raw_payload = JSON.stringify(patchedPayload);
+
       await api.entities.Lead.update(lead.id, update);
       toast.success('Lead updated');
       qc.invalidateQueries({ queryKey: ['leads'] });

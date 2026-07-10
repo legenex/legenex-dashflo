@@ -17,8 +17,10 @@ export default function ToolsNav() {
   const location = useLocation();
   const jobsQueued = 0;
 
+  const railItems = ITEMS.map(item => ({ label: item.label, to: item.path, active: location.pathname === item.path }));
+
   return (
-    <SubNavShell>
+    <SubNavShell items={railItems}>
       <div className="flex flex-col h-full">
         <div className="px-3 pt-1 pb-2 text-[10px] font-semibold uppercase tracking-[0.13em] text-muted-foreground/60">
           Tools

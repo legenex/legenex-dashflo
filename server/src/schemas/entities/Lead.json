@@ -137,6 +137,10 @@
       "type": "string",
       "description": "JSON list of {connector, trigger, http_status, success, error, timestamp} for LeadByteConnector deliveries"
     },
+    "delivery_error": {
+      "type": "string",
+      "description": "Summary of any delivery or connector destinations that failed to fire for this lead. Populated from delivery_log. Does not affect final_status."
+    },
     "error_stage": {
       "type": "string",
       "description": "Stage where error occurred if any"

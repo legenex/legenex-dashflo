@@ -1,0 +1,113 @@
+{
+  "name": "SupplierSource",
+  "type": "object",
+  "properties": {
+    "supplier_id": {
+      "type": "string",
+      "description": "Reference to a Supplier record"
+    },
+    "source_code": {
+      "type": "string",
+      "description": "Distinct economic feed code for this supplier, for example INBNDS-SURVEY or INBNDS-PVL"
+    },
+    "utm_source": {
+      "type": "string",
+      "description": "How this source identifies itself on the inbound lead. Nullable."
+    },
+    "pricing_model": {
+      "type": "string",
+      "enum": [
+        "rev_share",
+        "flat_cpl",
+        "tiered"
+      ],
+      "description": "Pricing model for this source"
+    },
+    "rev_share_pct": {
+      "type": "number",
+      "description": "Revenue share percentage. Used when pricing_model is rev_share. Nullable."
+    },
+    "flat_cpl": {
+      "type": "number",
+      "description": "Flat cost per lead. Used when pricing_model is flat_cpl. Nullable."
+    },
+    "tier_rules": {
+      "type": "array",
+      "description": "Used when pricing_model is tiered. Each element has a conditions array using the exact same {field, operator, value} condition shape and operators as the LeadByteConnector field conditions (equals, not_equals, contains, not_contains, starts_with, ends_with, is_empty, is_not_empty, gt, lt), plus a numeric price. Rules are evaluated top down and the first match wins. Nullable.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "conditions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "field": {
+                  "type": "string"
+                },
+                "operator": {
+                  "type": "string",
+                  "enum": [
+                    "equals",
+                    "not_equals",
+                    "contains",
+                    "not_contains",
+                    "starts_with",
+                    "ends_with",
+                    "is_empty",
+                    "is_not_empty",
+                    "gt",
+                    "lt"
+                  ]
+                },
+                "value": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "price": {
+            "type": "number"
+          }
+        }
+      }
+    },
+    "active": {
+      "type": "boolean",
+      "default": true
+    }
+  },
+  "required": [
+    "supplier_id",
+    "source_code",
+    "pricing_model"
+  ],
+  "unique": [
+    [
+      "supplier_id",
+      "source_code"
+    ]
+  ],
+  "rls": {
+    "create": {
+      "user_condition": {
+        "role": "admin"
+      }
+    },
+    "read": {
+      "user_condition": {
+        "role": "admin"
+      }
+    },
+    "update": {
+      "user_condition": {
+        "role": "admin"
+      }
+    },
+    "delete": {
+      "user_condition": {
+        "role": "admin"
+      }
+    }
+  }
+}

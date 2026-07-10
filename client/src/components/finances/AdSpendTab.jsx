@@ -29,7 +29,9 @@ export default function AdSpendTab({ win }) {
   const { data: mappings = [] } = useQuery({ queryKey: ['adspend-mappings'], queryFn: () => api.entities.AdSpendMapping.list() });
 
   const inWin = (d) => !win || (d && isWithinInterval(new Date(d), { start: win.start, end: win.end }));
-  const adSpend = useMemo(() => allSpend.filter(r => inWin(r.date)), [allSpend, win]);
+  // Only account-level rows (or legacy rows with no level) feed this tab, so the
+  // new campaign and ad rows never triple count spend in totals, charts or tables.
+  const adSpend = useMemo(() => allSpend.filter(r => (!r.level || r.level === 'account') && inWin(r.date)), [allSpend, win]);
   const leads = useMemo(() => allLeads.filter(l => inWin(l.created_date)), [allLeads, win]);
 
   const totalSpend = adSpend.reduce((a, r) => a + n(r.spend), 0);

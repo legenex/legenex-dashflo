@@ -26,6 +26,20 @@
       "default": "",
       "description": "Type of buyer / destination"
     },
+    "client_type": {
+      "type": "string",
+      "enum": [
+        "Law Firm",
+        "Aggregator",
+        "Reseller",
+        "Network"
+      ],
+      "description": "Client classification. Nullable, no default. Null means unclassified. Drives the buyer_code prefix (Law Firm LF, Aggregator AG, Reseller RS, Network NW)."
+    },
+    "buyer_code": {
+      "type": "string",
+      "description": "Unique buyer code: client_type prefix plus an incrementing number allocated from the Counter entity, one counter per prefix (e.g. LF1, AG1, NW2). Only allocated when client_type is set."
+    },
     "vertical": {
       "type": "string",
       "description": "Primary vertical code"
@@ -43,6 +57,31 @@
       ],
       "default": "lead_count",
       "description": "Lead Count mode (post-pay invoicing) vs Wallet mode (pre-paid balance)"
+    },
+    "billing_type": {
+      "type": "string",
+      "enum": [
+        "prepay",
+        "invoiced_daily",
+        "invoiced_weekly",
+        "invoiced_monthly"
+      ],
+      "default": "prepay",
+      "description": "Operator billing arrangement for this buyer"
+    },
+    "verify_required": {
+      "type": "boolean",
+      "default": false,
+      "description": "Whether verification is required for this buyer"
+    },
+    "ipl_fee_pct": {
+      "type": "number",
+      "default": 1.0,
+      "description": "Multiplier applied to CPL to produce IPL. 0.875 means the buyer is billed 87.5 percent of CPL."
+    },
+    "credit_limit": {
+      "type": "number",
+      "description": "Optional credit limit for this buyer. Nullable."
     },
     "billing_model": {
       "type": "string",
@@ -74,7 +113,25 @@
       "description": "Last 4 digits of the connected card, if any"
     },
     "stripe_customer_id": {
-      "type": "string"
+      "type": "string",
+      "description": "Stripe customer id. Nullable."
+    },
+    "xero_contact_id": {
+      "type": "string",
+      "description": "Xero contact id. Nullable."
+    },
+    "leadbyte_bid": {
+      "type": "string",
+      "description": "LeadByte buyer id. Nullable. Defaults to the buyer_code value when a code is allocated."
+    },
+    "payment_link_url": {
+      "type": "string",
+      "description": "Payment link URL for this buyer. Nullable."
+    },
+    "onboarded_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When the buyer completed onboarding. Nullable."
     },
     "notes": {
       "type": "string"
@@ -100,16 +157,18 @@
       "type": "string",
       "enum": [
         "draft",
+        "launching",
         "active",
         "paused",
-        "inactive"
+        "terminated"
       ],
-      "default": "active",
-      "description": "Buyer lifecycle status. Kept in sync with the active boolean at the data layer: status active derives active true, while draft, paused, or inactive derive active false. The live pipeline reads the active boolean."
+      "default": "draft",
+      "description": "Buyer lifecycle status. Kept in sync with the active boolean at the data layer: status active derives active true, while draft, launching, paused, or terminated derive active false. The live pipeline reads the active boolean."
     },
     "active": {
       "type": "boolean",
-      "default": true
+      "default": false,
+      "description": "Derived from status: true only when status equals active, false for draft, launching, paused, or terminated. The live pipeline reads this boolean. Must be recomputed on every write."
     }
   },
   "required": [

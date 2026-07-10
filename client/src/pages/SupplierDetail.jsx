@@ -7,7 +7,7 @@ import { Switch } from '@/components/ui/switch';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { ArrowLeft, Copy, Eye, EyeOff, ExternalLink } from 'lucide-react';
+import { ArrowLeft, ChevronLeft, Copy, Eye, EyeOff, ExternalLink } from 'lucide-react';
 import { toast } from 'sonner';
 import { supplierMetrics, money, pct } from '@/lib/partnerMetrics';
 import PostingSpecs from '@/components/suppliers/PostingSpecs';
@@ -92,11 +92,27 @@ export default function SupplierDetail() {
 
   return (
     <div>
-      <button onClick={() => navigate('/campaigns?tab=suppliers')} className="flex items-center gap-1.5 text-[13px] text-muted-foreground hover:text-foreground mb-4">
+      {/* Mobile back row */}
+      <div className="lg:hidden flex items-center gap-2 mb-4">
+        <button
+          onClick={() => navigate(-1)}
+          aria-label="Go back"
+          className="tap-target flex items-center justify-center rounded-lg bg-card border border-border w-[38px] h-[38px]"
+        >
+          <ChevronLeft className="w-5 h-5" />
+        </button>
+        <h1 className="text-[17px] font-bold text-foreground tracking-tight truncate">{supplier.name}</h1>
+      </div>
+      <div className="lg:hidden flex items-center gap-2 mb-6">
+        <Badge variant="outline" className={`text-[10px] ${supplier.active ? 'status-sold bg-status-sold' : 'text-muted-foreground'}`}>{supplier.active ? 'Active' : 'Inactive'}</Badge>
+        {supplier.portal_enabled && <Badge variant="outline" className="text-[10px] status-qualified bg-status-qualified">Portal On</Badge>}
+      </div>
+
+      <button onClick={() => navigate('/campaigns?tab=suppliers')} className="hidden lg:flex items-center gap-1.5 text-[13px] text-muted-foreground hover:text-foreground mb-4">
         <ArrowLeft className="w-4 h-4" /> Back to Suppliers
       </button>
 
-      <div className="flex items-center justify-between mb-6">
+      <div className="hidden lg:flex items-center justify-between mb-6">
         <div>
           <h1 className="text-[22px] font-bold text-foreground tracking-tight">{supplier.name}</h1>
           <div className="flex items-center gap-2 mt-1">

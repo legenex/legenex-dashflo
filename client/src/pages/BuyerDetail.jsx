@@ -10,7 +10,7 @@ import { Badge } from '@/components/ui/badge';
 import { Textarea } from '@/components/ui/textarea';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
-import { ArrowLeft, ExternalLink, CreditCard, Plus, FileText } from 'lucide-react';
+import { ArrowLeft, ChevronLeft, ExternalLink, CreditCard, Plus, FileText } from 'lucide-react';
 import { toast } from 'sonner';
 import { money } from '@/lib/partnerMetrics';
 
@@ -76,11 +76,34 @@ export default function BuyerDetail() {
 
   return (
     <div>
-      <button onClick={() => navigate('/campaigns?tab=buyers')} className="flex items-center gap-1.5 text-[13px] text-muted-foreground hover:text-foreground mb-4">
+      {/* Mobile back row */}
+      <div className="lg:hidden flex items-center gap-2 mb-4">
+        <button
+          onClick={() => navigate(-1)}
+          aria-label="Go back"
+          className="tap-target flex items-center justify-center rounded-lg bg-card border border-border w-[38px] h-[38px]"
+        >
+          <ChevronLeft className="w-5 h-5" />
+        </button>
+        <h1 className="text-[17px] font-bold text-foreground tracking-tight truncate">{buyer.company_name}</h1>
+      </div>
+      <div className="lg:hidden flex items-center justify-between mb-6">
+        <div className="flex items-center gap-2">
+          <Badge variant="outline" className={`text-[10px] ${buyer.active ? 'status-sold bg-status-sold' : 'text-muted-foreground'}`}>{buyer.active ? 'Active' : 'Inactive'}</Badge>
+          <Badge variant="outline" className="text-[10px]">{buyer.billing_mode === 'wallet' ? 'Wallet' : 'Lead Count'}</Badge>
+          {buyer.portal_enabled && <Badge variant="outline" className="text-[10px] status-qualified bg-status-qualified">Portal On</Badge>}
+        </div>
+        <div className="text-right">
+          <div className="text-[10px] text-muted-foreground uppercase tracking-wider">Balance</div>
+          <div className="text-[17px] font-bold text-foreground font-mono">{money(buyer.balance)}</div>
+        </div>
+      </div>
+
+      <button onClick={() => navigate('/campaigns?tab=buyers')} className="hidden lg:flex items-center gap-1.5 text-[13px] text-muted-foreground hover:text-foreground mb-4">
         <ArrowLeft className="w-4 h-4" /> Back to Buyers
       </button>
 
-      <div className="flex items-center justify-between mb-6">
+      <div className="hidden lg:flex items-center justify-between mb-6">
         <div>
           <h1 className="text-[22px] font-bold text-foreground tracking-tight">{buyer.company_name}</h1>
           <div className="flex items-center gap-2 mt-1">

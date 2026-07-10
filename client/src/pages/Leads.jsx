@@ -5,6 +5,8 @@ import PageHeader from '@/components/shared/PageHeader';
 import ErrorStatusPill from '@/components/leads/ErrorStatusPill';
 import BulkActionBar from '@/components/leads/BulkActionBar';
 import LeadDetailModal from '@/components/leads/LeadDetailModal';
+import ExportColumnsDialog from '@/components/leads/ExportColumnsDialog';
+import { buildLeadsCsv } from '@/lib/leadExportColumns';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -32,11 +34,26 @@ export default function Leads() {
   const [viewMode, setViewMode] = useState('all');
   const [brandFilter, setBrandFilter] = useState('all');
   const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(50);
+  const [pageSize, setPageSize] = useState(20);
+  const [exportOpen, setExportOpen] = useState(false);
 
   const { data: leads = [], isLoading } = useQuery({
     queryKey: ['leads'],
-    queryFn: () => api.entities.Lead.filter({ archived: false }, '-created_date', 2000),
+    queryFn: async () => {
+      // Page through all matching leads. A single call is capped at 500, so
+      // loop until a page returns fewer than 500 rows.
+      const all = [];
+      let page = 0;
+      const pageSize = 500;
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
+        const batch = await api.entities.Lead.filter({ archived: false }, '-created_date', pageSize, page * pageSize);
+        all.push(...batch);
+        if (batch.length < pageSize) break;
+        page += 1;
+      }
+      return all;
+    },
   });
 
   // Fetch error log entries to enrich error pills
@@ -111,13 +128,8 @@ export default function Leads() {
 
   const clearSelection = () => setSelectedIds(new Set());
 
-  const exportCSV = () => {
-    const headers = ['ID', 'Created', 'Supplier', 'Name', 'Mobile', 'Email', 'HLR Status', 'LB Status', 'Final Status', 'Process Time'];
-    const rows = filtered.map(l => [
-      l.id, l.created_date, l.supplier_name, `${l.first_name || ''} ${l.last_name || ''}`,
-      l.mobile, l.email, l.hlr_status, l.leadbyte_record_status, l.final_status, l.process_time_ms
-    ]);
-    const csv = [headers, ...rows].map(r => r.join(',')).join('\n');
+  const exportCSV = (selectedKeys) => {
+    const csv = buildLeadsCsv(filtered, selectedKeys);
     const blob = new Blob([csv], { type: 'text/csv' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -192,7 +204,7 @@ export default function Leads() {
               Queue
             </button>
           </div>
-          <Button variant="outline" size="sm" onClick={exportCSV} className="gap-1.5">
+          <Button variant="outline" size="sm" onClick={() => setExportOpen(true)} className="gap-1.5">
             <Download className="w-4 h-4" /> Export CSV
           </Button>
         </div>
@@ -333,7 +345,7 @@ export default function Leads() {
               value={String(pageSize)}
               onValueChange={(v) => setPageSize(Number(v))}
               className="w-[120px] bg-card border-border"
-              options={[{ value: '25', label: '25 / page' }, { value: '50', label: '50 / page' }, { value: '100', label: '100 / page' }, { value: '200', label: '200 / page' }]}
+              options={[{ value: '20', label: '20 / page' }, { value: '25', label: '25 / page' }, { value: '50', label: '50 / page' }, { value: '100', label: '100 / page' }, { value: '200', label: '200 / page' }]}
             />
             <Button variant="outline" size="sm" className="gap-1" disabled={safePage <= 1} onClick={() => setPage(p => Math.max(1, p - 1))}>
               <ChevronLeft className="w-4 h-4" /> Prev
@@ -351,6 +363,13 @@ export default function Leads() {
         open={!!selectedLead}
         onClose={() => setSelectedLead(null)}
         initialTab={initialTab}
+      />
+
+      <ExportColumnsDialog
+        open={exportOpen}
+        onOpenChange={setExportOpen}
+        count={filtered.length}
+        onExport={exportCSV}
       />
 
       {/* Bulk archive confirmation */}

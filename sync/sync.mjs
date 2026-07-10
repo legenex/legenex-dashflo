@@ -283,6 +283,12 @@ function sanitizeGeneratedCode(out) {
   const startRe = /^\s*(import\b|export\b|const\b|let\b|var\b|function\b|async\b|\/\/|\/\*|['"]use )/;
   let start = lines.findIndex((l) => startRe.test(l));
   if (start > 0) lines.splice(0, start);
+  // Drop any trailing prose the model appended after the module (e.g. "I wrote
+  // the port above…", "Notes on the translation:") by cutting at the last
+  // top-level closing brace — the real end of a single-export module.
+  let end = -1;
+  for (let i = lines.length - 1; i >= 0; i--) { if (/^\}\s*$/.test(lines[i])) { end = i; break; } }
+  if (end >= 0 && end < lines.length - 1) lines.splice(end + 1);
   return lines.join('\n').trim() + '\n';
 }
 
@@ -361,6 +367,29 @@ function checkNewSdkSurfaces() {
       seen.add(ns);
       warnings.push(`possible new SDK surface "api.${ns}" in ${rel} — implement it in client/src/api/client.js (unknown namespaces will break at runtime)`);
     }
+  }
+}
+
+// Install frontend dependencies the upstream added that the client lacks
+// (platform SDK packages are intentionally skipped). Prevents build failures
+// from unresolved imports of newly-introduced libraries.
+function installNewDeps() {
+  let up, mine;
+  try {
+    up = JSON.parse(fs.readFileSync(path.join(UPSTREAM, 'package.json'), 'utf8'));
+    mine = JSON.parse(fs.readFileSync(path.join(CLIENT, 'package.json'), 'utf8'));
+  } catch { return; }
+  const have = { ...(mine.dependencies || {}), ...(mine.devDependencies || {}) };
+  const missing = Object.entries(up.dependencies || {})
+    .filter(([name]) => !have[name] && !name.startsWith('@base44'))
+    .map(([name, ver]) => `${name}@${ver}`);
+  if (!missing.length) return;
+  log(`installing ${missing.length} new client dep(s): ${missing.join(', ')}`);
+  try {
+    execFileSync('npm', ['install', ...missing], { cwd: CLIENT, encoding: 'utf8', timeout: 300000 });
+    missing.forEach((m) => actions.push(`dep: ${m}`));
+  } catch (e) {
+    warnings.push(`failed to install new deps (${missing.join(', ')}) — install manually: ${e.message.split('\n')[0]}`);
   }
 }
 
@@ -459,9 +488,7 @@ async function main() {
   regenShims();
   for (const name of changes.funcs) portBackendFunction(name, { hasClaude, isNew: !existingFuncs.has(name) });
 
-  if (changes.depsChanged) {
-    warnings.push('upstream package.json changed — new frontend dependencies may be required. Check .sync/upstream/package.json and run "npm --prefix client install <pkg>" if the build fails.');
-  }
+  if (changes.depsChanged) installNewDeps();
 
   checkNewSdkSurfaces();
 
