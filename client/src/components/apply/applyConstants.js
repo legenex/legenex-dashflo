@@ -25,9 +25,29 @@ export const BILLING_TYPES = [
   { value: 'invoiced_monthly', label: 'Invoiced monthly' },
 ];
 
-// The three steps of the flow, in order.
+// How leads are delivered to the buyer.
+export const DELIVERY_METHODS = [
+  { value: 'api_post', label: 'API post to CRM' },
+  { value: 'email', label: 'Email notifications' },
+  { value: 'both', label: 'Both' },
+];
+
+// How the buyer reports back dispositions on the leads we send. Multi select.
+export const DISPOSITION_METHODS = [
+  { value: 'live_google_sheet', label: 'Live Google Sheet' },
+  { value: 'api', label: 'Send dispositions via API' },
+  { value: 'leadbyte_portal', label: 'Update leads manually in LeadByte portal' },
+  { value: 'csv', label: 'Send CSV or Excel file' },
+  { value: 'real_time_portal', label: 'Real time portal' },
+];
+
+// The seven steps of the flow, in order.
 export const STEPS = [
   { key: 'company', label: 'Company' },
-  { key: 'commercial', label: 'Coverage & terms' },
-  { key: 'details', label: 'Additional detail' },
+  { key: 'contacts', label: 'Contacts' },
+  { key: 'coverage', label: 'Coverage' },
+  { key: 'commercials', label: 'Commercials' },
+  { key: 'delivery', label: 'Delivery' },
+  { key: 'compliance', label: 'Compliance' },
+  { key: 'billing', label: 'Billing' },
 ];

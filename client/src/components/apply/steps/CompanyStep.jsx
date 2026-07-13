@@ -1,7 +1,7 @@
 import React from 'react';
 import { ApplyField } from '../ApplyField';
 
-// Step 1: company identity and the primary point of contact.
+// Step 1: company identity.
 export default function CompanyStep({ form, set, errors }) {
   return (
     <div className="space-y-5">
@@ -13,42 +13,20 @@ export default function CompanyStep({ form, set, errors }) {
         placeholder="Acme Legal Group"
         required
       />
-      <div className="grid sm:grid-cols-2 gap-5">
-        <ApplyField
-          label="Primary contact name"
-          value={form.primary_contact_name}
-          onChange={(v) => set('primary_contact_name', v)}
-          error={errors.primary_contact_name}
-          placeholder="Jane Doe"
-          required
-        />
-        <ApplyField
-          label="Contact role"
-          value={form.primary_contact_role}
-          onChange={(v) => set('primary_contact_role', v)}
-          error={errors.primary_contact_role}
-          placeholder="Head of Acquisition"
-        />
-      </div>
-      <div className="grid sm:grid-cols-2 gap-5">
-        <ApplyField
-          label="Primary contact email"
-          type="email"
-          value={form.primary_contact_email}
-          onChange={(v) => set('primary_contact_email', v)}
-          error={errors.primary_contact_email}
-          placeholder="jane@acmelegal.com"
-          required
-        />
-        <ApplyField
-          label="Primary contact phone"
-          value={form.primary_contact_phone}
-          onChange={(v) => set('primary_contact_phone', v)}
-          error={errors.primary_contact_phone}
-          placeholder="+1 512 555 0123"
-          required
-        />
-      </div>
+      <ApplyField
+        label="Company website"
+        value={form.company_website}
+        onChange={(v) => set('company_website', v)}
+        error={errors.company_website}
+        placeholder="https://acmelegal.com"
+      />
+      <ApplyField
+        label="EIN or Tax ID"
+        value={form.ein}
+        onChange={(v) => set('ein', v)}
+        error={errors.ein}
+        placeholder="Optional"
+      />
     </div>
   );
 }

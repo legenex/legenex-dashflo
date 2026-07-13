@@ -4,33 +4,75 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { Check, ArrowRight, ArrowLeft, Loader2, CheckCircle2 } from 'lucide-react';
 import { STEPS } from '@/components/apply/applyConstants';
 import CompanyStep from '@/components/apply/steps/CompanyStep';
-import CommercialStep from '@/components/apply/steps/CommercialStep';
-import DetailStep from '@/components/apply/steps/DetailStep';
+import ContactsStep from '@/components/apply/steps/ContactsStep';
+import CoverageStep from '@/components/apply/steps/CoverageStep';
+import CommercialsStep from '@/components/apply/steps/CommercialsStep';
+import DeliveryStep from '@/components/apply/steps/DeliveryStep';
+import ComplianceStep from '@/components/apply/steps/ComplianceStep';
+import BillingStep from '@/components/apply/steps/BillingStep';
 
+// Full initial form. Every key is sent to submitBuyerOnboarding using the exact
+// snake_case names onboardBuyer reads. billing_type defaults to prepay.
 const INITIAL = {
+  // Step 1: company
   company_name: '',
+  company_website: '',
+  ein: '',
+  // Step 2: contacts
   primary_contact_name: '',
   primary_contact_role: '',
   primary_contact_email: '',
   primary_contact_phone: '',
+  provide_secondary_contact: false,
+  secondary_contact_name: '',
+  secondary_contact_email: '',
+  secondary_contact_phone: '',
+  secondary_contact_role: '',
+  // Step 3: coverage
+  vertical: '',
   target_states: [],
+  // Step 4: commercials
   client_type: '',
   cpl: '',
-  vertical: '',
+  initial_batch_size: '',
   billing_type: 'prepay',
-  billing_email: '',
+  // Step 5: delivery
+  delivery_method: '',
+  api_docs_url: '',
+  api_docs_file_url: '',
+  buyer_api_key: '',
+  unique_identifier: '',
+  lead_notification_emails: [''],
+  disposition_method: [],
+  // Step 6: compliance
+  tcpa_inbound_phone: '',
+  tcpa_outbound_phones: [''],
+  tcpa_inbound_email: '',
+  tcpa_outbound_email: '',
+  tcpa_reply_to_email: '',
+  // Step 7: billing and agreement
+  billing_address: '',
   accounts_contact_name: '',
+  accounts_email: '',
+  taxpayer_form_url: '',
+  qualification_criteria: '',
   prior_experience: '',
   experience_detail: '',
   additional_requirements: '',
+  agreement_accepted: false,
 };
 
-// Client side gate for each step. Keeps the user from advancing with obviously
-// missing fields; the server still validates everything on submit.
+// Client side gate for each of the seven steps. The server still validates
+// everything on submit. Indexes match the STEPS order, so a server field_error
+// maps back to the earliest step that owns that field.
 const REQUIRED_BY_STEP = [
-  ['company_name', 'primary_contact_name', 'primary_contact_email', 'primary_contact_phone'],
-  ['target_states', 'client_type', 'cpl', 'billing_type'],
+  ['company_name'],
+  ['primary_contact_name', 'primary_contact_email', 'primary_contact_phone'],
+  ['target_states'],
+  ['client_type', 'cpl', 'billing_type'],
   [],
+  [],
+  ['agreement_accepted'],
 ];
 
 export default function Apply() {
@@ -51,8 +93,11 @@ export default function Apply() {
     const next = {};
     for (const key of req) {
       const v = form[key];
-      const empty = key === 'target_states' ? (!Array.isArray(v) || v.length === 0) : !String(v ?? '').trim();
-      if (empty) next[key] = 'This field is required.';
+      let empty;
+      if (key === 'target_states') empty = !Array.isArray(v) || v.length === 0;
+      else if (key === 'agreement_accepted') empty = !v;
+      else empty = !String(v ?? '').trim();
+      if (empty) next[key] = key === 'agreement_accepted' ? 'Please confirm to continue.' : 'This field is required.';
     }
     setErrors(next);
     return Object.keys(next).length === 0;
@@ -68,19 +113,32 @@ export default function Apply() {
     setStep((s) => Math.max(s - 1, 0));
   };
 
+  // Strip empty repeatable rows before sending, so the operator never sees a
+  // trailing blank email or phone entry.
+  const buildPayload = () => {
+    const emails = (form.lead_notification_emails || []).map((s) => s.trim()).filter(Boolean);
+    const outbound = (form.tcpa_outbound_phones || []).map((s) => s.trim()).filter(Boolean);
+    return {
+      ...form,
+      cpl: form.cpl === '' ? '' : Number(form.cpl),
+      initial_batch_size: form.initial_batch_size === '' ? '' : Number(form.initial_batch_size),
+      lead_notification_emails: emails,
+      tcpa_outbound_phones: outbound,
+    };
+  };
+
   const submit = async () => {
     if (!validateStep()) return;
     setSubmitting(true);
     setGlobalError('');
     try {
-      const payload = { ...form, cpl: form.cpl === '' ? '' : Number(form.cpl) };
-      const res = await api.functions.invoke('submitBuyerOnboarding', payload);
+      const res = await api.functions.invoke('submitBuyerOnboarding', buildPayload());
       setResult(res.data);
     } catch (e) {
       const data = e?.response?.data;
       if (data?.field_errors) {
         setErrors(data.field_errors);
-        // Jump back to the earliest step that has an error.
+        // Jump back to the earliest step that owns a field with an error.
         const firstStepWithError = REQUIRED_BY_STEP.findIndex((keys) =>
           keys.some((k) => data.field_errors[k]),
         );
@@ -111,7 +169,7 @@ export default function Apply() {
           </h1>
           <p className="mt-2 text-sm text-muted-foreground leading-relaxed">
             {result.status === 'duplicate'
-              ? `We already have a recent submission for ${result.company_name}. Our team will be in touch shortly — no need to submit again.`
+              ? `We already have a recent submission for ${result.company_name}. Our team will be in touch shortly. No need to submit again.`
               : `Thanks, ${result.company_name}. Your application is in our queue. Our onboarding team will review the details and reach out shortly.`}
           </p>
         </motion.div>
@@ -127,12 +185,12 @@ export default function Apply() {
           <div className="text-[11px] font-mono uppercase tracking-[0.22em] text-primary">Legenex</div>
           <h1 className="mt-3 text-3xl font-semibold text-foreground font-heading">Buyer onboarding</h1>
           <p className="mt-2 text-sm text-muted-foreground">
-            Tell us about your firm and coverage needs. Takes about two minutes.
+            Tell us about your firm and coverage needs. Takes a few minutes.
           </p>
         </div>
 
         {/* Step indicator */}
-        <div className="flex items-center justify-center gap-2 mb-8">
+        <div className="flex items-center justify-center gap-1.5 mb-8 flex-wrap">
           {STEPS.map((s, i) => {
             const done = i < step;
             const active = i === step;
@@ -150,11 +208,11 @@ export default function Apply() {
                   >
                     {done ? <Check className="h-3.5 w-3.5" /> : i + 1}
                   </div>
-                  <span className={`hidden sm:block text-[12.5px] font-medium ${active ? 'text-foreground' : 'text-muted-foreground'}`}>
+                  <span className={`hidden md:block text-[12.5px] font-medium ${active ? 'text-foreground' : 'text-muted-foreground'}`}>
                     {s.label}
                   </span>
                 </div>
-                {i < STEPS.length - 1 && <div className="h-px w-6 sm:w-10 bg-border" />}
+                {i < STEPS.length - 1 && <div className="h-px w-4 md:w-6 bg-border" />}
               </React.Fragment>
             );
           })}
@@ -171,8 +229,12 @@ export default function Apply() {
               transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
             >
               {step === 0 && <CompanyStep form={form} set={set} errors={errors} />}
-              {step === 1 && <CommercialStep form={form} set={set} errors={errors} />}
-              {step === 2 && <DetailStep form={form} set={set} errors={errors} />}
+              {step === 1 && <ContactsStep form={form} set={set} errors={errors} />}
+              {step === 2 && <CoverageStep form={form} set={set} errors={errors} />}
+              {step === 3 && <CommercialsStep form={form} set={set} errors={errors} />}
+              {step === 4 && <DeliveryStep form={form} set={set} errors={errors} />}
+              {step === 5 && <ComplianceStep form={form} set={set} errors={errors} />}
+              {step === 6 && <BillingStep form={form} set={set} errors={errors} />}
             </motion.div>
           </AnimatePresence>
 
@@ -205,11 +267,11 @@ export default function Apply() {
               <button
                 type="button"
                 onClick={submit}
-                disabled={submitting}
+                disabled={submitting || !form.agreement_accepted}
                 className="inline-flex items-center gap-2 h-10 px-6 rounded-lg bg-primary text-primary-foreground text-[13.5px] font-semibold hover:bg-primary/90 disabled:opacity-60 transition-colors"
               >
                 {submitting && <Loader2 className="h-4 w-4 animate-spin" />}
-                {submitting ? 'Submitting…' : 'Submit application'}
+                {submitting ? 'Submitting...' : 'Submit application'}
               </button>
             )}
           </div>
