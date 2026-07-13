@@ -1,5 +1,4 @@
-// AUTO-PORTED (mechanical fallback) on 2026-07-13T07:36:09.932Z — REVIEW RECOMMENDED.
-// Verify: auth (requireUser), credentials via ctx.config.integrations.*, and LLM via ../integrations/llm.js.
+import { getFunction } from './index.js';
 
 // Operator-only buyer onboarding orchestrator (/functions/onboardBuyer).
 //
@@ -47,14 +46,25 @@ const APP_TIMEZONE = 'America/Regina';
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-function str(v: unknown): string {
+function str(v) {
   return typeof v === 'string' ? v.trim() : (v == null ? '' : String(v).trim());
+}
+
+// Invoke a sibling function in-process with the operator context. Unwraps the
+// runtime's { __httpResponse } envelope so the caller reads the plain payload,
+// mirroring the original service-role invoke().
+async function invokeFunction(ctx, name, body) {
+  const fn = getFunction(name);
+  if (!fn) throw new Error(`${name} function is not available`);
+  const result = await fn({ ...ctx, body });
+  if (result && result.__httpResponse) return result.body;
+  return result;
 }
 
 // Build a fresh steps array with every key present. Merge in any existing
 // records by key so completed steps and their metadata survive a resume.
-function buildSteps(existing: any[]): any[] {
-  const byKey: Record<string, any> = {};
+function buildSteps(existing) {
+  const byKey = {};
   for (const s of (Array.isArray(existing) ? existing : [])) {
     if (s && s.key) byKey[s.key] = s;
   }
@@ -71,14 +81,14 @@ function buildSteps(existing: any[]): any[] {
   });
 }
 
-function getStep(steps: any[], key: string): any {
+function getStep(steps, key) {
   return steps.find((s) => s.key === key);
 }
 
 // Resolve the current wall-clock time in the app timezone as separate parts, so
 // scheduling logic can reason about local hour and weekday without pulling in a
 // date library.
-function localParts(now: Date) {
+function localParts(now) {
   const fmt = new Intl.DateTimeFormat('en-US', {
     timeZone: APP_TIMEZONE,
     weekday: 'short',
@@ -88,9 +98,9 @@ function localParts(now: Date) {
     hour12: false,
   });
   const parts = fmt.formatToParts(now);
-  const map: Record<string, string> = {};
+  const map = {};
   for (const p of parts) map[p.type] = p.value;
-  const weekdayMap: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+  const weekdayMap = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
   return {
     weekday: weekdayMap[map.weekday] ?? 0,
     hour: Number(map.hour === '24' ? '0' : map.hour) || 0,
@@ -100,7 +110,7 @@ function localParts(now: Date) {
 
 // Return the UTC offset (in minutes) for the app timezone at a given instant.
 // Used to convert a desired local wall-clock time into a UTC ISO string.
-function tzOffsetMinutes(at: Date): number {
+function tzOffsetMinutes(at) {
   const dtf = new Intl.DateTimeFormat('en-US', {
     timeZone: APP_TIMEZONE,
     year: 'numeric', month: '2-digit', day: '2-digit',
@@ -108,7 +118,7 @@ function tzOffsetMinutes(at: Date): number {
     hour12: false,
   });
   const parts = dtf.formatToParts(at);
-  const map: Record<string, string> = {};
+  const map = {};
   for (const p of parts) map[p.type] = p.value;
   const asUTC = Date.UTC(
     Number(map.year),
@@ -123,13 +133,13 @@ function tzOffsetMinutes(at: Date): number {
 
 // Build a UTC ISO string for a local wall-clock time on a specific local date.
 // daysAhead is measured against the current local date.
-function localWallClockToUtcIso(baseNow: Date, daysAhead: number, localHour: number, localMinute: number): string {
+function localWallClockToUtcIso(baseNow, daysAhead, localHour, localMinute) {
   // Establish the current local Y/M/D.
   const dtf = new Intl.DateTimeFormat('en-US', {
     timeZone: APP_TIMEZONE, year: 'numeric', month: '2-digit', day: '2-digit',
   });
   const parts = dtf.formatToParts(baseNow);
-  const map: Record<string, string> = {};
+  const map = {};
   for (const p of parts) map[p.type] = p.value;
   const y = Number(map.year);
   const m = Number(map.month);
@@ -145,7 +155,7 @@ function localWallClockToUtcIso(baseNow: Date, daysAhead: number, localHour: num
 // - if local time is after 8am and before 3pm, schedule one hour from now;
 // - otherwise if today is before Friday, schedule 10am the next local day;
 // - otherwise schedule 10am on the coming Monday.
-function resolveIntroEmailTime(now: Date): string {
+function resolveIntroEmailTime(now) {
   const { weekday, hour } = localParts(now);
   if (hour >= 8 && hour < 15) {
     return new Date(now.getTime() + 60 * 60 * 1000).toISOString();
@@ -156,7 +166,7 @@ function resolveIntroEmailTime(now: Date): string {
     return localWallClockToUtcIso(now, 1, 10, 0);
   }
   // Friday (5), Saturday (6) or Sunday (0): schedule 10am the coming Monday.
-  let daysUntilMonday: number;
+  let daysUntilMonday;
   if (weekday === 5) daysUntilMonday = 3;      // Fri -> Mon
   else if (weekday === 6) daysUntilMonday = 2; // Sat -> Mon
   else daysUntilMonday = 1;                     // Sun -> Mon
@@ -165,16 +175,16 @@ function resolveIntroEmailTime(now: Date): string {
 
 // Promote the operational fields from the raw form payload onto a Buyer create.
 // Only defined values are copied so we never clobber schema defaults with null.
-function buildBuyerFromPayload(payload: any, companyName: string): Record<string, any> {
-  const out: Record<string, any> = {
+function buildBuyerFromPayload(payload, companyName) {
+  const out = {
     company_name: companyName,
     status: 'draft',
   };
-  const copyString = (dest: string, src: string) => {
+  const copyString = (dest, src) => {
     const v = str(payload[src]);
     if (v) out[dest] = v;
   };
-  const copyNumber = (dest: string, src: string) => {
+  const copyNumber = (dest, src) => {
     if (payload[src] !== undefined && payload[src] !== null && payload[src] !== '') {
       const n = Number(payload[src]);
       if (!Number.isNaN(n)) out[dest] = n;
@@ -200,7 +210,7 @@ function buildBuyerFromPayload(payload: any, companyName: string): Record<string
   copyString('qualification_criteria', 'qualification_criteria');
 
   // JSON-array style fields: store the raw string if a value is present.
-  const copyJson = (dest: string, src: string) => {
+  const copyJson = (dest, src) => {
     if (payload[src] !== undefined && payload[src] !== null && payload[src] !== '') {
       out[dest] = typeof payload[src] === 'string' ? payload[src] : JSON.stringify(payload[src]);
     }
@@ -241,11 +251,11 @@ function buildBuyerFromPayload(payload: any, companyName: string): Record<string
 // All read from the same storage the existing sync functions use. Each returns
 // the credentials or throws a generic error that never contains the secret.
 
-async function getXeroCreds(svc: any): Promise<{ token: string; tenantId: string }> {
+async function getXeroCreds(svc) {
   const cfgList = await svc.entities.IntegrationConfig.filter({ name: 'xero' });
   const cfg = cfgList[0];
   if (!cfg) throw new Error('Xero is not connected.');
-  let parsed: any = {};
+  let parsed = {};
   try { parsed = JSON.parse(cfg.config || '{}'); } catch { parsed = {}; }
   const token = parsed.access_token;
   let tenantId = parsed.tenant_id;
@@ -263,11 +273,11 @@ async function getXeroCreds(svc: any): Promise<{ token: string; tenantId: string
   return { token, tenantId };
 }
 
-async function getStripeKey(svc: any): Promise<string> {
+async function getStripeKey(svc) {
   const cfgList = await svc.entities.IntegrationConfig.filter({ name: 'stripe' });
   const cfg = cfgList[0];
   if (!cfg) throw new Error('Stripe is not connected.');
-  let parsed: any = {};
+  let parsed = {};
   try { parsed = JSON.parse(cfg.config || '{}'); } catch { parsed = {}; }
   const key = parsed.secret_key;
   if (!key) throw new Error('Stripe secret key is missing.');
@@ -277,15 +287,15 @@ async function getStripeKey(svc: any): Promise<string> {
 // The LeadByte base URL and X_KEY come from the default LeadByte connector, the
 // same record the live pipeline forwards leads through. We never hardcode the
 // key: we read the connector's own X_KEY header value.
-async function getLeadByteConfig(svc: any): Promise<{ baseUrl: string; key: string }> {
+async function getLeadByteConfig(svc) {
   const conns = await svc.entities.LeadByteConnector.filter({ kind: 'leadbyte' });
-  const conn = conns.find((c: any) => c.is_default) || conns[0];
+  const conn = conns.find((c) => c.is_default) || conns[0];
   if (!conn || !conn.target_url) throw new Error('LeadByte connector is not configured.');
   let key = '';
   try {
     const rows = typeof conn.headers === 'string' ? JSON.parse(conn.headers || '[]') : (conn.headers || []);
     if (Array.isArray(rows)) {
-      const row = rows.find((r: any) => r.key && String(r.key).toLowerCase() === 'x_key');
+      const row = rows.find((r) => r.key && String(r.key).toLowerCase() === 'x_key');
       key = row ? row.value : '';
     } else if (rows && typeof rows === 'object') {
       key = rows.X_KEY || rows.x_key || '';
@@ -300,11 +310,11 @@ async function getLeadByteConfig(svc: any): Promise<{ baseUrl: string; key: stri
 
 // Rebrandly key: read from IntegrationConfig(name='rebrandly'), the same
 // storage the other integrations use. Never hardcoded.
-async function getRebrandlyKey(svc: any): Promise<string> {
+async function getRebrandlyKey(svc) {
   const cfgList = await svc.entities.IntegrationConfig.filter({ name: 'rebrandly' });
   const cfg = cfgList[0];
   if (!cfg) throw new Error('Rebrandly is not connected.');
-  let parsed: any = {};
+  let parsed = {};
   try { parsed = JSON.parse(cfg.config || '{}'); } catch { parsed = {}; }
   if (!parsed.api_key) throw new Error('Rebrandly API key is missing.');
   return parsed.api_key;
@@ -312,7 +322,7 @@ async function getRebrandlyKey(svc: any): Promise<string> {
 
 // Slugify a company name into a Rebrandly slashtag: lowercase, punctuation
 // removed, spaces to hyphens, collapsed and trimmed.
-function slugifyCompany(name: string): string {
+function slugifyCompany(name) {
   return String(name || '')
     .toLowerCase()
     .replace(/[^a-z0-9\s-]/g, '')
@@ -326,11 +336,10 @@ export default async function onboardBuyer(ctx) {
     const db = ctx.db;
 
     // ── Operator authorization guard, copied from operationsData exactly. ──
-    let user = null;
-    try { user = await db.auth.me(); } catch { user = null; }
+    const user = ctx.user;
     if (!user) return ctx.json({ error: 'Unauthorized' }, 401);
 
-    const record = await db.asServiceRole.entities.User.get(user.id).catch(() => null);
+    const record = await db.entities.User.get(user.id).catch(() => null);
     const caller = record || user;
 
     if (caller.base_role === 'supplier' || caller.base_role === 'buyer') {
@@ -340,7 +349,7 @@ export default async function onboardBuyer(ctx) {
       return ctx.json({ error: 'Forbidden' }, 403);
     }
 
-    let permissions: Record<string, any> = {};
+    let permissions = {};
     try {
       permissions = typeof caller.permissions === 'string'
         ? JSON.parse(caller.permissions || '{}')
@@ -352,7 +361,7 @@ export default async function onboardBuyer(ctx) {
     }
 
     // ── Arguments ────────────────────────────────────────────────────────
-    const body = ctx.body => ({}));
+    const body = ctx.body || {};
     const onboardingId = str(body.onboarding_id);
     const fromStep = str(body.from_step) || null;
     if (!onboardingId) {
@@ -362,21 +371,21 @@ export default async function onboardBuyer(ctx) {
       return ctx.json({ error: `Unknown from_step: ${fromStep}` }, 400);
     }
 
-    const svc = db.asServiceRole;
+    const svc = db;
 
     const onboarding = await svc.entities.BuyerOnboarding.get(onboardingId).catch(() => null);
     if (!onboarding) {
       return ctx.json({ error: 'BuyerOnboarding record not found.' }, 404);
     }
 
-    let payload: any = {};
+    let payload = {};
     try {
       payload = typeof onboarding.form_payload === 'string'
         ? JSON.parse(onboarding.form_payload || '{}')
         : (onboarding.form_payload || {});
     } catch { payload = {}; }
 
-    let existingSteps: any[] = [];
+    let existingSteps = [];
     try {
       existingSteps = typeof onboarding.steps === 'string'
         ? JSON.parse(onboarding.steps || '[]')
@@ -390,8 +399,8 @@ export default async function onboardBuyer(ctx) {
     // Cross-step values produced by deposit_invoice and consumed by the
     // xero_invoice and payment_link steps. On a resume where deposit_invoice is
     // already complete, these are rehydrated from the stored step below.
-    let hostedInvoiceUrl: string | null = null;
-    let depositInvoiceId: string | null = null;
+    let hostedInvoiceUrl = null;
+    let depositInvoiceId = null;
     {
       const depStep = getStep(steps, 'deposit_invoice');
       if (depStep) {
@@ -401,7 +410,7 @@ export default async function onboardBuyer(ctx) {
     }
 
     // Persist the current steps array (and optional extra patch) to the record.
-    const persist = async (patch: Record<string, any> = {}) => {
+    const persist = async (patch = {}) => {
       await svc.entities.BuyerOnboarding.update(onboardingId, {
         steps: JSON.stringify(steps),
         ...patch,
@@ -417,14 +426,14 @@ export default async function onboardBuyer(ctx) {
 
     // Mark a step skipped with a reason. Skipped counts as done: it never blocks
     // and it is never re run.
-    const markSkipped = (step: any, reason: string) => {
+    const markSkipped = (step, reason) => {
       step.status = 'skipped';
       step.error = reason;
       step.completed_at = new Date().toISOString();
     };
 
     // Run one step. Returns true to continue, false to stop (blocked).
-    const runStep = async (key: string): Promise<boolean> => {
+    const runStep = async (key) => {
       const step = getStep(steps, key);
 
       // Idempotent: never re run a step that is already complete, skipped, or
@@ -446,7 +455,7 @@ export default async function onboardBuyer(ctx) {
           if (status === 'cancelled' || status === 'complete') {
             throw new Error(`Cannot onboard a ${status} record.`);
           }
-          const errs: string[] = [];
+          const errs = [];
           if (!str(payload.company_name)) errs.push('company_name');
           if (!str(payload.primary_contact_name)) errs.push('primary contact name');
           const email = str(payload.primary_contact_email);
@@ -454,7 +463,7 @@ export default async function onboardBuyer(ctx) {
           else if (!EMAIL_RE.test(email)) errs.push('a valid email');
           if (!str(payload.primary_contact_phone)) errs.push('phone');
           const rawStates = Array.isArray(payload.target_states) ? payload.target_states : [];
-          if (rawStates.filter((s: unknown) => str(s)).length === 0) errs.push('at least one target state');
+          if (rawStates.filter((s) => str(s)).length === 0) errs.push('at least one target state');
           if (!str(payload.client_type)) errs.push('client_type');
           if (payload.cpl === undefined || payload.cpl === null || payload.cpl === '' || Number.isNaN(Number(payload.cpl))) {
             errs.push('cpl');
@@ -481,10 +490,9 @@ export default async function onboardBuyer(ctx) {
             // Already allocated: never allocate twice.
             step.external_id = buyer.buyer_code;
           } else {
-            const result = await db.asServiceRole.functions.invoke('allocateBuyerCode', {
+            const data = await invokeFunction(ctx, 'allocateBuyerCode', {
               client_type: buyer.client_type,
             });
-            const data = result?.data !== undefined ? result.data : result;
             const code = data?.buyer_code;
             if (!code) {
               throw new Error(data?.error || 'allocateBuyerCode did not return a code.');
@@ -500,7 +508,7 @@ export default async function onboardBuyer(ctx) {
           } else {
             const { token, tenantId } = await getXeroCreds(svc);
             const contactName = str(payload.company_name) || buyer.company_name || 'Buyer';
-            const contactBody: any = {
+            const contactBody = {
               Name: contactName,
               AccountNumber: buyer.buyer_code || '',
               EmailAddress: str(payload.primary_contact_email) || buyer.email || '',
@@ -632,7 +640,7 @@ export default async function onboardBuyer(ctx) {
             const cpl = Number(payload.cpl);
             const qty = Number(payload.initial_batch_size) || Number(buyer.initial_batch_size) || 0;
             const description = `Leads - Batch 1 Deposit, ${qty} leads in total`;
-            const invBody: any = {
+            const invBody = {
               Type: 'ACCREC',
               Contact: buyer.xero_contact_id ? { ContactID: buyer.xero_contact_id } : { Name: buyer.company_name },
               LineItems: [{
@@ -674,7 +682,7 @@ export default async function onboardBuyer(ctx) {
               const apiKey = await getRebrandlyKey(svc);
               const baseSlug = slugifyCompany(str(payload.company_name) || buyer.company_name || 'buyer') || 'buyer';
 
-              const createLink = async (slashtag: string) => {
+              const createLink = async (slashtag) => {
                 return await fetch('https://api.rebrandly.com/v1/links', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json', apikey: apiKey },
@@ -718,7 +726,7 @@ export default async function onboardBuyer(ctx) {
             body: form.toString(),
           });
           const text = await resp.text();
-          let data: any;
+          let data;
           try { data = JSON.parse(text); } catch { data = { raw: text }; }
           if (!resp.ok) throw new Error(`LeadByte buyer create failed (HTTP ${resp.status}).`);
           const lbBuyerId = data?.buyer_id || data?.id || data?.records?.[0]?.id || data?.data?.id || '';
@@ -731,7 +739,7 @@ export default async function onboardBuyer(ctx) {
           let bigQueryConfigured = false;
           try {
             const dests = await svc.entities.LeadByteConnector.filter({ kind: 'bigquery' });
-            bigQueryConfigured = Array.isArray(dests) && dests.some((d: any) => d.enabled);
+            bigQueryConfigured = Array.isArray(dests) && dests.some((d) => d.enabled);
           } catch { bigQueryConfigured = false; }
           if (!bigQueryConfigured) {
             markSkipped(step, 'No BigQuery delivery is configured, disposition scope handled by BuyerFeedback.');
@@ -748,24 +756,23 @@ export default async function onboardBuyer(ctx) {
           const contactName = str(payload.primary_contact_name) || 'there';
           const companyName = str(payload.company_name) || buyer.company_name || '';
           // Select subject and body by vertical.
-          const subjectByVertical: Record<string, string> = {
+          const subjectByVertical = {
             mva: 'Welcome to Legenex - Motor Vehicle Accident Leads',
             workers_comp: 'Welcome to Legenex - Workers Comp Leads',
             debt: 'Welcome to Legenex - Debt Leads',
           };
           const subject = subjectByVertical[vertical] || 'Welcome to Legenex';
-          const body = `Hi ${contactName},\n\nWelcome aboard. Your account for ${companyName} has been set up and we are getting everything ready for your first leads.\n\nWe will be in touch shortly with next steps.\n\nThank you,\nThe Legenex Team`;
-          const result = await db.asServiceRole.functions.invoke('sendGmail', {
-            to, subject, body,
+          const emailBody = `Hi ${contactName},\n\nWelcome aboard. Your account for ${companyName} has been set up and we are getting everything ready for your first leads.\n\nWe will be in touch shortly with next steps.\n\nThank you,\nThe Legenex Team`;
+          const data = await invokeFunction(ctx, 'sendGmail', {
+            to, subject, body: emailBody,
           });
-          const data = result?.data !== undefined ? result.data : result;
           const messageId = data?.message_id || data?.id || data?.messageId || '';
           step.external_id = messageId ? String(messageId) : 'sent';
         } else if (key === 'crm_contact') {
           // Optional GHL / LeadConnector integration. When not configured, skip
           // rather than block: a missing optional integration must not stop
           // onboarding.
-          let ghlCfg: any = null;
+          let ghlCfg = null;
           try {
             const cfgList = await svc.entities.IntegrationConfig.filter({ name: 'ghl' });
             ghlCfg = cfgList[0] || null;
@@ -778,7 +785,7 @@ export default async function onboardBuyer(ctx) {
             markSkipped(step, 'No GHL or LeadConnector integration is configured.');
             skipped = true;
           } else {
-            let parsed: any = {};
+            let parsed = {};
             try { parsed = JSON.parse(ghlCfg.config || '{}'); } catch { parsed = {}; }
             const apiKey = parsed.api_key || parsed.access_token;
             const locationId = parsed.location_id || '';
@@ -789,7 +796,7 @@ export default async function onboardBuyer(ctx) {
               const buyer = await svc.entities.Buyer.get(buyerId).catch(() => null);
               const firstName = str(payload.primary_contact_name).split(' ')[0] || '';
               const lastName = str(payload.primary_contact_name).split(' ').slice(1).join(' ') || '';
-              const contactBody: any = {
+              const contactBody = {
                 firstName, lastName,
                 email: str(payload.primary_contact_email) || buyer?.email || '',
                 phone: str(payload.primary_contact_phone) || buyer?.phone || '',
@@ -826,7 +833,7 @@ export default async function onboardBuyer(ctx) {
         return true;
       } catch (stepErr) {
         step.status = 'failed';
-        step.error = (stepErr as Error).message;
+        step.error = stepErr.message;
         await persist({ status: 'blocked', current_step: key });
         return false;
       }
@@ -851,7 +858,7 @@ export default async function onboardBuyer(ctx) {
     // onboarding is complete; otherwise it stays in_progress.
     const allDone = steps.every((s) => s.status === 'complete' || s.status === 'skipped');
     const finalStatus = allDone ? 'complete' : 'in_progress';
-    const patch: Record<string, any> = { current_step: null, status: finalStatus };
+    const patch = { current_step: null, status: finalStatus };
     if (allDone) patch.completed_at = new Date().toISOString();
     await persist(patch);
 
@@ -862,6 +869,6 @@ export default async function onboardBuyer(ctx) {
       intro_email_scheduled_for: introEmailTime,
     }, 200);
   } catch (error) {
-    return ctx.json({ error: (error as Error).message }, 500);
+    return ctx.json({ error: error.message }, 500);
   }
 }

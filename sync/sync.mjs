@@ -215,6 +215,18 @@ function regenShims() {
 }
 
 // ── backend function porting ─────────────────────────────────────────────────
+// True if `code` parses as valid JS (node --check on a temp file).
+function checkSyntax(code) {
+  const tmp = path.join(os.tmpdir(), `dashos-port-${process.pid}-${Math.abs(hashStr(code))}.mjs`);
+  try {
+    fs.writeFileSync(tmp, code);
+    execFileSync(process.execPath, ['--check', tmp], { stdio: 'ignore' });
+    return true;
+  } catch { return false; }
+  finally { try { fs.rmSync(tmp); } catch {} }
+}
+function hashStr(s) { let h = 0; for (let i = 0; i < s.length; i++) { h = (h * 31 + s.charCodeAt(i)) | 0; } return h; }
+
 function claudeAvailable() {
   try { execFileSync('claude', ['--version'], { encoding: 'utf8', env: { ...process.env, CLAUDE_NOTIFIER_DISABLE: '1' } }); return true; } catch { return false; }
 }
@@ -267,7 +279,10 @@ function claudePort(entrySrc, name) {
     {
       cwd: os.tmpdir(),
       encoding: 'utf8',
-      timeout: 240000,
+      // Large functions (e.g. the ~1800-line processLead) can take several
+      // minutes to port; keep this generous so they don't time out and fall
+      // back to a staged mechanical port. The hourly cadence has room for it.
+      timeout: 900000,
       maxBuffer: 32 * 1024 * 1024,
       // Silence the desktop notifier hooks for these automated invocations.
       env: { ...process.env, CLAUDE_NOTIFIER_DISABLE: '1' },
@@ -317,11 +332,14 @@ function portBackendFunction(name, { hasClaude, isNew }) {
   if (!ported) ported = mechanicalPort(src, name);
 
   // Sanity gate: reject ports that still contain platform tokens, don't look like
-  // a module (leaked prose), or lack the expected default export.
+  // a module (leaked prose), lack the expected default export, leave TypeScript
+  // syntax, or fail to parse. Anything suspect is staged, never applied.
   const hasForbidden = /Deno\.|createClientFromRequest|from ['"]npm:|\bbase44\b/i.test(ported);
   const looksLikeCode = /^\s*(import\b|export\b|const\b|\/\/|\/\*)/.test(ported);
   const hasExport = /export\s+default/.test(ported);
-  const dirty = hasForbidden || !looksLikeCode || !hasExport;
+  const hasTsSyntax = /:\s*(string|number|boolean|any|unknown|void)\b|:\s*Record<|<[A-Z]\w*(,\s*\w+)?>|^\s*interface\s/m.test(ported);
+  const syntaxOk = checkSyntax(ported);
+  const dirty = hasForbidden || !looksLikeCode || !hasExport || hasTsSyntax || !syntaxOk;
 
   if (isNew) {
     if (dirty) {

@@ -6,6 +6,7 @@
 // CAPI / webhooks) and delivery destinations, forwards qualified leads to
 // LeadByte, then maps the LeadByte response back to a layered supplier envelope.
 
+
 // Resolve phone_verified value from HLR result based on configured source
 function resolvePhoneVerified(hlrResult, source) {
   if (!hlrResult) return '';
@@ -43,6 +44,39 @@ function evalConditionalCondition(ctx, cond) {
     case 'not_exists': return raw === null || raw === undefined || String(raw).trim() === '';
     default: return false;
   }
+}
+
+// Normalize a calc rule's conditions value into an AND/OR group tree. Accepts a
+// legacy flat array of {field, operator, value}, an already-built group object,
+// or null/undefined. The value is already parsed, not a JSON string. Uses the
+// calc operator set via evalConditionalCondition, not the delivery-side operators.
+function normalizeCalcConditions(raw) {
+  if (Array.isArray(raw)) {
+    return {
+      type: 'group',
+      match: 'all',
+      children: raw.map((c) => ({ type: 'condition', field: c.field, operator: c.operator, value: c.value })),
+    };
+  }
+  if (raw && typeof raw === 'object' && raw.type === 'group') {
+    return raw;
+  }
+  return { type: 'group', match: 'all', children: [] };
+}
+
+// Recursively evaluate a calc condition group. Leaf conditions run through
+// evalConditionalCondition (the calc operator set). An empty group matches, so a
+// rule with no conditions still fires, exactly as [].every(...) returned true.
+function evalCalcNode(ctx, node, depth = 0) {
+  if (depth > 25) return true;
+  if (node.type === 'condition') return evalConditionalCondition(ctx, node);
+  if (node.type === 'group') {
+    const children = Array.isArray(node.children) ? node.children : [];
+    if (children.length === 0) return true;
+    if (node.match === 'any') return children.some((c) => evalCalcNode(ctx, c, depth + 1));
+    return children.every((c) => evalCalcNode(ctx, c, depth + 1));
+  }
+  return true;
 }
 
 function runCalculations(calcs, leadData, hlrResult, phoneVerifiedSource, phoneVerifiedFieldName, supplierType) {
@@ -94,8 +128,7 @@ function runCalculations(calcs, leadData, hlrResult, phoneVerifiedSource, phoneV
         const rules = Array.isArray(cfg.rules) ? cfg.rules : [];
         let output = cfg.fallback ?? '';
         for (const rule of rules) {
-          const conditions = Array.isArray(rule.conditions) ? rule.conditions : [];
-          const allMatch = conditions.every(cond => evalConditionalCondition(ctx, cond));
+          const allMatch = evalCalcNode(ctx, normalizeCalcConditions(rule.conditions));
           if (allMatch) { output = rule.output ?? ''; break; }
         }
         enriched[calc.output_token] = output;
@@ -595,16 +628,54 @@ function connectorMatchesFilters(conn, leadData, supplierAttribution, supplierRe
   return true;
 }
 
+// Normalize a raw filter_conditions value into a recursive AND/OR group tree.
+// Accepts a JSON string, an array, an object, null, or undefined. Legacy flat
+// arrays of {field, operator, value} become an all-match group so every saved
+// record keeps behaving exactly as before.
+function normalizeConditionTree(raw) {
+  if (!raw) return { type: 'group', match: 'all', children: [] };
+  let parsed = raw;
+  if (typeof raw === 'string') {
+    try { parsed = JSON.parse(raw); }
+    catch { return { type: 'group', match: 'all', children: [] }; }
+  }
+  if (Array.isArray(parsed)) {
+    if (parsed.length === 0) return { type: 'group', match: 'all', children: [] };
+    return {
+      type: 'group',
+      match: 'all',
+      children: parsed.map((c) => ({ type: 'condition', field: c.field, operator: c.operator, value: c.value })),
+    };
+  }
+  if (parsed && typeof parsed === 'object' && parsed.type === 'group') {
+    return parsed;
+  }
+  return { type: 'group', match: 'all', children: [] };
+}
+
+// Recursively evaluate a condition tree node against the enriched lead data.
+// A depth cap guards against cycles; beyond it, and for any unrecognised node
+// type, we return true so a malformed node never silently blocks a delivery.
+function evalConditionNode(node, leadData, depth = 0) {
+  if (depth > 25) return true;
+  if (!node || typeof node !== 'object') return true;
+  if (node.type === 'condition') {
+    return applyOperator(leadData[node.field], node.operator, node.value || '');
+  }
+  if (node.type === 'group') {
+    const children = Array.isArray(node.children) ? node.children : [];
+    if (children.length === 0) return true;
+    if (node.match === 'any') return children.some((c) => evalConditionNode(c, leadData, depth + 1));
+    return children.every((c) => evalConditionNode(c, leadData, depth + 1));
+  }
+  return true;
+}
+
 // Check if a connector's field conditions match the enriched lead data.
 // Uses the same applyOperator used for response mapping.
 function connectorMatchesConditions(conn, leadData) {
-  const conditions = parseJsonArray(conn.filter_conditions);
-  if (conditions.length === 0) return true;
-  for (const cond of conditions) {
-    const actual = leadData[cond.field];
-    if (!applyOperator(actual, cond.operator, cond.value || '')) return false;
-  }
-  return true;
+  const root = normalizeConditionTree(conn.filter_conditions);
+  return evalConditionNode(root, leadData);
 }
 
 // Does the current lead_route match a verification settings' route filter?
@@ -912,6 +983,76 @@ function checkRequiredFields(customFields, leadData) {
   return missing;
 }
 
+// Evaluate a single dry-run qualification condition (advisory only). Supports a
+// fixed op set. Malformed inputs never throw here; the caller wraps parsing in
+// try/catch and treats any failure as no advisory.
+function evalDryRunCondition(leadData, cond) {
+  const raw = leadData[cond.field];
+  const present = raw !== null && raw !== undefined && String(raw).trim() !== '';
+  switch (cond.op) {
+    case 'eq': return String(raw ?? '') === String(cond.value ?? '');
+    case 'neq': return String(raw ?? '') !== String(cond.value ?? '');
+    case 'in': return Array.isArray(cond.value) && cond.value.map(String).includes(String(raw ?? ''));
+    case 'not_in': return Array.isArray(cond.value) && !cond.value.map(String).includes(String(raw ?? ''));
+    case 'gt': return parseFloat(raw) > parseFloat(cond.value);
+    case 'gte': return parseFloat(raw) >= parseFloat(cond.value);
+    case 'lt': return parseFloat(raw) < parseFloat(cond.value);
+    case 'lte': return parseFloat(raw) <= parseFloat(cond.value);
+    case 'exists': return present;
+    case 'not_exists': return !present;
+    case 'matches': return new RegExp(String(cond.value)).test(String(raw ?? ''));
+    case 'within_months': {
+      const d = new Date(raw);
+      if (isNaN(d.getTime())) return false;
+      const months = Number(cond.value);
+      if (isNaN(months)) return false;
+      const cutoff = new Date();
+      cutoff.setMonth(cutoff.getMonth() - months);
+      return d >= cutoff && d <= new Date();
+    }
+    case 'between': {
+      if (!Array.isArray(cond.value) || cond.value.length !== 2) return false;
+      const n = parseFloat(raw);
+      return n >= parseFloat(cond.value[0]) && n <= parseFloat(cond.value[1]);
+    }
+    default: return false;
+  }
+}
+
+// Recursively evaluate a dry-run qualification node. Groups: all, any, not.
+// Leaves are {field, op, value}. Depth-capped; unrecognised nodes pass.
+function evalDryRunNode(leadData, node, depth = 0) {
+  if (depth > 25) return true;
+  if (!node || typeof node !== 'object') return true;
+  if (Array.isArray(node.all)) return node.all.every((c) => evalDryRunNode(leadData, c, depth + 1));
+  if (Array.isArray(node.any)) return node.any.some((c) => evalDryRunNode(leadData, c, depth + 1));
+  if (node.not !== undefined) return !evalDryRunNode(leadData, node.not, depth + 1);
+  if (node.field && node.op) return evalDryRunCondition(leadData, node);
+  return true;
+}
+
+// Normalize inbound field aliases onto leadPayload and return the resolved
+// core identity locals. Pure: same coalescing and same leadPayload assignments,
+// in the same order, as the original inline block.
+function applyInboundAliases(leadPayload) {
+  const mobile = leadPayload.mobile || leadPayload.phone1 || leadPayload.phone || leadPayload.phone_number || '';
+  const firstName = leadPayload.first_name || leadPayload.firstname || '';
+  const lastName = leadPayload.last_name || leadPayload.lastname || '';
+  const email = leadPayload.email || '';
+
+  if (!leadPayload.first_name && firstName) leadPayload.first_name = firstName;
+  if (!leadPayload.last_name && lastName) leadPayload.last_name = lastName;
+  if (!leadPayload.mobile && mobile) leadPayload.mobile = mobile;
+  if (!leadPayload.ip_address && leadPayload.ipaddress) leadPayload.ip_address = leadPayload.ipaddress;
+  if (!leadPayload.optin_url && leadPayload.optinurl) leadPayload.optin_url = leadPayload.optinurl;
+  if (!leadPayload.trustedform_url && leadPayload.trustedform_cert) leadPayload.trustedform_url = leadPayload.trustedform_cert;
+  if (!leadPayload.jornaya_token && leadPayload.jornaya_leadid) leadPayload.jornaya_token = leadPayload.jornaya_leadid;
+  if (!leadPayload.supplier_brand && leadPayload.brand) leadPayload.supplier_brand = leadPayload.brand;
+  if (!leadPayload.ad_label && leadPayload.utm_ad_label) leadPayload.ad_label = leadPayload.utm_ad_label;
+
+  return { firstName, lastName, mobile, email };
+}
+
 // Patterns that indicate a LeadByte rejection is due to missing/invalid fields
 const QUEUE_REJECTION_PATTERNS = ['missing', 'required', 'invalid', 'not provided'];
 
@@ -1003,8 +1144,12 @@ export default async function processLead(ctx) {
 
     const leadPayload = { ...payload };
     const inboundPhoneVerified = String(payload.phone_verified || '').trim();
+    const isDryRun = payload._dry_run === true;
+    const dryRunCampaignRef = payload._campaign;
     delete leadPayload['X-API-KEY'];
     delete leadPayload._supplier_key;
+    delete leadPayload._dry_run;
+    delete leadPayload._campaign;
     delete leadPayload.phone_verified;
 
     // ── a. AUTH ──────────────────────────────────────────────────────────
@@ -1030,6 +1175,62 @@ export default async function processLead(ctx) {
     const supplierAttribution = apiKeyRecord.type === 'master'
       ? 'Master' : (apiKeyRecord.supplier_name || 'Unknown');
 
+    // ── DRY RUN: validate only, zero side effects ─────────────────────────
+    // Runs after auth + supplierAttribution, before any entity write. A
+    // validation is not a request: the ApiKey usage counters are NOT touched.
+    if (isDryRun) {
+      const dryCustomFields = await db.entities.CustomField.list();
+      applyInboundAliases(leadPayload);
+      const missing = checkRequiredFields(dryCustomFields, leadPayload);
+
+      const trustedformUrl = leadPayload.trustedform_url || leadPayload.trustedform_cert || '';
+      const certMissing = String(trustedformUrl).trim() === '';
+
+      // Optional qualification advisory. Never influences live routing.
+      let qualification = null;
+      let certRequired = false;
+      if (dryRunCampaignRef !== undefined && dryRunCampaignRef !== null && String(dryRunCampaignRef).trim() !== '') {
+        let campaign = null;
+        try {
+          const byId = await db.entities.Campaign.filter({ id: String(dryRunCampaignRef) });
+          if (byId.length > 0) campaign = byId[0];
+          if (!campaign) {
+            const byName = await db.entities.Campaign.filter({ name: String(dryRunCampaignRef) });
+            if (byName.length > 0) campaign = byName[0];
+          }
+        } catch { campaign = null; }
+        if (campaign) {
+          certRequired = campaign.trustedform_required === true;
+          if (campaign.qualification_rules) {
+            try {
+              const rules = JSON.parse(campaign.qualification_rules);
+              qualification = { passed: evalDryRunNode(leadPayload, rules) };
+            } catch { qualification = null; }
+          }
+        }
+      }
+
+      const certBlocked = certRequired && certMissing;
+      const disqualified = qualification && qualification.passed === false;
+      let wouldBeStatus;
+      if (missing.length > 0 || certBlocked) wouldBeStatus = 'Queued';
+      else if (disqualified) wouldBeStatus = 'Disqualified';
+      else wouldBeStatus = 'Accepted';
+
+      const valid = missing.length === 0 && !certBlocked && !disqualified;
+
+      return ctx.json({
+        dry_run: true,
+        valid,
+        missing,
+        invalid: [],
+        cert_missing: certMissing,
+        qualification,
+        would_be_status: wouldBeStatus,
+        trace_id: traceId,
+      }, 200);
+    }
+
     await db.entities.ApiKey.update(apiKeyRecord.id, {
       last_used_at: new Date().toISOString(),
       request_count: (apiKeyRecord.request_count || 0) + 1,
@@ -1039,6 +1240,11 @@ export default async function processLead(ctx) {
     const now = new Date();
     const appSettingsArr = await db.entities.AppSettings.list();
     const appSettings = appSettingsArr[0] || {};
+    // Gateway mode: live (default), test, or capture_only. Anything missing,
+    // blank, or unrecognised is treated as live. Never throws.
+    const gatewayModeRaw = String(appSettings.gateway_mode || '').trim().toLowerCase();
+    const gatewayMode = ['live', 'test', 'capture_only'].includes(gatewayModeRaw) ? gatewayModeRaw : 'live';
+    const captureOnly = gatewayMode === 'capture_only';
     const tsFmt = appSettings.timestamp_format || 'MM/DD/YYYY HH:MM:SS';
     leadPayload.timestamp = formatTimestamp(now, tsFmt);
 
@@ -1084,20 +1290,7 @@ export default async function processLead(ctx) {
     }
 
     // ── Normalize field aliases ──────────────────────────────────────────
-    const mobile = leadPayload.mobile || leadPayload.phone1 || leadPayload.phone || leadPayload.phone_number || '';
-    const firstName = leadPayload.first_name || leadPayload.firstname || '';
-    const lastName = leadPayload.last_name || leadPayload.lastname || '';
-    const email = leadPayload.email || '';
-
-    if (!leadPayload.first_name && firstName) leadPayload.first_name = firstName;
-    if (!leadPayload.last_name && lastName) leadPayload.last_name = lastName;
-    if (!leadPayload.mobile && mobile) leadPayload.mobile = mobile;
-    if (!leadPayload.ip_address && leadPayload.ipaddress) leadPayload.ip_address = leadPayload.ipaddress;
-    if (!leadPayload.optin_url && leadPayload.optinurl) leadPayload.optin_url = leadPayload.optinurl;
-    if (!leadPayload.trustedform_url && leadPayload.trustedform_cert) leadPayload.trustedform_url = leadPayload.trustedform_cert;
-    if (!leadPayload.jornaya_token && leadPayload.jornaya_leadid) leadPayload.jornaya_token = leadPayload.jornaya_leadid;
-    if (!leadPayload.supplier_brand && leadPayload.brand) leadPayload.supplier_brand = leadPayload.brand;
-    if (!leadPayload.ad_label && leadPayload.utm_ad_label) leadPayload.ad_label = leadPayload.utm_ad_label;
+    const { firstName, lastName, mobile, email } = applyInboundAliases(leadPayload);
 
     await db.entities.Lead.update(leadId, {
       mapped_fields: JSON.stringify(leadPayload),
@@ -1455,6 +1648,80 @@ export default async function processLead(ctx) {
       if (!routeIs.event) fireDeliveries(db, allDestinations, customTrigger, enrichedData, leadId, supplierAttribution, supplierRecord);
     }
 
+    // ── CAPTURE-ONLY: enrich + evaluate, suppress all outbound delivery ──
+    // Runs before the direct/event bypass and before the no-connector error
+    // check, so capture-only never returns Sold and never errors/writes an
+    // ErrorLog when no default LeadByte connector exists. The lead is still
+    // fully enriched and gated above. We record which destinations WOULD have
+    // fired (and why), then queue the lead with no outbound call made.
+    if (captureOnly) {
+      const suppressed = [];
+
+      // Same trigger/filter/condition logic as fireConnectors / fireDeliveries,
+      // evaluated at the on_received trigger since that is when they would fire.
+      const evalTrigger = 'on_received';
+      const evalWouldFire = (conn, kind, triggers) => {
+        if (conn.enabled === false) return { would_fire: false, reason: 'Connector disabled' };
+        if (triggers.length > 0 && !triggers.includes(evalTrigger)) {
+          return { would_fire: false, reason: `Trigger mismatch: no ${evalTrigger} trigger` };
+        }
+        if (triggers.length === 0 && evalTrigger !== 'on_received') {
+          return { would_fire: false, reason: 'Trigger mismatch: empty triggers fire at intake only' };
+        }
+        if (!connectorMatchesFilters(conn, enrichedData, supplierAttribution, supplierRecord)) {
+          return { would_fire: false, reason: 'Filter mismatch' };
+        }
+        if (!connectorMatchesConditions(conn, enrichedData)) {
+          return { would_fire: false, reason: 'Condition mismatch' };
+        }
+        return { would_fire: true, reason: `Matched filters and ${evalTrigger} trigger` };
+      };
+
+      for (const conn of apiConnectors) {
+        const res = evalWouldFire(conn, conn.kind || 'facebook_capi', parseJsonArray(conn.triggers));
+        suppressed.push({ connector: conn.name, kind: conn.kind || 'facebook_capi', trigger: evalTrigger, would_fire: res.would_fire, reason: res.reason });
+      }
+      for (const dest of allDestinations) {
+        if (dest.is_default) continue; // default connector is evaluated separately as leadbyte
+        const res = evalWouldFire(dest, 'delivery', parseJsonArray(dest.triggers));
+        suppressed.push({ connector: dest.api_name, kind: 'delivery', trigger: evalTrigger, would_fire: res.would_fire, reason: res.reason });
+      }
+      if (leadByteConnector) {
+        const lbTriggers = parseJsonArray(leadByteConnector.triggers);
+        const lbAllowedByTrigger = lbTriggers.length === 0 || lbTriggers.includes(evalTrigger);
+        let lbWouldFire;
+        let lbReason;
+        if (!lbAllowedByTrigger) {
+          lbWouldFire = false; lbReason = `Trigger mismatch: no ${evalTrigger} trigger`;
+        } else if (!connectorMatchesFilters(leadByteConnector, enrichedData, supplierAttribution, supplierRecord)) {
+          lbWouldFire = false; lbReason = 'Filter mismatch';
+        } else if (!connectorMatchesConditions(leadByteConnector, enrichedData)) {
+          lbWouldFire = false; lbReason = 'Condition mismatch';
+        } else {
+          lbWouldFire = true; lbReason = `Matched filters and ${evalTrigger} trigger`;
+        }
+        suppressed.push({ connector: leadByteConnector.api_name || leadByteConnector.name || 'LeadByte', kind: 'leadbyte', trigger: evalTrigger, would_fire: lbWouldFire, reason: lbReason });
+      }
+
+      const captureReason = 'Captured for testing. Outbound delivery intentionally suppressed.';
+      const suppressedJson = JSON.stringify(suppressed);
+      const captureResponse = buildEnvelope(traceId, {
+        ok: true, acceptance: 'accepted', lead_id: systemLeadId, lead_status: 'queued',
+        code: 'CAPTURE_ONLY', reason: captureReason,
+        message: 'Lead captured. No downstream delivery was attempted.', Response: 'Queued',
+      });
+      await db.entities.Lead.update(leadId, {
+        final_status: 'Queued',
+        queue_reason_code: 'CAPTURE_ONLY',
+        queue_reason: captureReason,
+        suppressed_deliveries: suppressedJson,
+        processed_at: new Date().toISOString(),
+        process_time_ms: Date.now() - startTime,
+        response_returned: JSON.stringify(captureResponse),
+      });
+      return ctx.json(captureResponse, 200);
+    }
+
     // ── e. ROUTE: direct / event bypass LeadByte ────────────────────────
     if (!routeIs.standard) {
       // Inject revenue (0 for direct/event routes) so {{revenue}} resolves in CAPI custom_data.
@@ -1485,14 +1752,22 @@ export default async function processLead(ctx) {
         code: 'LB_ERROR', reason: 'No active LeadByte connector configured',
         message: 'No active LeadByte connector configured', Response: 'Error',
       });
+      const noConnStatus = String(enrichedData.lead_status || leadPayload.lead_status || '').trim();
+      const noConnFinalStatus = {
+        Qualified: 'Qualified', Disqualified: 'Disqualified', Sold: 'Sold',
+        Unsold: 'Unsold', Rejected: 'Unsold', Duplicate: 'Duplicate',
+        Duplicates: 'Duplicate', Queued: 'Queued',
+      }[noConnStatus] || 'Queued';
       await db.entities.Lead.update(leadId, {
-        final_status: 'Error', error_stage: 'leadbyte',
+        final_status: noConnFinalStatus,
+        delivery_error: 'No active LeadByte connector configured',
+        error_stage: 'leadbyte',
         processed_at: new Date().toISOString(),
         process_time_ms: Date.now() - startTime,
         response_returned: JSON.stringify(noConnResponse),
       });
       await db.entities.ErrorLog.create({
-        lead_id: leadId, stage: 'leadbyte', severity: 'critical',
+        lead_id: leadId, stage: 'leadbyte', severity: 'info',
         message: 'No active LeadByte connector configured',
         supplier_name: supplierAttribution,
       });

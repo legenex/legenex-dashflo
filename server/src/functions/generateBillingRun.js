@@ -1,6 +1,3 @@
-// AUTO-PORTED (mechanical fallback) on 2026-07-10T14:37:03.097Z — REVIEW RECOMMENDED.
-// Verify: auth (requireUser), credentials via ctx.config.integrations.*, and LLM via ../integrations/llm.js.
-
 // generateBillingRun
 //
 // Computes a billing run for one counterparty (a buyer or a supplier) over one
@@ -146,11 +143,10 @@ export default async function generateBillingRun(ctx) {
     const db = ctx.db;
 
     // ── AUTH GUARD (copied from operationsData exactly) ──────────────────
-    let user = null;
-    try { user = await db.auth.me(); } catch { user = null; }
+    const user = ctx.user;
     if (!user) return ctx.json({ error: 'Unauthorized' }, 401);
 
-    const record = await db.asServiceRole.entities.User.get(user.id).catch(() => null);
+    const record = await db.entities.User.get(user.id).catch(() => null);
     const caller = record || user;
 
     if (caller.base_role === 'supplier' || caller.base_role === 'buyer') {
@@ -160,7 +156,7 @@ export default async function generateBillingRun(ctx) {
       return ctx.json({ error: 'Forbidden' }, 403);
     }
 
-    let permissions: Record<string, any> = {};
+    let permissions = {};
     try {
       permissions = typeof caller.permissions === 'string'
         ? JSON.parse(caller.permissions || '{}')
@@ -172,7 +168,7 @@ export default async function generateBillingRun(ctx) {
     }
 
     // ── ARGUMENTS ────────────────────────────────────────────────────────
-    const body = ctx.body => ({}));
+    const body = ctx.body || {};
     const scope = body && typeof body.scope === 'string' ? body.scope.trim() : '';
     const buyerId = body && body.buyer_id ? String(body.buyer_id) : null;
     const supplierId = body && body.supplier_id ? String(body.supplier_id) : null;
@@ -202,18 +198,18 @@ export default async function generateBillingRun(ctx) {
       return ctx.json({ error: 'period_end must not be before period_start' }, 400);
     }
 
-    const svc = db.asServiceRole;
-    const notes: string[] = [];
+    const svc = db;
+    const notes = [];
     const { startMs, endMs } = periodBoundsUtc(periodStart, periodEnd);
 
     // ── SELECT LEADS ───────────────────────────────────────────────────────
     // We over-fetch by created_date (import time) with a wide guard, then bucket
     // precisely by the lead's real event time inside the app timezone. created_date
     // is import time, so we cannot filter on it; we scan and bucket by timestamp.
-    let leadFilter: Record<string, any> = {};
+    let leadFilter = {};
     let supplierFallbackUsed = 0;
-    let supplierRecord: any = null;
-    let buyerRecord: any = null;
+    let supplierRecord = null;
+    let buyerRecord = null;
 
     if (scope === 'buyer') {
       buyerRecord = await svc.entities.Buyer.get(buyerId).catch(() => null);
@@ -227,7 +223,7 @@ export default async function generateBillingRun(ctx) {
     // For a supplier run, select by supplier_key_id, falling back to
     // supplier_name only when the key is absent. We resolve the supplier's
     // ApiKey ids first, then scan; leads without a key are matched by name.
-    let supplierKeyIds: string[] = [];
+    let supplierKeyIds = [];
     if (scope === 'supplier') {
       const keys = await loadAll(svc.entities.ApiKey, { supplier_id: supplierId });
       supplierKeyIds = keys.map((k) => k.id);
@@ -235,11 +231,11 @@ export default async function generateBillingRun(ctx) {
 
     // Load leads for the counterparty. Buyer runs filter server side by buyer_id.
     // Supplier runs scan by each key id, then by name for keyless leads.
-    let candidateLeads: any[] = [];
+    let candidateLeads = [];
     if (scope === 'buyer') {
       candidateLeads = await loadAll(svc.entities.Lead, leadFilter);
     } else {
-      const byKey: any[] = [];
+      const byKey = [];
       for (const kid of supplierKeyIds) {
         const batch = await loadAll(svc.entities.Lead, { supplier_key_id: kid });
         byKey.push(...batch);
@@ -282,7 +278,7 @@ export default async function generateBillingRun(ctx) {
     // Requested and rejected returns are counted separately and not deducted.
     const leadIds = new Set(leads.map((l) => l.id));
     const allReturns = await loadAll(svc.entities.ReturnRequest);
-    const approvedReturnLeadIds = new Set<string>();
+    const approvedReturnLeadIds = new Set();
     let requestedReturns = 0;
     let rejectedReturns = 0;
     for (const r of allReturns) {
@@ -306,7 +302,7 @@ export default async function generateBillingRun(ctx) {
     // Each billable lead resolves to a unit price. Grouping keys and the run
     // totals accumulate here. Unpriced leads are counted and reported, never
     // priced at zero silently.
-    const groups = new Map<string, any>();
+    const groups = new Map();
     let unpricedLeads = 0;
     let gross = 0;
     let iplFees = 0;
@@ -326,7 +322,7 @@ export default async function generateBillingRun(ctx) {
       const stateCplRows = (await loadAll(svc.entities.BuyerStateCpl, { buyer_id: buyerId }))
         .filter((r) => r.active !== false);
       // Index BuyerStateCpl by vertical|state for O(1) lookup.
-      const stateCplIndex = new Map<string, any>();
+      const stateCplIndex = new Map();
       for (const row of stateCplRows) {
         stateCplIndex.set(`${row.vertical}|${String(row.state || '').toUpperCase()}`, row);
       }
@@ -341,7 +337,7 @@ export default async function generateBillingRun(ctx) {
         if (e.returned) continue; // not billable
 
         // 1) Highest-priority matching active BuyerCplRule wins.
-        let unitPrice: number | null = null;
+        let unitPrice = null;
         for (const rule of cplRules) {
           // Optional scoping by vertical when the rule sets one.
           if (rule.vertical && rule.vertical !== e.vertical) continue;
@@ -394,7 +390,7 @@ export default async function generateBillingRun(ctx) {
       // ── SUPPLIER PRICING ─────────────────────────────────────────────────
       const sources = await loadAll(svc.entities.SupplierSource, { supplier_id: supplierId });
       // Index by normalized utm_source for matching.
-      const sourceByUtm = new Map<string, any>();
+      const sourceByUtm = new Map();
       for (const s of sources) {
         if (s.utm_source) sourceByUtm.set(String(s.utm_source).trim().toLowerCase(), s);
       }
@@ -408,8 +404,8 @@ export default async function generateBillingRun(ctx) {
         const utm = String(e.fields.utm_source || '').trim().toLowerCase();
         const source = utm ? sourceByUtm.get(utm) : null;
 
-        let unitPrice: number | null = null;
-        let sourceCode: string | null = null;
+        let unitPrice = null;
+        let sourceCode = null;
 
         if (source) {
           sourceCode = source.source_code || null;
@@ -492,7 +488,7 @@ export default async function generateBillingRun(ctx) {
 
     // Build line items with descriptions and per-line ipl for buyer runs.
     const lineItems = Array.from(groups.values()).map((g) => {
-      const item: any = {
+      const item = {
         vertical: g.vertical,
         state: g.state,
         campaign_id: g.campaign_id,
@@ -548,11 +544,11 @@ export default async function generateBillingRun(ctx) {
       },
       notes,
       committed: false,
-      billing_run_id: null as string | null,
+      billing_run_id: null,
     };
 
     if (!commit) {
-      return ctx.json(summary);
+      return summary;
     }
 
     // ── COMMIT: idempotency / double-billing guard ─────────────────────────
@@ -591,7 +587,7 @@ export default async function generateBillingRun(ctx) {
       generated_by: caller.id,
     };
 
-    let runId: string;
+    let runId;
     if (existing && existing.status === 'draft') {
       // Replace the draft run and its line items rather than creating a second.
       const oldItems = await loadAll(svc.entities.BillingLineItem, { billing_run_id: existing.id });
@@ -616,8 +612,8 @@ export default async function generateBillingRun(ctx) {
     summary.committed = true;
     summary.billing_run_id = runId;
     summary.notes = notes;
-    return ctx.json(summary);
+    return summary;
   } catch (error) {
-    return ctx.json({ error: (error as Error).message }, 500);
+    return ctx.json({ error: error.message }, 500);
   }
 }
