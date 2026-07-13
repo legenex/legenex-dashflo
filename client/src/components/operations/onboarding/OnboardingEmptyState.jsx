@@ -2,6 +2,7 @@ import React, { useState, useRef } from 'react';
 import { Inbox, Copy, Check } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { PUBLIC_APPLICATION_URL } from '@/components/apply/applyConstants';
 
 // Shown when there are no onboarding records. Explains where submissions come
 // from and offers a copyable link to the public application form.
@@ -9,9 +10,9 @@ export default function OnboardingEmptyState() {
   const [copied, setCopied] = useState(false);
   const inputRef = useRef(null);
 
-  // Build the absolute onboarding URL from the live origin so it is correct in
-  // every environment (e.g. https://dashboard.legenex.com/apply).
-  const applyUrl = typeof window !== 'undefined' ? `${window.location.origin}/apply` : '/apply';
+  // Canonical production application URL. Uses the shared constant rather than
+  // the runtime origin, so the shared link is correct even inside the preview.
+  const applyUrl = PUBLIC_APPLICATION_URL;
 
   const handleCopy = async () => {
     try {
@@ -56,7 +57,7 @@ export default function OnboardingEmptyState() {
       </div>
 
       <a
-        href="/apply"
+        href={applyUrl}
         target="_blank"
         rel="noreferrer"
         className="mt-2 font-mono text-[12px] text-primary hover:underline break-all"

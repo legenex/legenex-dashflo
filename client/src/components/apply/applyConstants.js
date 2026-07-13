@@ -1,6 +1,11 @@
 // Public onboarding constants. Kept separate from operator-side helpers so the
 // /apply flow stays fully decoupled from the authenticated shell.
 
+// Canonical production URL for the public application form. Defined once here so
+// the shared link is correct even inside the editor/preview (where the runtime
+// origin is a preview host). Update this single place if the domain changes.
+export const PUBLIC_APPLICATION_URL = 'https://dashboard.legenex.com/apply';
+
 // Fifty states plus DC, matching the server side allow list in
 // submitBuyerOnboarding. Two letter codes, uppercase, alphabetical.
 export const APPLY_STATES = [
