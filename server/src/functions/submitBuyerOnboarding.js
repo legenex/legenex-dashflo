@@ -1,3 +1,5 @@
+import { sendMail } from '../lib/mailer.js';
+
 // Public buyer onboarding intake (/functions/submitBuyerOnboarding).
 // Unauthenticated. It validates the submission, rate limits by IP, dedupes on
 // company_name + email within ten minutes, and writes exactly one
@@ -5,7 +7,7 @@
 //
 // This function ONLY records the submission. It does not create a Buyer, does
 // not allocate a buyer_code, and never contacts Stripe, Xero, LeadByte, GHL or
-// Rebrandly, and sends no email.
+// Rebrandly.
 
 // Fifty states plus DC. This is the authoritative server side allow list, so
 // the client can never widen it.
@@ -29,9 +31,10 @@ const RATE_MAX = 8;
 const ipHits = new Map();
 
 function clientIp(req) {
-  const fwd = req.headers['x-forwarded-for'];
+  const headers = (req && req.headers) || {};
+  const fwd = headers['x-forwarded-for'];
   if (fwd) return String(fwd).split(',')[0].trim();
-  return req.headers['x-real-ip'] || req.ip || 'unknown';
+  return headers['x-real-ip'] || (req && req.ip) || 'unknown';
 }
 
 function rateLimited(ip) {
@@ -47,14 +50,14 @@ function str(v) {
 }
 
 export default async function submitBuyerOnboarding(ctx) {
-  const { req } = ctx;
-
-  if (req.method === 'OPTIONS') return ctx.json({}, 204);
-  if (req.method === 'GET') return ctx.json({ status: 'ok' }, 200);
-  if (req.method !== 'POST') return ctx.json({ error: 'Method not allowed' }, 405);
+  const method = ctx.req && ctx.req.method;
+  if (method === 'OPTIONS') return ctx.json({}, 204);
+  if (method === 'GET') return ctx.json({ status: 'ok' }, 200);
+  if (method && method !== 'POST') return ctx.json({ error: 'Method not allowed' }, 405);
 
   try {
-    const ip = clientIp(req);
+    const db = ctx.db;
+    const ip = clientIp(ctx.req);
     if (rateLimited(ip)) {
       return ctx.json(
         { error: 'Too many submissions from this network. Please wait a moment and try again.' },
@@ -62,8 +65,8 @@ export default async function submitBuyerOnboarding(ctx) {
       );
     }
 
-    const db = ctx.db;
     const body = ctx.body || {};
+    const token = str(body.token);
 
     // ── Server side validation. Never trust the client. ──────────────────
     const fieldErrors = {};
@@ -113,6 +116,55 @@ export default async function submitBuyerOnboarding(ctx) {
       );
     }
 
+    // Token flow: a buyer-first onboarding link. Update the existing invited
+    // record for this buyer instead of creating a new submission. buyer_id is
+    // already set on that record, so the submission stays tied to the buyer.
+    if (token) {
+      const list = await db.entities.BuyerOnboarding.filter({ token });
+      const rec = (Array.isArray(list) ? list : [])[0];
+      if (!rec) {
+        return ctx.json({ error: 'Invalid or expired onboarding link.' }, 404);
+      }
+      if (rec.status === 'cancelled') {
+        return ctx.json({ error: 'This onboarding link is no longer active.' }, 410);
+      }
+      if (rec.status === 'complete') {
+        return ctx.json({ status: 'duplicate', onboarding_id: rec.id, company_name: rec.company_name }, 200);
+      }
+      const wasInvited = rec.status === 'invited';
+      const patch = {
+        form_payload: JSON.stringify(body),
+        submitted_at: new Date().toISOString(),
+      };
+      if (wasInvited) patch.status = 'submitted';
+      await db.entities.BuyerOnboarding.update(rec.id, patch);
+
+      if (wasInvited) {
+        try {
+          const tplList = await db.entities.OnboardingEmailTemplate.filter({ event: 'submitted' });
+          const tpl = (Array.isArray(tplList) ? tplList : [])[0] || null;
+          if (tpl && tpl.enabled !== false) {
+            const buyer = rec.buyer_id ? await db.entities.Buyer.get(rec.buyer_id).catch(() => null) : null;
+            const to = str(body.primary_contact_email) || (buyer && buyer.email) || '';
+            if (to) {
+              const vars = {
+                company_name: (buyer && buyer.company_name) || rec.company_name || str(body.company_name) || '',
+                contact_name: str(body.primary_contact_name) || 'there',
+                buyer_code: (buyer && buyer.buyer_code) || '',
+                vertical: (buyer && buyer.vertical) || str(body.vertical) || '',
+              };
+              const renderTpl = (s) => String(s || '').replace(/\{\{\s*(\w+)\s*\}\}/g, (_m, k) => (k in vars ? String(vars[k]) : ''));
+              await sendMail({ to, subject: renderTpl(tpl.subject), text: renderTpl(tpl.body) });
+            }
+          }
+        } catch (_e) {
+          // Non-fatal: the submission still succeeds even if the email fails.
+        }
+      }
+
+      return ctx.json({ status: 'ok', onboarding_id: rec.id, company_name: rec.company_name }, 200);
+    }
+
     // ── Duplicate guard: same company_name + email within ten minutes. ────
     const tenMinutesAgo = Date.now() - 10 * 60 * 1000;
     const recent = await db.entities.BuyerOnboarding.filter(
@@ -124,7 +176,7 @@ export default async function submitBuyerOnboarding(ctx) {
       let payloadEmail = '';
       try {
         const p = typeof r.form_payload === 'string' ? JSON.parse(r.form_payload) : (r.form_payload || {});
-        payloadEmail = str(p?.primary_contact_email).toLowerCase();
+        payloadEmail = str(p && p.primary_contact_email).toLowerCase();
       } catch { payloadEmail = ''; }
       const submittedMs = r.submitted_at ? new Date(r.submitted_at).getTime()
         : (r.created_date ? new Date(r.created_date).getTime() : 0);

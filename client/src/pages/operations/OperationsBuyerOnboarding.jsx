@@ -10,12 +10,14 @@ import OnboardingTiles from '@/components/operations/onboarding/OnboardingTiles'
 import OnboardingTable from '@/components/operations/onboarding/OnboardingTable';
 import OnboardingEmptyState from '@/components/operations/onboarding/OnboardingEmptyState';
 import OnboardingDrawer from '@/components/operations/onboarding/OnboardingDrawer';
+import OnboardingEmailSettings from '@/components/operations/onboarding/OnboardingEmailSettings';
 import { STATUS_TABS, tabCounts } from '@/components/operations/onboarding/onboardingModel';
 
 export default function OperationsBuyerOnboarding() {
   useTheme();
   const qc = useQueryClient();
   const [tab, setTab] = useState('all');
+  const [view, setView] = useState('pipeline');
   const [sortKey, setSortKey] = useState('submitted_at');
   const [sortDir, setSortDir] = useState('desc');
   const [drawerId, setDrawerId] = useState(null);
@@ -111,7 +113,22 @@ export default function OperationsBuyerOnboarding() {
         <RefreshButton onClick={refresh} />
       </SectionHeader>
 
-      {records.length === 0 ? (
+      <div className="flex gap-1 border-b border-border">
+        {[{ key: 'pipeline', label: 'Pipeline' }, { key: 'emails', label: 'Emails' }].map((v) => (
+          <button
+            key={v.key}
+            onClick={() => setView(v.key)}
+            className={`px-3.5 py-2 text-[13px] font-medium transition-colors border-b-2 -mb-px
+              ${view === v.key ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground'}`}
+          >
+            {v.label}
+          </button>
+        ))}
+      </div>
+
+      {view === 'emails' ? (
+        <OnboardingEmailSettings />
+      ) : records.length === 0 ? (
         <OnboardingEmptyState />
       ) : (
         <>
@@ -144,15 +161,17 @@ export default function OperationsBuyerOnboarding() {
         </>
       )}
 
-      <OnboardingDrawer
-        open={!!drawerRecord}
-        onOpenChange={(v) => { if (!v) setDrawerId(null); }}
-        record={drawerRecord}
-        buyer={drawerBuyer}
-        running={running}
-        onRun={runOnboarding}
-        onCancel={cancelOnboarding}
-      />
+      {view === 'pipeline' && (
+        <OnboardingDrawer
+          open={!!drawerRecord}
+          onOpenChange={(v) => { if (!v) setDrawerId(null); }}
+          record={drawerRecord}
+          buyer={drawerBuyer}
+          running={running}
+          onRun={runOnboarding}
+          onCancel={cancelOnboarding}
+        />
+      )}
     </div>
   );
 }

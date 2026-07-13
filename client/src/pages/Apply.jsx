@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { api } from '@/api/client';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Check, ArrowRight, ArrowLeft, Loader2, CheckCircle2 } from 'lucide-react';
@@ -80,6 +80,20 @@ export default function Apply() {
   const [submitting, setSubmitting] = useState(false);
   const [result, setResult] = useState(null); // { status, company_name }
   const [globalError, setGlobalError] = useState('');
+  const [token] = useState(() => { try { return new URLSearchParams(window.location.search).get('token') || ''; } catch { return ''; } });
+  const [inherited, setInherited] = useState(null);
+  const [linkError, setLinkError] = useState('');
+
+  useEffect(() => {
+    if (!token) return;
+    api.functions.invoke('getOnboardingContext', { token })
+      .then((res) => {
+        const ctx = res?.data || {};
+        setInherited(ctx);
+        setForm((f) => ({ ...f, company_name: ctx.company_name || f.company_name, client_type: ctx.client_type || f.client_type }));
+      })
+      .catch((e) => setLinkError(e?.response?.data?.error || 'This onboarding link is invalid or no longer active.'));
+  }, [token]);
 
   const set = (key, value) => {
     setForm((f) => ({ ...f, [key]: value }));
@@ -139,6 +153,7 @@ export default function Apply() {
       initial_batch_size: form.initial_batch_size === '' ? '' : Number(form.initial_batch_size),
       lead_notification_emails: emails,
       tcpa_outbound_phones: outbound,
+      ...(token ? { token } : {}),
     };
   };
 
@@ -202,6 +217,11 @@ export default function Apply() {
           <p className="mt-2 text-sm text-muted-foreground">
             Tell us about your firm and coverage needs. Takes a few minutes.
           </p>
+          {inherited && (
+            <p className="mt-1.5 text-[13px] text-muted-foreground">
+              Onboarding for {inherited.company_name}
+            </p>
+          )}
         </div>
 
         {/* Step indicator */}
@@ -233,6 +253,12 @@ export default function Apply() {
 
         {/* Card */}
         <div className="rounded-2xl border border-border bg-card p-6 sm:p-8 shadow-[0_24px_64px_-24px_rgba(0,0,0,0.5)]">
+          {linkError && (
+            <div className="mb-6 rounded-lg border border-primary/30 bg-primary/10 px-3.5 py-2.5 text-[13px] text-primary">
+              {linkError}
+            </div>
+          )}
+
           {/* Section heading */}
           <div className="mb-6">
             <div className="text-[11px] font-mono uppercase tracking-[0.18em] text-muted-foreground">
@@ -249,9 +275,9 @@ export default function Apply() {
               exit={{ opacity: 0, x: -16 }}
               transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
             >
-              {step === 0 && <CompanyStep form={form} set={set} errors={errors} />}
+              {step === 0 && <CompanyStep form={form} set={set} errors={errors} locked={!!inherited} />}
               {step === 1 && <ContactsStep form={form} set={set} errors={errors} />}
-              {step === 2 && <CoverageStep form={form} set={set} errors={errors} />}
+              {step === 2 && <CoverageStep form={form} set={set} errors={errors} locked={!!inherited} />}
               {step === 3 && <CommercialsStep form={form} set={set} errors={errors} />}
               {step === 4 && <DeliveryStep form={form} set={set} errors={errors} />}
               {step === 5 && <ComplianceStep form={form} set={set} errors={errors} />}

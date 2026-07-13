@@ -1,4 +1,5 @@
-import { getFunction } from './index.js';
+import { sendMail } from '../lib/mailer.js';
+import allocateBuyerCode from './allocateBuyerCode.js';
 
 // Operator-only buyer onboarding orchestrator (/functions/onboardBuyer).
 //
@@ -48,17 +49,6 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 function str(v) {
   return typeof v === 'string' ? v.trim() : (v == null ? '' : String(v).trim());
-}
-
-// Invoke a sibling function in-process with the operator context. Unwraps the
-// runtime's { __httpResponse } envelope so the caller reads the plain payload,
-// mirroring the original service-role invoke().
-async function invokeFunction(ctx, name, body) {
-  const fn = getFunction(name);
-  if (!fn) throw new Error(`${name} function is not available`);
-  const result = await fn({ ...ctx, body });
-  if (result && result.__httpResponse) return result.body;
-  return result;
 }
 
 // Build a fresh steps array with every key present. Merge in any existing
@@ -336,7 +326,7 @@ export default async function onboardBuyer(ctx) {
     const db = ctx.db;
 
     // ── Operator authorization guard, copied from operationsData exactly. ──
-    const user = ctx.user;
+    const user = ctx.user || null;
     if (!user) return ctx.json({ error: 'Unauthorized' }, 401);
 
     const record = await db.entities.User.get(user.id).catch(() => null);
@@ -490,9 +480,8 @@ export default async function onboardBuyer(ctx) {
             // Already allocated: never allocate twice.
             step.external_id = buyer.buyer_code;
           } else {
-            const data = await invokeFunction(ctx, 'allocateBuyerCode', {
-              client_type: buyer.client_type,
-            });
+            const result = await allocateBuyerCode({ ...ctx, body: { client_type: buyer.client_type } });
+            const data = result?.data !== undefined ? result.data : result;
             const code = data?.buyer_code;
             if (!code) {
               throw new Error(data?.error || 'allocateBuyerCode did not return a code.');
@@ -752,22 +741,30 @@ export default async function onboardBuyer(ctx) {
           if (!buyer) throw new Error('Buyer record not found for onboarding email.');
           const to = str(payload.primary_contact_email) || buyer.email || '';
           if (!to) throw new Error('No recipient email for the onboarding email.');
-          const vertical = str(buyer.vertical) || str(payload.vertical);
           const contactName = str(payload.primary_contact_name) || 'there';
           const companyName = str(payload.company_name) || buyer.company_name || '';
-          // Select subject and body by vertical.
-          const subjectByVertical = {
-            mva: 'Welcome to Legenex - Motor Vehicle Accident Leads',
-            workers_comp: 'Welcome to Legenex - Workers Comp Leads',
-            debt: 'Welcome to Legenex - Debt Leads',
-          };
-          const subject = subjectByVertical[vertical] || 'Welcome to Legenex';
-          const emailBody = `Hi ${contactName},\n\nWelcome aboard. Your account for ${companyName} has been set up and we are getting everything ready for your first leads.\n\nWe will be in touch shortly with next steps.\n\nThank you,\nThe Legenex Team`;
-          const data = await invokeFunction(ctx, 'sendGmail', {
-            to, subject, body: emailBody,
-          });
-          const messageId = data?.message_id || data?.id || data?.messageId || '';
-          step.external_id = messageId ? String(messageId) : 'sent';
+          const tplList = await svc.entities.OnboardingEmailTemplate.filter({ event: 'complete' });
+          const tpl = (Array.isArray(tplList) ? tplList : [])[0] || null;
+          if (tpl && tpl.enabled === false) {
+            markSkipped(step, 'Complete email is disabled in settings.');
+            skipped = true;
+          } else {
+            const vars = {
+              company_name: companyName,
+              contact_name: contactName,
+              buyer_code: buyer.buyer_code || '',
+              vertical: str(buyer.vertical) || str(payload.vertical) || '',
+            };
+            const renderTpl = (s) => String(s || '').replace(/\{\{\s*(\w+)\s*\}\}/g, (_m, k) => (k in vars ? String(vars[k]) : ''));
+            const subject = tpl && tpl.subject ? renderTpl(tpl.subject) : 'Welcome to Legenex';
+            const emailBody = tpl && tpl.body
+              ? renderTpl(tpl.body)
+              : `Hi ${contactName},\n\nWelcome aboard. Your account for ${companyName} has been set up and we are getting everything ready for your first leads.\n\nWe will be in touch shortly with next steps.\n\nThank you,\nThe Legenex Team`;
+            const result = await sendMail({ to, subject, text: emailBody, body: emailBody });
+            const data = result?.data !== undefined ? result.data : result;
+            const messageId = data?.message_id || data?.id || data?.messageId || '';
+            step.external_id = messageId ? String(messageId) : 'sent';
+          }
         } else if (key === 'crm_contact') {
           // Optional GHL / LeadConnector integration. When not configured, skip
           // rather than block: a missing optional integration must not stop
@@ -845,6 +842,34 @@ export default async function onboardBuyer(ctx) {
     for (let i = startIndex; i < STEP_ORDER.length; i++) {
       const ok = await runStep(STEP_ORDER[i]);
       if (!ok) {
+        try {
+          const btplList = await svc.entities.OnboardingEmailTemplate.filter({ event: 'blocked' });
+          const btpl = (Array.isArray(btplList) ? btplList : [])[0] || null;
+          if (btpl && btpl.enabled !== false) {
+            let recips = [];
+            try { recips = JSON.parse(btpl.recipients || '[]'); } catch { recips = []; }
+            recips = (Array.isArray(recips) ? recips : []).map((r) => String(r).trim()).filter(Boolean);
+            if (recips.length > 0) {
+              const bbuyer = buyerId ? await svc.entities.Buyer.get(buyerId).catch(() => null) : null;
+              const failed = steps.find((s) => s.status === 'failed');
+              const bvars = {
+                company_name: (bbuyer && bbuyer.company_name) || str(payload.company_name) || onboarding.company_name || '',
+                buyer_code: (bbuyer && bbuyer.buyer_code) || '',
+                vertical: (bbuyer && bbuyer.vertical) || str(payload.vertical) || '',
+                failed_step: failed ? String(failed.key) : String(STEP_ORDER[i]),
+                contact_name: str(payload.primary_contact_name) || 'there',
+              };
+              const brender = (s) => String(s || '').replace(/\{\{\s*(\w+)\s*\}\}/g, (_m, k) => (k in bvars ? String(bvars[k]) : ''));
+              const bsubject = brender(btpl.subject);
+              const bbody = brender(btpl.body);
+              for (const to of recips) {
+                await sendMail({ to, subject: bsubject, text: bbody, body: bbody });
+              }
+            }
+          }
+        } catch (_e) {
+          // Non-fatal: a failed alert must not change the blocked outcome.
+        }
         return ctx.json({
           onboarding_id: onboardingId,
           status: 'blocked',

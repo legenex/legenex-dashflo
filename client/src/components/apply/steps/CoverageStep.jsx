@@ -5,7 +5,7 @@ import { CLIENT_TYPES, BILLING_TYPES } from '../applyConstants';
 // Section 3: Billing and Accounts. Also carries the client_type and billing_type
 // selects that onboardBuyer needs (not in the original form) plus the optional
 // initial batch size, and the static taxpayer form and payment links.
-export default function CoverageStep({ form, set, errors }) {
+export default function CoverageStep({ form, set, errors, locked }) {
   const pickClientType = (ct) => {
     set('client_type', ct);
     // Sensible default billing arrangement for the chosen client type.
@@ -70,6 +70,7 @@ export default function CoverageStep({ form, set, errors }) {
         options={CLIENT_TYPES.map((ct) => ({ value: ct, label: ct }))}
         placeholder="Select client type..."
         required
+        disabled={locked}
       />
 
       <div>

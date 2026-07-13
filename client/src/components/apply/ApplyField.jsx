@@ -12,7 +12,7 @@ function FieldLabel({ label, required }) {
 
 // A labelled text/number input for the public onboarding form. Shows an inline
 // error message under the field when the server returns a validation problem.
-export function ApplyField({ label, value, onChange, error, type = 'text', placeholder = '', required = false }) {
+export function ApplyField({ label, value, onChange, error, type = 'text', placeholder = '', required = false, disabled = false }) {
   return (
     <div>
       <label className="block text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">
@@ -23,9 +23,10 @@ export function ApplyField({ label, value, onChange, error, type = 'text', place
         value={value ?? ''}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
+        disabled={disabled}
         className={`h-11 w-full rounded-lg border bg-background px-3.5 text-[14px] text-foreground placeholder:text-muted-foreground/50 transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring ${
           error ? 'border-primary' : 'border-border'
-        }`}
+        }${disabled ? ' opacity-60 cursor-not-allowed bg-muted/30' : ''}`}
       />
       {error && <div className="mt-1 text-[12px] text-primary">{error}</div>}
     </div>
@@ -64,16 +65,17 @@ export function PhoneField({ label, value, onChange, error, required = false }) 
 
 // A labelled select built on a native element so it works on the public route
 // without pulling in the operator UI kit.
-export function ApplySelect({ label, value, onChange, error, options = [], placeholder = 'Select...', required = false }) {
+export function ApplySelect({ label, value, onChange, error, options = [], placeholder = 'Select...', required = false, disabled = false }) {
   return (
     <div>
       <FieldLabel label={label} required={required} />
       <select
         value={value ?? ''}
         onChange={(e) => onChange(e.target.value)}
+        disabled={disabled}
         className={`h-11 w-full rounded-lg border bg-background px-3.5 text-[14px] text-foreground transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring ${
           error ? 'border-primary' : 'border-border'
-        } ${value ? '' : 'text-muted-foreground/60'}`}
+        } ${value ? '' : 'text-muted-foreground/60'}${disabled ? ' opacity-60 cursor-not-allowed bg-muted/30' : ''}`}
       >
         <option value="">{placeholder}</option>
         {options.map((o) => (

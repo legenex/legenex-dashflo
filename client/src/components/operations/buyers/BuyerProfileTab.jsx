@@ -13,6 +13,7 @@ import BuyerStatusPill from './BuyerStatusPill';
 import { AlertTriangle } from 'lucide-react';
 import { useRecomputeCoverage } from './useRecomputeCoverage';
 import RecomputingIndicator from './RecomputingIndicator';
+import BuyerOnboardingLink from './BuyerOnboardingLink';
 
 const CLIENT_TYPES = ['Law Firm', 'Aggregator', 'Reseller', 'Network'];
 const BILLING_TYPES = [
@@ -97,6 +98,8 @@ export default function BuyerProfileTab({ buyer, verticals }) {
           </div>
         </Field>
       </div>
+
+      <BuyerOnboardingLink buyer={buyer} />
 
       <Field label="Buyer Name">
         <Input value={form.company_name} onChange={(e) => set('company_name', e.target.value)} className="bg-background" />

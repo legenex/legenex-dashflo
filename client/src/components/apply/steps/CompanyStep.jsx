@@ -4,7 +4,7 @@ import StateMultiSelect from '../StateMultiSelect';
 
 // Section 1: Client Information. Company, target states, primary contact, and
 // the checkbox that reveals the secondary contact section.
-export default function CompanyStep({ form, set, errors }) {
+export default function CompanyStep({ form, set, errors, locked }) {
   return (
     <div className="space-y-5">
       <ApplyField
@@ -14,6 +14,7 @@ export default function CompanyStep({ form, set, errors }) {
         error={errors.company_name}
         placeholder="Company Name"
         required
+        disabled={locked}
       />
       <ApplyField
         label="Company Website"
