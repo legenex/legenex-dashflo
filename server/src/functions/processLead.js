@@ -1,12 +1,3 @@
-// Core lead-processing pipeline. Ported to Node ESM.
-//
-// Accepts an inbound lead from a supplier, authenticates the API key, creates
-// the Lead record, runs HLR phone verification, email validation, TrustedForm
-// gating, custom calculations, fires conversion-event connectors (Facebook
-// CAPI / webhooks) and delivery destinations, forwards qualified leads to
-// LeadByte, then maps the LeadByte response back to a layered supplier envelope.
-
-
 // Resolve phone_verified value from HLR result based on configured source
 function resolvePhoneVerified(hlrResult, source) {
   if (!hlrResult) return '';
@@ -888,10 +879,10 @@ async function evaluateNotifications(db, conditionTypes, lead, supplierAttributi
       }).catch(() => {});
       if (channels.includes('email') && recipients.length > 0) {
         try {
-          await db.integrations.Core.SendEmail({
+          await sendMail({
             to: recipients[0],
             subject: `Legenex Alert: ${rule.name}`,
-            body: `${summary}\n\nLead ID: ${lead.id}\nSupplier: ${supplierAttribution}`,
+            text: `${summary}\n\nLead ID: ${lead.id}\nSupplier: ${supplierAttribution}`,
           });
         } catch {}
       }
@@ -1096,14 +1087,7 @@ function bypassLeadStatus(finalForBypass) {
 
 export default async function processLead(ctx) {
   const db = ctx.db;
-  const method = ctx.req?.method || 'POST';
-
-  // Case-insensitive header lookup (Express lowercases header keys).
-  const getHeader = (name) => {
-    const h = ctx.req?.headers || {};
-    const v = h[name.toLowerCase()];
-    return v == null ? '' : String(v);
-  };
+  const method = ctx.req.method;
 
   if (method === 'GET') return ctx.json({ status: 'ok' }, 200);
 
@@ -1126,16 +1110,16 @@ export default async function processLead(ctx) {
     const payload = body.payload || body;
 
     let supplierKeyRaw =
-      getHeader('X-API-KEY') ||
-      getHeader('X_KEY') ||
-      getHeader('x-api-key') ||
-      getHeader('x_key') ||
+      ctx.req.get('X-API-KEY') ||
+      ctx.req.get('X_KEY') ||
+      ctx.req.get('x-api-key') ||
+      ctx.req.get('x_key') ||
       payload['X-API-KEY'] ||
       payload['X_KEY'] ||
       payload._supplier_key ||
       null;
     if (!supplierKeyRaw) {
-      const authHeader = getHeader('Authorization') || '';
+      const authHeader = ctx.req.get('Authorization') || '';
       if (authHeader.startsWith('Basic ')) {
         const decoded = atob(authHeader.slice(6));
         supplierKeyRaw = decoded.split(':')[0] || null;
@@ -1754,7 +1738,7 @@ export default async function processLead(ctx) {
       });
       const noConnStatus = String(enrichedData.lead_status || leadPayload.lead_status || '').trim();
       const noConnFinalStatus = {
-        Qualified: 'Qualified', Disqualified: 'Disqualified', Sold: 'Sold',
+        Qualified: 'Sold', Disqualified: 'Disqualified', Sold: 'Sold',
         Unsold: 'Unsold', Rejected: 'Unsold', Duplicate: 'Duplicate',
         Duplicates: 'Duplicate', Queued: 'Queued',
       }[noConnStatus] || 'Queued';
