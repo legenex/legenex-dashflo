@@ -88,6 +88,7 @@ function matchesSearch(lead, q) {
 const STATUS_FILTER_OPTIONS = [
   { value: '', label: 'All Status' },
   { value: 'Sold', label: 'Sold' },
+  { value: 'Qualified', label: 'Qualified' },
   { value: 'Disqualified', label: 'Disqualified' },
   { value: 'Unsold', label: 'Unsold' },
   { value: 'Rejected', label: 'Rejected' },

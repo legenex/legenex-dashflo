@@ -92,6 +92,14 @@ export default function BuyerCreateModal({ open, onOpenChange, verticals, onCrea
       return;
     }
 
+    // Non-fatal: mint a per-buyer onboarding link. Buyer creation still
+    // succeeds even if this step throws.
+    try {
+      await api.functions.invoke('mintOnboardingLink', { buyer_id: created.id });
+    } catch (err) {
+      console.error('mintOnboardingLink failed', err);
+    }
+
     toast.success(`Buyer created with code ${allocatedCode}. Set state coverage so it can receive leads.`);
     onOpenChange(false);
     onCreated?.(created);

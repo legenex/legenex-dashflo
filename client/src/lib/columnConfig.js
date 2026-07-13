@@ -40,18 +40,19 @@ export const SYSTEM_COLUMNS = [
   { key: 'leadId', header: 'Lead ID', accessor: (l) => l.lead_id != null ? String(l.lead_id) : '-', className: 'font-mono text-[11px]' },
   { key: 'hlrStatus', header: 'HLR Status', accessor: (l) => l.hlr_status || '-' },
   { key: 'lbStatus', header: 'LB Status', accessor: (l) => l.leadbyte_record_status || '-' },
+  { key: 'deliveryError', header: 'Delivery Error', accessor: (l) => l.delivery_error || '-', className: 'text-[11px] text-muted-foreground whitespace-nowrap' },
   { key: 'emailValid', header: 'Email Valid', accessor: (l) => l.email_valid || '-' },
 ];
 
 // Default column order applied to every view until the user customises it.
 export const DEFAULT_COLUMN_KEYS = [
   'created', 'fullName', 'vertical', 'leadType', 'finalStatus', 'revenue',
-  'state', 'supplier', 'buyer', 'email', 'verification',
+  'state', 'supplier', 'buyer', 'email', 'verification', 'deliveryError',
 ];
 
-// Bumped to v2 so the new default order (Lead Type in, Lead Status/Source out)
+// Bumped to v3 so the new default (append Delivery Error column at the end)
 // takes effect for users who already had a persisted layout.
-const STORAGE_KEY = 'legenex_column_config_v2';
+const STORAGE_KEY = 'legenex_column_config_v3';
 
 // Load the persisted column config for a view, falling back to the defaults.
 export function loadColumnConfig(view) {
