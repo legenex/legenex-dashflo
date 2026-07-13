@@ -243,6 +243,62 @@ export function ChipMultiSelect({ label, options = [], values = [], onChange }) 
   );
 }
 
+// A stacked list of checkboxes backed by an array of values. Used for the
+// "check all that apply" style questions in the original form.
+export function CheckboxGroup({ label, options = [], values = [], onChange, error, required = false }) {
+  const set = new Set(values);
+  const toggle = (v) => {
+    const next = new Set(set);
+    if (next.has(v)) next.delete(v);
+    else next.add(v);
+    onChange(Array.from(next));
+  };
+  return (
+    <div>
+      <FieldLabel label={label} required={required} />
+      <div className="grid gap-2">
+        {options.map((o) => {
+          const on = set.has(o.value);
+          return (
+            <button
+              key={o.value}
+              type="button"
+              onClick={() => toggle(o.value)}
+              className={`flex items-center justify-between rounded-lg border px-3.5 py-2.5 text-left text-[13px] font-medium transition-colors ${
+                on
+                  ? 'border-primary bg-primary/15 text-primary'
+                  : 'border-border bg-background text-muted-foreground hover:border-primary/40 hover:text-foreground'
+              }`}
+            >
+              {o.label}
+              <span className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border ${on ? 'border-primary bg-primary text-primary-foreground' : 'border-border'}`}>
+                {on && <span className="text-[10px] leading-none">&#10003;</span>}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+      {error && <div className="mt-1 text-[12px] text-primary">{error}</div>}
+    </div>
+  );
+}
+
+// A single labelled checkbox row (used to reveal the secondary contact block).
+export function ApplyCheckbox({ label, checked, onChange }) {
+  return (
+    <button
+      type="button"
+      onClick={() => onChange(!checked)}
+      className="flex w-full items-center gap-3 rounded-lg border border-border bg-background px-3.5 py-3 text-left transition-colors hover:border-primary/40"
+    >
+      <span className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border ${checked ? 'border-primary bg-primary text-primary-foreground' : 'border-border'}`}>
+        {checked && <span className="text-[10px] leading-none">&#10003;</span>}
+      </span>
+      <span className="text-[13.5px] font-medium text-foreground">{label}</span>
+    </button>
+  );
+}
+
 // A set of toggleable option chips backed by a single value (radio style). Used
 // for delivery method selection.
 export function ChipSingleSelect({ label, options = [], value, onChange, error, required = false }) {

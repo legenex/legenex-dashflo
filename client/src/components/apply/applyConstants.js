@@ -25,29 +25,36 @@ export const BILLING_TYPES = [
   { value: 'invoiced_monthly', label: 'Invoiced monthly' },
 ];
 
-// How leads are delivered to the buyer.
+// How leads are delivered to the buyer. "Check all that apply" in the original
+// form, so these render as checkboxes even though the value set is fixed.
 export const DELIVERY_METHODS = [
-  { value: 'api_post', label: 'API post to CRM' },
-  { value: 'email', label: 'Email notifications' },
+  { value: 'api_post', label: 'API Post To CRM' },
+  { value: 'email', label: 'Email Notifications' },
   { value: 'both', label: 'Both' },
 ];
 
 // How the buyer reports back dispositions on the leads we send. Multi select.
 export const DISPOSITION_METHODS = [
-  { value: 'live_google_sheet', label: 'Live Google Sheet' },
-  { value: 'api', label: 'Send dispositions via API' },
-  { value: 'leadbyte_portal', label: 'Update leads manually in LeadByte portal' },
-  { value: 'csv', label: 'Send CSV or Excel file' },
-  { value: 'real_time_portal', label: 'Real time portal' },
+  { value: 'live_google_sheet', label: 'Live Google Sheet (This is our default method)' },
+  { value: 'api', label: 'Send Dispositions via API' },
+  { value: 'leadbyte_portal', label: 'Update Leads Manually in LeadByte Portal' },
+  { value: 'csv', label: 'Send CSV/Excel File' },
+  { value: 'real_time_portal', label: 'Real Time Portal' },
 ];
 
-// The seven steps of the flow, in order.
+// Yes/No options for the prior experience question.
+export const YES_NO = [
+  { value: 'Yes', label: 'Yes' },
+  { value: 'No', label: 'No' },
+];
+
+// The seven sections of the flow, in order, using the original form headings.
 export const STEPS = [
-  { key: 'company', label: 'Company' },
-  { key: 'contacts', label: 'Contacts' },
-  { key: 'coverage', label: 'Coverage' },
-  { key: 'commercials', label: 'Commercials' },
-  { key: 'delivery', label: 'Delivery' },
-  { key: 'compliance', label: 'Compliance' },
-  { key: 'billing', label: 'Billing' },
+  { key: 'client', label: 'Client Information' },
+  { key: 'secondary', label: 'Secondary Contact' },
+  { key: 'billing', label: 'Billing and Accounts' },
+  { key: 'delivery', label: 'Lead Delivery Preferences' },
+  { key: 'disposition', label: 'Disposition Reports and Feedback' },
+  { key: 'tcpa', label: 'TCPA Consent Information' },
+  { key: 'additional', label: 'Additional Information' },
 ];

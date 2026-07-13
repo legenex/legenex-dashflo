@@ -1,93 +1,97 @@
 import React from 'react';
-import { ApplyField } from '../ApplyField';
-import { CLIENT_TYPES, BILLING_TYPES } from '../applyConstants';
+import { ApplyField, CheckboxGroup, EmailListField } from '../ApplyField';
+import { DELIVERY_METHODS } from '../applyConstants';
 
-// Step 4: commercial terms. Client type drives the default billing arrangement:
-// law firms pay upfront (prepay), aggregators are invoiced (invoiced_daily).
+// Section 4: Lead Delivery Preferences. delivery_method is stored as an array
+// (check all that apply) even though the value set is api_post / email / both.
 export default function CommercialsStep({ form, set, errors }) {
-  const pickClientType = (ct) => {
-    set('client_type', ct);
-    // Apply the sensible default billing arrangement for the chosen client type.
-    if (ct === 'Law Firm') set('billing_type', 'prepay');
-    else if (ct === 'Aggregator') set('billing_type', 'invoiced_daily');
-  };
+  const methods = Array.isArray(form.delivery_method) ? form.delivery_method : [];
+  const showApi = methods.includes('api_post') || methods.includes('both');
+  const showEmail = methods.includes('email') || methods.includes('both');
 
   return (
     <div className="space-y-5">
-      <div>
-        <label className="block text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">
-          Client type<span className="text-primary ml-0.5">*</span>
-        </label>
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-          {CLIENT_TYPES.map((ct) => {
-            const on = form.client_type === ct;
-            return (
-              <button
-                key={ct}
-                type="button"
-                onClick={() => pickClientType(ct)}
-                className={`h-11 rounded-lg border text-[13px] font-medium transition-colors ${
-                  on
-                    ? 'border-primary bg-primary/15 text-primary'
-                    : 'border-border bg-background text-muted-foreground hover:border-primary/40 hover:text-foreground'
-                }`}
-              >
-                {ct}
-              </button>
-            );
-          })}
-        </div>
-        {errors.client_type && <div className="mt-1 text-[12px] text-primary">{errors.client_type}</div>}
-      </div>
+      <p className="text-[13px] text-muted-foreground leading-relaxed">
+        We offer multiple options for lead delivery, including API posting to your CRM, email
+        notifications, and ping post. Please select your preferred method or methods of lead
+        delivery from the options provided. If you choose email notifications, kindly provide the
+        relevant email address or addresses for prompt delivery.
+      </p>
 
-      <div className="grid sm:grid-cols-2 gap-5">
-        <ApplyField
-          label="Target CPL (USD)"
-          type="number"
-          value={form.cpl}
-          onChange={(v) => set('cpl', v)}
-          error={errors.cpl}
-          placeholder="45"
-          required
-        />
-        <ApplyField
-          label="Lead count for the first deposit"
-          type="number"
-          value={form.initial_batch_size}
-          onChange={(v) => set('initial_batch_size', v)}
-          error={errors.initial_batch_size}
-          placeholder="100"
-        />
-      </div>
+      <CheckboxGroup
+        label="Preferred Lead Delivery Method (Check all that apply)"
+        options={DELIVERY_METHODS}
+        values={methods}
+        onChange={(v) => set('delivery_method', v)}
+        error={errors.delivery_method}
+        required
+      />
 
-      <div>
-        <label className="block text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">
-          Billing arrangement<span className="text-primary ml-0.5">*</span>
-        </label>
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-          {BILLING_TYPES.map((bt) => {
-            const on = form.billing_type === bt.value;
-            return (
-              <button
-                key={bt.value}
-                type="button"
-                onClick={() => set('billing_type', bt.value)}
-                className={`h-11 rounded-lg border text-[12.5px] font-medium transition-colors px-2 ${
-                  on
-                    ? 'border-primary bg-primary/15 text-primary'
-                    : 'border-border bg-background text-muted-foreground hover:border-primary/40 hover:text-foreground'
-                }`}
-              >
-                {bt.label}
-              </button>
-            );
-          })}
+      {showApi && (
+        <div className="space-y-5 rounded-xl border border-border bg-background/50 p-4">
+          <ApplyField
+            label="API Documentation URL (If Applicable)"
+            value={form.api_docs_url}
+            onChange={(v) => set('api_docs_url', v)}
+            error={errors.api_docs_url}
+            placeholder="https://company.com/api-docs"
+          />
+          {/* File uploads need an authenticated storage context that is not
+              available on this public, unauthenticated route, so we accept a
+              plain URL to the hosted API documentation instead of blocking. */}
+          <div>
+            <ApplyField
+              label="API Documentation (If Applicable)"
+              value={form.api_docs_file_url}
+              onChange={(v) => set('api_docs_file_url', v)}
+              error={errors.api_docs_file_url}
+              placeholder="Link to a hosted PDF, DOC, XLS, CSV or image"
+            />
+            <div className="mt-1 text-[12px] text-muted-foreground">
+              Accepts PDF, DOC/DOCX, XLS/CSV, JPG/JPEG, PNG, GIF. Paste a link to your hosted file.
+            </div>
+          </div>
+          <div>
+            <ApplyField
+              label="API Key (If Applicable)"
+              value={form.buyer_api_key}
+              onChange={(v) => set('buyer_api_key', v)}
+              error={errors.buyer_api_key}
+              placeholder="API key"
+            />
+            <div className="mt-1 text-[12px] text-muted-foreground">
+              Most CRMs and APIs need API keys for supplier tracking and security. If unavailable,
+              add a unique identifier below.
+            </div>
+          </div>
+          <div>
+            <ApplyField
+              label="Unique Identifier"
+              value={form.unique_identifier}
+              onChange={(v) => set('unique_identifier', v)}
+              error={errors.unique_identifier}
+              placeholder="Campaign ID, Supplier ID, or Source Key"
+            />
+            <div className="mt-1 text-[12px] text-muted-foreground">
+              This can be a Campaign ID, Supplier ID, or Source Key, anything that links the leads
+              we send back to us.
+            </div>
+          </div>
         </div>
-        <div className="mt-2 text-[12px] text-muted-foreground">
-          Law firms pay upfront and aggregators are invoiced.
+      )}
+
+      {showEmail && (
+        <div className="rounded-xl border border-border bg-background/50 p-4">
+          <EmailListField
+            label="Lead Notification Email Address"
+            values={form.lead_notification_emails}
+            onChange={(v) => set('lead_notification_emails', v)}
+          />
+          <div className="mt-2 text-[12px] text-muted-foreground">
+            Email addresses for lead notifications.
+          </div>
         </div>
-        {errors.billing_type && <div className="mt-1 text-[12px] text-primary">{errors.billing_type}</div>}
-      </div>
+      )}
     </div>
   );
 }

@@ -14,66 +14,64 @@ import BillingStep from '@/components/apply/steps/BillingStep';
 // Full initial form. Every key is sent to submitBuyerOnboarding using the exact
 // snake_case names onboardBuyer reads. billing_type defaults to prepay.
 const INITIAL = {
-  // Step 1: company
+  // Section 1: client information
   company_name: '',
   company_website: '',
-  ein: '',
-  // Step 2: contacts
+  target_states: [],
   primary_contact_name: '',
-  primary_contact_role: '',
-  primary_contact_email: '',
   primary_contact_phone: '',
+  primary_contact_email: '',
   provide_secondary_contact: false,
+  // Section 2: secondary contact
   secondary_contact_name: '',
   secondary_contact_email: '',
   secondary_contact_phone: '',
   secondary_contact_role: '',
-  // Step 3: coverage
-  vertical: '',
-  target_states: [],
-  // Step 4: commercials
-  client_type: '',
+  // Section 3: billing and accounts
+  billing_address: '',
+  accounts_contact_name: '',
+  accounts_email: '',
   cpl: '',
-  initial_batch_size: '',
+  client_type: '',
   billing_type: 'prepay',
-  // Step 5: delivery
-  delivery_method: '',
+  initial_batch_size: '',
+  // Section 4: lead delivery preferences
+  delivery_method: [],
   api_docs_url: '',
   api_docs_file_url: '',
   buyer_api_key: '',
   unique_identifier: '',
   lead_notification_emails: [''],
-  disposition_method: [],
-  // Step 6: compliance
+  // Section 5: disposition reports and feedback (default Live Google Sheet)
+  disposition_method: ['live_google_sheet'],
+  // Section 6: TCPA consent information
   tcpa_inbound_phone: '',
   tcpa_outbound_phones: [''],
   tcpa_inbound_email: '',
   tcpa_outbound_email: '',
   tcpa_reply_to_email: '',
-  // Step 7: billing and agreement
-  billing_address: '',
-  accounts_contact_name: '',
-  accounts_email: '',
-  taxpayer_form_url: '',
-  qualification_criteria: '',
+  // Section 7: additional information
   prior_experience: '',
   experience_detail: '',
+  qualification_criteria: '',
   additional_requirements: '',
-  agreement_accepted: false,
 };
 
-// Client side gate for each of the seven steps. The server still validates
+// Client side gate for each of the seven sections. The server still validates
 // everything on submit. Indexes match the STEPS order, so a server field_error
-// maps back to the earliest step that owns that field.
+// maps back to the earliest section that owns that field.
 const REQUIRED_BY_STEP = [
-  ['company_name'],
-  ['primary_contact_name', 'primary_contact_email', 'primary_contact_phone'],
-  ['target_states'],
-  ['client_type', 'cpl', 'billing_type'],
-  [],
-  [],
-  ['agreement_accepted'],
+  ['company_name', 'target_states', 'primary_contact_name', 'primary_contact_phone', 'primary_contact_email'],
+  [], // secondary contact: all optional
+  ['billing_address', 'cpl', 'client_type', 'billing_type'],
+  ['delivery_method'],
+  ['disposition_method'],
+  [], // TCPA: all optional
+  [], // additional information: all optional
 ];
+
+// Index of the secondary contact section, skipped when the checkbox is off.
+const SECONDARY_STEP = 1;
 
 export default function Apply() {
   const [step, setStep] = useState(0);
@@ -88,16 +86,22 @@ export default function Apply() {
     setErrors((e) => (e[key] ? { ...e, [key]: undefined } : e));
   };
 
-  const validateStep = () => {
-    const req = REQUIRED_BY_STEP[step];
+  // Whether a section is reachable. Section 2 is skipped unless the user asked
+  // to provide a secondary contact.
+  const isStepVisible = (i) => (i === SECONDARY_STEP ? !!form.provide_secondary_contact : true);
+
+  const validateStep = (i = step) => {
+    const req = REQUIRED_BY_STEP[i] || [];
     const next = {};
     for (const key of req) {
       const v = form[key];
       let empty;
-      if (key === 'target_states') empty = !Array.isArray(v) || v.length === 0;
-      else if (key === 'agreement_accepted') empty = !v;
-      else empty = !String(v ?? '').trim();
-      if (empty) next[key] = key === 'agreement_accepted' ? 'Please confirm to continue.' : 'This field is required.';
+      if (key === 'target_states' || key === 'delivery_method' || key === 'disposition_method') {
+        empty = !Array.isArray(v) || v.length === 0;
+      } else {
+        empty = !String(v ?? '').trim();
+      }
+      if (empty) next[key] = 'This field is required.';
     }
     setErrors(next);
     return Object.keys(next).length === 0;
@@ -105,13 +109,24 @@ export default function Apply() {
 
   const goNext = () => {
     if (!validateStep()) return;
-    setStep((s) => Math.min(s + 1, STEPS.length - 1));
+    let s = step + 1;
+    while (s < STEPS.length && !isStepVisible(s)) s += 1;
+    setStep(Math.min(s, STEPS.length - 1));
   };
 
   const goBack = () => {
     setErrors({});
-    setStep((s) => Math.max(s - 1, 0));
+    let s = step - 1;
+    while (s > 0 && !isStepVisible(s)) s -= 1;
+    setStep(Math.max(s, 0));
   };
+
+  // The last reachable section, used to decide when to show the submit button.
+  const lastStep = (() => {
+    let s = STEPS.length - 1;
+    while (s > 0 && !isStepVisible(s)) s -= 1;
+    return s;
+  })();
 
   // Strip empty repeatable rows before sending, so the operator never sees a
   // trailing blank email or phone entry.
@@ -138,7 +153,7 @@ export default function Apply() {
       const data = e?.response?.data;
       if (data?.field_errors) {
         setErrors(data.field_errors);
-        // Jump back to the earliest step that owns a field with an error.
+        // Jump back to the earliest section that owns a field with an error.
         const firstStepWithError = REQUIRED_BY_STEP.findIndex((keys) =>
           keys.some((k) => data.field_errors[k]),
         );
@@ -183,7 +198,7 @@ export default function Apply() {
         {/* Brand header */}
         <div className="text-center mb-10">
           <div className="text-[11px] font-mono uppercase tracking-[0.22em] text-primary">Legenex</div>
-          <h1 className="mt-3 text-3xl font-semibold text-foreground font-heading">Buyer onboarding</h1>
+          <h1 className="mt-3 text-3xl font-semibold text-foreground font-heading">Client Onboarding Form</h1>
           <p className="mt-2 text-sm text-muted-foreground">
             Tell us about your firm and coverage needs. Takes a few minutes.
           </p>
@@ -192,6 +207,7 @@ export default function Apply() {
         {/* Step indicator */}
         <div className="flex items-center justify-center gap-1.5 mb-8 flex-wrap">
           {STEPS.map((s, i) => {
+            if (!isStepVisible(i)) return null;
             const done = i < step;
             const active = i === step;
             return (
@@ -208,11 +224,8 @@ export default function Apply() {
                   >
                     {done ? <Check className="h-3.5 w-3.5" /> : i + 1}
                   </div>
-                  <span className={`hidden md:block text-[12.5px] font-medium ${active ? 'text-foreground' : 'text-muted-foreground'}`}>
-                    {s.label}
-                  </span>
                 </div>
-                {i < STEPS.length - 1 && <div className="h-px w-4 md:w-6 bg-border" />}
+                {i < STEPS.length - 1 && isStepVisible(i + 1) && <div className="h-px w-4 md:w-6 bg-border" />}
               </React.Fragment>
             );
           })}
@@ -220,6 +233,14 @@ export default function Apply() {
 
         {/* Card */}
         <div className="rounded-2xl border border-border bg-card p-6 sm:p-8 shadow-[0_24px_64px_-24px_rgba(0,0,0,0.5)]">
+          {/* Section heading */}
+          <div className="mb-6">
+            <div className="text-[11px] font-mono uppercase tracking-[0.18em] text-muted-foreground">
+              Section {step + 1}
+            </div>
+            <h2 className="mt-1 text-xl font-semibold text-foreground font-heading">{STEPS[step].label}</h2>
+          </div>
+
           <AnimatePresence mode="wait">
             <motion.div
               key={step}
@@ -255,7 +276,7 @@ export default function Apply() {
               <ArrowLeft className="h-4 w-4" /> Back
             </button>
 
-            {step < STEPS.length - 1 ? (
+            {step < lastStep ? (
               <button
                 type="button"
                 onClick={goNext}
@@ -267,7 +288,7 @@ export default function Apply() {
               <button
                 type="button"
                 onClick={submit}
-                disabled={submitting || !form.agreement_accepted}
+                disabled={submitting}
                 className="inline-flex items-center gap-2 h-10 px-6 rounded-lg bg-primary text-primary-foreground text-[13.5px] font-semibold hover:bg-primary/90 disabled:opacity-60 transition-colors"
               >
                 {submitting && <Loader2 className="h-4 w-4 animate-spin" />}
