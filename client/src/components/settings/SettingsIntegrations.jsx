@@ -16,7 +16,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import {
   Mail, MessageCircle, HardDrive, FileSpreadsheet, Hash, CheckCircle2, Plug, Zap, ShieldAlert,
   Send, Save, Megaphone, Music2, BarChart3, Facebook, Phone, PhoneCall, ShieldCheck,
-  CreditCard, Receipt, Webhook, Settings2, Landmark,
+  CreditCard, Receipt, Webhook, Settings2, Landmark, Link2,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import MetaAdSpend from '@/components/settings/MetaAdSpend';
@@ -42,6 +42,7 @@ const CATALOG = [
   { type: 'stripe', category: 'billing', name: 'Stripe', icon: CreditCard, desc: 'Buyer payments & subscription billing', supported: true, apiKey: true },
   { type: 'xero', category: 'billing', name: 'Xero', icon: Receipt, desc: 'Sync invoices & payments to Xero', supported: true, apiKey: true },
   { type: 'mercury', category: 'billing', name: 'Mercury', icon: Landmark, desc: 'Bank feed sync into transactions for reconciliation', supported: true, apiKey: true },
+  { type: 'rebrandly', category: 'delivery', name: 'Rebrandly', icon: Link2, desc: 'Branded short links for buyer onboarding', supported: true, apiKey: true },
 
   { type: 'trustedform', category: 'validation', name: 'TrustedForm', icon: ShieldCheck, desc: 'Cert validation passthrough on inbound leads', link: '/verification', action: 'Configure' },
 ];
@@ -69,6 +70,12 @@ const API_KEY_CONNECTORS = {
     fields: [
       { key: 'access_token', label: 'Xero Access Token', placeholder: 'eyJ...', secret: true, help: 'Generate an access token from your Xero app (Custom Connection) with accounting.transactions and accounting.contacts read scopes.' },
       { key: 'tenant_id', label: 'Tenant ID', placeholder: 'Auto-resolved from your token if blank', optional: true },
+    ],
+  },
+  rebrandly: {
+    title: 'Rebrandly', description: 'Paste your Rebrandly API key to generate branded short links during buyer onboarding.',
+    fields: [
+      { key: 'api_key', label: 'Rebrandly API Key', placeholder: 'Your Rebrandly API key', secret: true, help: 'Found in Rebrandly > Account Settings > API keys.' },
     ],
   },
 };
