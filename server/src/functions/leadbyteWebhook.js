@@ -1,10 +1,10 @@
 // Caller model: public with key.
 //
-// This endpoint is unauthenticated at the app layer and must be invocable
-// without a logged-in user. It authenticates ONLY by a route token, read from
-// the query param `token` or the `X-Webhook-Token` header, SHA-256 hashed and
-// matched against an enabled leadbyte InboundWebhookRoute. It uses the server
-// client to look up the route and to read and write Lead.
+// This endpoint is unauthenticated and must be invocable without a logged-in
+// user. It authenticates ONLY by a route token, read from the query param
+// `token` or the `X-Webhook-Token` header, SHA-256 hashed and matched against
+// an enabled leadbyte InboundWebhookRoute. It uses the server client to look
+// up the route and to read and write Lead.
 //
 // This function only RECORDS LeadByte sold/unsold/return/conversion outcome
 // data onto the matching Lead. It never calls processLead or any routing,
@@ -17,6 +17,10 @@ function clean(v) {
   if (v === null || v === undefined) return null;
   const s = String(v).trim();
   if (s === '' || s === '-') return null;
+  // LeadByte sends the literal string "null" for some empty fields.
+  if (s.toLowerCase() === 'null') return null;
+  // Unresolved merge field, entirely wrapped in braces e.g. {supplier_brand}.
+  if (/^\{.*\}$/.test(s)) return null;
   return s;
 }
 
@@ -147,10 +151,9 @@ export default async function leadbyteWebhook(ctx) {
   const db = ctx.db;
 
   // ── Auth gate: route token only, before any Lead access ─────────────────
-  const query = (ctx.req && ctx.req.query) || {};
   const headers = (ctx.req && ctx.req.headers) || {};
-  const headerToken = headers['x-webhook-token'] || headers['X-Webhook-Token'];
-  const token = String(query.token || headerToken || '').trim();
+  const query = (ctx.req && ctx.req.query) || {};
+  const token = String(query.token || headers['x-webhook-token'] || '').trim();
   if (!token) return ctx.json({ error: 'Unauthorized' }, 401);
 
   let route = null;
@@ -168,13 +171,15 @@ export default async function leadbyteWebhook(ctx) {
   if (!route) return ctx.json({ error: 'Unauthorized' }, 401);
 
   // ── Parse the outcome payload ───────────────────────────────────────────
-  // ctx.body is already the parsed request body; preserve the exact JSON text
-  // for the raw outcome payload record.
+  // ctx.body is already-parsed JSON; a malformed payload never reaches here.
   const body = ctx.body;
   if (!body || typeof body !== 'object' || Array.isArray(body)) {
     return ctx.json({ error: 'Invalid JSON' }, 400);
   }
-  const rawBody = JSON.stringify(body);
+  // The raw payload is recorded verbatim onto the Lead for auditing.
+  const rawBody = (ctx.req && typeof ctx.req.rawBody === 'string')
+    ? ctx.req.rawBody
+    : JSON.stringify(body);
 
   try {
     const leadbyteId = num(body.leadbyte_id);
