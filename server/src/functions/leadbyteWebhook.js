@@ -1,12 +1,8 @@
-import { HttpError } from './_runtime.js';
-
-// Caller model: public with key.
-//
-// This endpoint is unauthenticated at the app layer and must be invocable
-// without a logged-in user. It authenticates ONLY by a route token, read from
-// the query param `token` or the `X-Webhook-Token` header, SHA-256 hashed and
-// matched against an enabled leadbyte InboundWebhookRoute. It looks up the
-// route and reads and writes Lead directly (no RLS at the function layer).
+// Public with key. Unauthenticated at the app layer and invocable without a
+// logged-in user. Authenticates ONLY by a route token, read from the query
+// param `token` or the `X-Webhook-Token` header, SHA-256 hashed and matched
+// against an enabled leadbyte InboundWebhookRoute. Uses the service client to
+// look up the route and to read and write Lead.
 //
 // This function only RECORDS LeadByte sold/unsold/return/conversion outcome
 // data onto the matching Lead. It never calls processLead or any routing,
@@ -65,8 +61,9 @@ function setIf(out, key, value) {
 // Translation map: webhook payload key -> app canonical field name. These land
 // in Lead.mapped_fields (never first-class outcome columns). Deliberate
 // exclusions: contact_trustedform_url (stays only in the raw payload),
-// accident_date (a Calculated field), supplier_source (feeds supplier_name on
-// create only).
+// accident_date (a Calculated field). supplier_source maps into the
+// "Supplier Source" canonical field like any other mapped field and no longer
+// feeds supplier_name.
 const CANONICAL_MAP = {
   contact_first_name: 'first_name',
   contact_last_name: 'last_name',
@@ -95,6 +92,7 @@ const CANONICAL_MAP = {
   supplier_s2: 's2',
   supplier_s3: 's3',
   supplier_brand: 'supplier_brand',
+  supplier_source: 'Supplier Source',
   tc_id: 'tc_id',
   leadshook_id: 'leadshook_id',
   accident_state: 'accident_state',
@@ -149,26 +147,20 @@ async function sha256Hex(input) {
     .join('');
 }
 
-// Read a header case-insensitively from the Express request.
-function readHeader(req, name) {
-  if (!req) return null;
-  if (typeof req.get === 'function') return req.get(name) || null;
-  const headers = req.headers || {};
-  return headers[name] || headers[name.toLowerCase()] || null;
-}
-
 export default async function leadbyteWebhook(ctx) {
-  const svc = ctx.db;
+  const db = ctx.db;
 
   // ── Auth gate: route token only, before any Lead access ─────────────────
-  const query = (ctx.req && ctx.req.query) || {};
-  const token = String(query.token || readHeader(ctx.req, 'X-Webhook-Token') || '').trim();
+  const headerToken =
+    (ctx.req && ctx.req.headers && ctx.req.headers['x-webhook-token']) || '';
+  const queryToken = (ctx.req && ctx.req.query && ctx.req.query.token) || '';
+  const token = String(queryToken || headerToken || '').trim();
   if (!token) return ctx.json({ error: 'Unauthorized' }, 401);
 
   let route = null;
   try {
     const tokenHash = await sha256Hex(token);
-    const routes = await svc.entities.InboundWebhookRoute.filter({
+    const routes = await db.entities.InboundWebhookRoute.filter({
       token_hash: tokenHash,
       enabled: true,
       provider: 'leadbyte',
@@ -180,15 +172,16 @@ export default async function leadbyteWebhook(ctx) {
   if (!route) return ctx.json({ error: 'Unauthorized' }, 401);
 
   // ── Parse the outcome payload ───────────────────────────────────────────
-  // The body arrives already parsed. Reconstruct the raw JSON string so the
-  // stored outcome payload preserves the original wire representation.
+  // The body is already parsed upstream; reconstruct the raw string so the
+  // stored outcome payload preserves the original request shape.
   let body;
-  if (ctx.body !== null && typeof ctx.body === 'object' && !Array.isArray(ctx.body)) {
-    body = ctx.body;
-  } else {
+  let rawBody;
+  try {
+    body = ctx.body && typeof ctx.body === 'object' ? ctx.body : {};
+    rawBody = JSON.stringify(body);
+  } catch {
     return ctx.json({ error: 'Invalid JSON' }, 400);
   }
-  const rawBody = JSON.stringify(body);
 
   try {
     const leadbyteId = num(body.leadbyte_id);
@@ -224,7 +217,7 @@ export default async function leadbyteWebhook(ctx) {
 
     let existing = null;
     if (leadbyteId !== null) {
-      const found = await svc.entities.Lead.filter({ leadbyte_lead_id: leadbyteId });
+      const found = await db.entities.Lead.filter({ leadbyte_lead_id: leadbyteId });
       existing = (Array.isArray(found) ? found : [])[0] || null;
     }
 
@@ -244,7 +237,7 @@ export default async function leadbyteWebhook(ctx) {
         if (clean(mergedMapped[key]) === null) mergedMapped[key] = value;
       }
       patch.mapped_fields = JSON.stringify(mergedMapped);
-      await svc.entities.Lead.update(existing.id, patch);
+      await db.entities.Lead.update(existing.id, patch);
       resultStatus = patch.final_status || existing.final_status || null;
     } else {
       // Derive supplier_name from the real supplier identified by supplier_sid,
@@ -253,7 +246,7 @@ export default async function leadbyteWebhook(ctx) {
       const sid = clean(body.supplier_sid);
       if (sid) {
         supplierName = sid;
-        const suppliers = await svc.entities.Supplier.filter({ sid });
+        const suppliers = await db.entities.Supplier.filter({ sid });
         const supplier = (Array.isArray(suppliers) ? suppliers : [])[0] || null;
         const resolvedName = supplier ? clean(supplier.name) : null;
         if (resolvedName) supplierName = resolvedName;
@@ -271,13 +264,13 @@ export default async function leadbyteWebhook(ctx) {
       if (contactLast) createData.last_name = contactLast;
       if (contactEmail) createData.email = contactEmail;
       if (contactPhone) createData.mobile = contactPhone;
-      const created = await svc.entities.Lead.create(createData);
+      const created = await db.entities.Lead.create(createData);
       leadId = created.id;
       resultStatus = createData.final_status;
     }
 
     // On success, bump receipt telemetry on the route.
-    await svc.entities.InboundWebhookRoute.update(route.id, {
+    await db.entities.InboundWebhookRoute.update(route.id, {
       receipt_count: (Number(route.receipt_count) || 0) + 1,
       last_received_at: new Date().toISOString(),
     });
@@ -290,7 +283,7 @@ export default async function leadbyteWebhook(ctx) {
     }, 200);
   } catch (err) {
     try {
-      await svc.entities.InboundWebhookRoute.update(route.id, {
+      await db.entities.InboundWebhookRoute.update(route.id, {
         error_count: (Number(route.error_count) || 0) + 1,
         last_error: (err && err.message) || 'Unexpected processing error',
       });
