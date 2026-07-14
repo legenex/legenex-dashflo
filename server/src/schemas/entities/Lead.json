@@ -163,6 +163,48 @@
     "import_batch_id": {
       "type": "string",
       "description": "Batch id stamped on leads created via CSV import, used for filtering and rollback"
+    },
+    "supplier_payout": {
+      "type": "number",
+      "description": "Supplier payout reported by LeadByte, for true CPL and margin"
+    },
+    "buyer_name": {
+      "type": "string",
+      "description": "Buyer name reported by LeadByte"
+    },
+    "buyer_conversion": {
+      "type": "string",
+      "description": "Buyer conversion status reported by LeadByte"
+    },
+    "buyer_returned": {
+      "type": "boolean",
+      "default": false,
+      "description": "Whether the buyer returned this lead"
+    },
+    "buyer_return_reason": {
+      "type": "string",
+      "description": "Reason given for a buyer return"
+    },
+    "lead_tier": {
+      "type": "string",
+      "description": "Lead tier reported by LeadByte"
+    },
+    "lead_score": {
+      "type": "number",
+      "description": "Lead score reported by LeadByte"
+    },
+    "lead_vertical": {
+      "type": "string",
+      "description": "Vertical reported by LeadByte, e.g. MVA"
+    },
+    "leadbyte_outcome_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When the outcome webhook was received"
+    },
+    "leadbyte_outcome_payload": {
+      "type": "string",
+      "description": "Full raw JSON of the LeadByte outcome webhook"
     }
   },
   "required": [

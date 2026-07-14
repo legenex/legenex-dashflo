@@ -1,0 +1,85 @@
+{
+  "name": "InboundWebhookRoute",
+  "properties": {
+    "enabled": {
+      "default": true,
+      "description": "Whether this route accepts inbound requests",
+      "type": "boolean"
+    },
+    "error_count": {
+      "default": 0,
+      "description": "Total processing errors on this route",
+      "type": "number"
+    },
+    "event_type": {
+      "description": "Lifecycle event this route represents",
+      "enum": [
+        "sold",
+        "unsold",
+        "conversion",
+        "return"
+      ],
+      "type": "string"
+    },
+    "last_error": {
+      "description": "Summary of the most recent processing error",
+      "type": "string"
+    },
+    "last_received_at": {
+      "description": "Timestamp of the last successful receipt on this route",
+      "format": "date-time",
+      "type": "string"
+    },
+    "name": {
+      "description": "Display name for this inbound route, e.g. LEGAL-MVA LeadByte Sold",
+      "type": "string"
+    },
+    "provider": {
+      "default": "leadbyte",
+      "description": "Source system for this route",
+      "enum": [
+        "leadbyte"
+      ],
+      "type": "string"
+    },
+    "receipt_count": {
+      "default": 0,
+      "description": "Total successful receipts on this route",
+      "type": "number"
+    },
+    "token_hash": {
+      "description": "SHA-256 hex hash of the route token. Plaintext token is shown once at creation and never stored.",
+      "type": "string"
+    },
+    "token_hint": {
+      "description": "Last 4 characters of the token, for display only",
+      "type": "string"
+    }
+  },
+  "required": [
+    "name"
+  ],
+  "rls": {
+    "create": {
+      "user_condition": {
+        "role": "admin"
+      }
+    },
+    "delete": {
+      "user_condition": {
+        "role": "admin"
+      }
+    },
+    "read": {
+      "user_condition": {
+        "role": "admin"
+      }
+    },
+    "update": {
+      "user_condition": {
+        "role": "admin"
+      }
+    }
+  },
+  "type": "object"
+}
