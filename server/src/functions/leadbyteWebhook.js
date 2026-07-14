@@ -1,12 +1,10 @@
-import { HttpError, requireUser, json } from './_runtime.js';
-
 // Caller model: public with key.
 //
-// This endpoint is unauthenticated and must be invocable without a logged-in
-// user. It authenticates ONLY by a route token, read from the query param
-// `token` or the `X-Webhook-Token` header, SHA-256 hashed and matched against
-// an enabled leadbyte InboundWebhookRoute. It looks up the route and reads and
-// writes Lead directly at the function layer (no RLS).
+// This endpoint is unauthenticated at the app layer and must be invocable
+// without a logged-in user. It authenticates ONLY by a route token, read from
+// the query param `token` or the `X-Webhook-Token` header, SHA-256 hashed and
+// matched against an enabled leadbyte InboundWebhookRoute. It uses the server
+// client to look up the route and to read and write Lead.
 //
 // This function only RECORDS LeadByte sold/unsold/return/conversion outcome
 // data onto the matching Lead. It never calls processLead or any routing,
@@ -46,11 +44,9 @@ function mapFinalStatus(v) {
   if (s === null) return null;
   const map = {
     sold: 'Sold',
-    unsold: 'Unsold',
     returned: 'Returned',
-    duplicate: 'Duplicate',
-    disqualified: 'Disqualified',
-    qualified: 'Qualified',
+    unsold: 'Unsold',
+    rejected: 'Rejected',
   };
   return map[s.toLowerCase()] || null;
 }
@@ -58,6 +54,85 @@ function mapFinalStatus(v) {
 // Only set a key when the value is non-null, so we never clobber with null.
 function setIf(out, key, value) {
   if (value !== null && value !== undefined) out[key] = value;
+}
+
+// Translation map: webhook payload key -> app canonical field name. These land
+// in Lead.mapped_fields (never first-class outcome columns). Deliberate
+// exclusions: contact_trustedform_url (stays only in the raw payload),
+// accident_date (a Calculated field), supplier_source (feeds supplier_name on
+// create only).
+const CANONICAL_MAP = {
+  contact_first_name: 'first_name',
+  contact_last_name: 'last_name',
+  contact_email: 'email',
+  contact_phone: 'mobile',
+  contact_zip: 'zip',
+  contact_phone_verified: 'phone_verified',
+  contact_jornaya_token: 'jornaya_token',
+  contact_optin_url: 'optin_url',
+  contact_user_agent: 'user_agent',
+  geo_country: 'geoip_country',
+  geo_state: 'geoip_state',
+  geo_city: 'geoip_city',
+  geo_zip: 'geoip_zip',
+  geo_ip: 'ip_address',
+  geo_language: 'geo_language',
+  utm_source: 'utm_source',
+  utm_campaign: 'utm_campaign',
+  utm_medium: 'utm_medium',
+  utm_content: 'utm_content',
+  utm_terms: 'utm_terms',
+  utm_ad_label: 'ad_label',
+  supplier_sid: 'sid',
+  supplier_ssid: 'ssid',
+  supplier_s1: 's1',
+  supplier_s2: 's2',
+  supplier_s3: 's3',
+  supplier_brand: 'supplier_brand',
+  tc_id: 'tc_id',
+  leadshook_id: 'leadshook_id',
+  accident_state: 'accident_state',
+  accident_type: 'accident_type',
+  accident_details: 'accident_details',
+  incident_date: 'incident_date',
+  injured: 'injured',
+  injury_type: 'injury_type',
+  treatment: 'treatment',
+  treatment_type: 'treatment_type',
+  treatment_time: 'treatment_time',
+  fault: 'fault',
+  attorney: 'attorney',
+  attorney_change: 'attorney_change',
+  insurance: 'insurance',
+  police_report_filed: 'police_report',
+  lead_status: 'lead_status',
+  lead_revenue: 'revenue',
+  lead_vertical: 'vertical',
+  leadbyte_id: 'lead_id',
+  date_created: 'timestamp',
+};
+
+// Build the canonical object from the payload, keeping only cleaned present
+// values (clean skips null/empty/single-dash).
+function buildCanonical(body) {
+  const out = {};
+  for (const [payloadKey, canonicalKey] of Object.entries(CANONICAL_MAP)) {
+    const value = clean(body[payloadKey]);
+    if (value !== null) out[canonicalKey] = value;
+  }
+  return out;
+}
+
+// Parse existing mapped_fields JSON to an object; null/empty/invalid -> {}.
+function parseMapped(v) {
+  const s = clean(v);
+  if (s === null) return {};
+  try {
+    const parsed = JSON.parse(s);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
 }
 
 async function sha256Hex(input) {
@@ -74,7 +149,7 @@ export default async function leadbyteWebhook(ctx) {
   // ── Auth gate: route token only, before any Lead access ─────────────────
   const query = (ctx.req && ctx.req.query) || {};
   const headers = (ctx.req && ctx.req.headers) || {};
-  const headerToken = headers['x-webhook-token'] || headers['X-Webhook-Token'] || '';
+  const headerToken = headers['x-webhook-token'] || headers['X-Webhook-Token'];
   const token = String(query.token || headerToken || '').trim();
   if (!token) return ctx.json({ error: 'Unauthorized' }, 401);
 
@@ -93,18 +168,10 @@ export default async function leadbyteWebhook(ctx) {
   if (!route) return ctx.json({ error: 'Unauthorized' }, 401);
 
   // ── Parse the outcome payload ───────────────────────────────────────────
-  // ctx.body is already parsed by the framework; reconstruct the raw text so
-  // we can persist the exact payload the provider sent.
-  let body;
-  if (ctx.body && typeof ctx.body === 'object') {
-    body = ctx.body;
-  } else if (typeof ctx.body === 'string') {
-    try {
-      body = JSON.parse(ctx.body);
-    } catch {
-      return ctx.json({ error: 'Invalid JSON' }, 400);
-    }
-  } else {
+  // ctx.body is already the parsed request body; preserve the exact JSON text
+  // for the raw outcome payload record.
+  const body = ctx.body;
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
     return ctx.json({ error: 'Invalid JSON' }, 400);
   }
   const rawBody = JSON.stringify(body);
@@ -112,6 +179,7 @@ export default async function leadbyteWebhook(ctx) {
   try {
     const leadbyteId = num(body.leadbyte_id);
     const finalStatus = mapFinalStatus(body.lead_status);
+    const canonical = buildCanonical(body);
 
     // Outcome fields shared by update and create.
     const outcome = {};
@@ -155,6 +223,13 @@ export default async function leadbyteWebhook(ctx) {
       if (!clean(existing.last_name) && contactLast) patch.last_name = contactLast;
       if (!clean(existing.email) && contactEmail) patch.email = contactEmail;
       if (!clean(existing.mobile) && contactPhone) patch.mobile = contactPhone;
+      // Merge canonical fields into mapped_fields, filling only blanks so we
+      // never overwrite an existing non-empty value.
+      const mergedMapped = parseMapped(existing.mapped_fields);
+      for (const [key, value] of Object.entries(canonical)) {
+        if (clean(mergedMapped[key]) === null) mergedMapped[key] = value;
+      }
+      patch.mapped_fields = JSON.stringify(mergedMapped);
       await db.entities.Lead.update(existing.id, patch);
       resultStatus = patch.final_status || existing.final_status || null;
     } else {
@@ -165,6 +240,7 @@ export default async function leadbyteWebhook(ctx) {
         // A create must always have a final_status; default to Processing when
         // the payload lead_status did not map.
         final_status: finalStatus || 'Processing',
+        mapped_fields: JSON.stringify(canonical),
       };
       if (leadbyteId !== null) createData.leadbyte_lead_id = leadbyteId;
       if (contactFirst) createData.first_name = contactFirst;

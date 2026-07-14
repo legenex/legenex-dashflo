@@ -22,9 +22,9 @@ const INBOUND_BASE_URL = WEBHOOK_FN_URL;
 
 const EVENT_OPTIONS = [
   { value: 'sold', label: 'Sold' },
+  { value: 'returned', label: 'Returned' },
   { value: 'unsold', label: 'Unsold' },
-  { value: 'conversion', label: 'Conversion' },
-  { value: 'return', label: 'Return' },
+  { value: 'rejected', label: 'Rejected' },
 ];
 
 // 32 random bytes rendered as a 64-char lowercase hex string.
