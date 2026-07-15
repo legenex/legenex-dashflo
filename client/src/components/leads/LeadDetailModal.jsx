@@ -37,8 +37,38 @@ export default function LeadDetailModal({ lead, open, onClose, initialTab = 'sum
   // Imported custom fields live in mapped_fields as a JSON string.
   let mappedFields = {};
   try { mappedFields = JSON.parse(lead.mapped_fields || '{}') || {}; } catch {}
+
+  // The reported TrustedForm cert URL is stored only inside the outcome
+  // payload, never in mapped_fields / trustedform_valid / cert_source. Parse
+  // it defensively for read-only display.
+  let outcomePayload = {};
+  try { outcomePayload = JSON.parse(lead.leadbyte_outcome_payload || '{}') || {}; } catch {}
+  const reportedTrustedFormUrl = outcomePayload.contact_trustedform_url;
   const toTitleCase = (k) => String(k).replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
   const mappedEntries = Object.entries(mappedFields).filter(([, v]) => v != null && String(v).trim() !== '');
+
+  // LeadByte outcome fields. Built in display order, then filtered so only
+  // populated values render. Currency and date values are pre-formatted here.
+  const fmtCurrency = (v) => (typeof v === 'number' ? `$${v.toFixed(2)}` : v);
+  let outcomeReceived = null;
+  if (lead.leadbyte_outcome_at) {
+    const d = new Date(lead.leadbyte_outcome_at);
+    if (!Number.isNaN(d.getTime())) outcomeReceived = format(d, 'PPpp');
+  }
+  const outcomeEntries = [
+    ['Buyer', lead.buyer_name],
+    ['Buyer ID', lead.buyer_id],
+    ['Revenue', fmtCurrency(lead.revenue)],
+    ['Supplier Payout', fmtCurrency(lead.supplier_payout)],
+    ['Tier', lead.lead_tier],
+    ['Lead Score', lead.lead_score],
+    ['Vertical', lead.lead_vertical],
+    ['Conversion', lead.buyer_conversion],
+    ['Returned', lead.buyer_returned === true ? 'Yes' : null],
+    ['Return Reason', lead.buyer_return_reason],
+    ['Outcome Received', outcomeReceived],
+    ['TrustedForm URL (reported)', reportedTrustedFormUrl],
+  ].filter(([, v]) => v != null && String(v).trim() !== '');
 
   const handleCopyPayload = () => {
     navigator.clipboard.writeText(lead.raw_payload || '{}');
@@ -145,6 +175,22 @@ export default function LeadDetailModal({ lead, open, onClose, initialTab = 'sum
                 ))}
               </div>
             )}
+            {!editing && outcomeEntries.length > 0 && (
+              <div className="mt-4 pt-4 border-t border-border">
+                <div className="text-[11px] text-muted-foreground uppercase tracking-wider mb-3">Outcome</div>
+                <div className="grid grid-cols-2 gap-3">
+                  {outcomeEntries.map(([label, val]) => (
+                    <div key={label}>
+                      <div className="text-[11px] text-muted-foreground uppercase tracking-wider">{label}</div>
+                      <div className="text-[13px] text-foreground font-medium mt-0.5 font-mono">{String(val)}</div>
+                    </div>
+                  ))}
+                </div>
+                {reportedTrustedFormUrl != null && String(reportedTrustedFormUrl).trim() !== '' && (
+                  <div className="text-[12px] text-muted-foreground mt-2">Reported by LeadByte. Not a captured certificate.</div>
+                )}
+              </div>
+            )}
             {!editing && mappedEntries.length > 0 && (
               <div className="mt-4 pt-4 border-t border-border">
                 <div className="text-[11px] text-muted-foreground uppercase tracking-wider mb-3">Lead Fields</div>
@@ -176,8 +222,31 @@ export default function LeadDetailModal({ lead, open, onClose, initialTab = 'sum
           </TabsContent>
 
           <TabsContent value="leadbyte" className="mt-4 space-y-4">
-            <JsonViewer data={lead.leadbyte_request} title="LeadByte Request" />
-            <JsonViewer data={lead.leadbyte_response} title="LeadByte Response" />
+            {(() => {
+              const isEmpty = (v) => {
+                if (v == null) return true;
+                const s = String(v).trim();
+                return s === '' || s.toLowerCase() === 'null';
+              };
+              const hasRequest = !isEmpty(lead.leadbyte_request);
+              const hasResponse = !isEmpty(lead.leadbyte_response);
+              const hasOutcome = !!lead.leadbyte_outcome_payload;
+              if (!hasRequest && !hasResponse && !hasOutcome) {
+                return <div className="text-[12px] text-muted-foreground">No LeadByte trace recorded for this lead.</div>;
+              }
+              return (
+                <>
+                  {hasRequest && <JsonViewer data={lead.leadbyte_request} title="LeadByte Request" />}
+                  {hasResponse && <JsonViewer data={lead.leadbyte_response} title="LeadByte Response" />}
+                  {hasOutcome && (
+                    <div className="space-y-1.5">
+                      <JsonViewer data={lead.leadbyte_outcome_payload} title="Inbound Outcome Payload" />
+                      <div className="text-[12px] text-muted-foreground">Received from LeadByte via the inbound outcome webhook.</div>
+                    </div>
+                  )}
+                </>
+              );
+            })()}
           </TabsContent>
 
           <TabsContent value="capi" className="mt-4">
