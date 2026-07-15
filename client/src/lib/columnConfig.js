@@ -1,4 +1,6 @@
-import { format } from 'date-fns';
+import { formatInTimeZone } from 'date-fns-tz';
+import { leadEventInstant } from '@/lib/reportMetrics';
+import { APP_TZ } from '@/lib/periodRange';
 
 // Read a value from a lead's mapped_fields JSON by trying a list of key
 // aliases (case-insensitive). Returns the first non-empty match or null.
@@ -17,7 +19,11 @@ function getFromMapped(lead, keys) {
 // Built-in system columns. Order here is only the "available" order; the
 // table's actual column order is driven by the persisted per-view config.
 export const SYSTEM_COLUMNS = [
-  { key: 'created', header: 'Timestamp', accessor: (l) => l.created_date ? format(new Date(l.created_date), 'MMM dd HH:mm') : '-', className: 'font-mono text-[11px] text-muted-foreground whitespace-nowrap' },
+  { key: 'created', header: 'Timestamp', accessor: (l) => {
+    const inst = leadEventInstant(l);
+    if (!inst || Number.isNaN(inst.getTime())) return '-';
+    return formatInTimeZone(inst, APP_TZ, 'MMM dd HH:mm');
+  }, className: 'font-mono text-[11px] text-muted-foreground whitespace-nowrap' },
   { key: 'fullName', header: 'Full Name', accessor: (l) => `${l.first_name || ''} ${l.last_name || ''}`.trim() || '-' },
   { key: 'vertical', header: 'Vertical', accessor: (l) => getFromMapped(l, ['vertical']) || '-' },
   { key: 'leadType', header: 'Lead Type', accessor: (l) => getFromMapped(l, ['lead_type']) || '-', special: 'leadType' },
@@ -37,7 +43,7 @@ export const SYSTEM_COLUMNS = [
   { key: 'mobile', header: 'Mobile', accessor: (l) => l.mobile || '-', className: 'font-mono text-[12px]' },
   { key: 'source', header: 'Source', accessor: (l) => getFromMapped(l, ['utm_source', 'source', 'lead_source', 'source_id', 'src']) || '-' },
   { key: 'processTime', header: 'Time', accessor: (l) => l.process_time_ms ? `${l.process_time_ms}ms` : '-', className: 'font-mono text-[11px] text-muted-foreground' },
-  { key: 'leadId', header: 'Lead ID', accessor: (l) => l.lead_id != null ? String(l.lead_id) : '-', className: 'font-mono text-[11px]' },
+  { key: 'leadId', header: 'Lead ID', accessor: (l) => l.lead_id != null ? String(l.lead_id) : (getFromMapped(l, ['lead_id']) != null ? String(getFromMapped(l, ['lead_id'])) : '-'), className: 'font-mono text-[11px]' },
   { key: 'hlrStatus', header: 'HLR Status', accessor: (l) => l.hlr_status || '-' },
   { key: 'lbStatus', header: 'LB Status', accessor: (l) => l.leadbyte_record_status || '-' },
   { key: 'deliveryError', header: 'Delivery Error', accessor: (l) => l.delivery_error || '-', className: 'text-[11px] text-muted-foreground whitespace-nowrap' },

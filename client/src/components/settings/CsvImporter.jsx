@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { api } from '@/api/client';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
@@ -9,6 +9,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Upload, Loader2, Sparkles, Check, ArrowRight, Save, Copy, AlertTriangle } from 'lucide-react';
 import { toast } from 'sonner';
 import Papa from 'papaparse';
+import { toZonedTime } from 'date-fns-tz';
+import { APP_TZ } from '@/lib/periodRange';
 
 // Core target fields per entity. Custom fields (for leads) are appended at runtime.
 const LEAD_FIELDS = ['first_name', 'last_name', 'email', 'mobile', 'supplier_name', 'revenue', 'conv_value', 'final_status', 'email_valid'];
@@ -29,6 +31,109 @@ const STATUS_LOOKUP = {
 const normalizeStatus = (raw) => STATUS_LOOKUP[String(raw ?? '').trim().toLowerCase()] || 'Processing';
 const normEmail = (v) => String(v ?? '').trim().toLowerCase();
 const normMobile = (v) => String(v ?? '').replace(/\D/g, '');
+
+// ---- Buyer disposition detection --------------------------------------------
+
+// The set of values a buyer disposition column may hold (case-insensitive).
+const BUYER_DISPO_VALUES = new Set(['sold', 'unsold', 'returned']);
+
+// A source column is a buyer disposition column when it has at least one
+// non-empty value and every non-empty value is within Sold/Unsold/Returned.
+const detectBuyerColumns = (rows, cols) => cols.filter((col) => {
+  let anyValue = false;
+  for (const r of rows) {
+    const raw = r?.[col];
+    if (raw == null) continue;
+    const s = String(raw).trim();
+    if (s === '') continue;
+    anyValue = true;
+    if (!BUYER_DISPO_VALUES.has(s.toLowerCase())) return false;
+  }
+  return anyValue;
+});
+
+// Title-case a disposition value back onto the Lead final_status enum.
+const dispoToStatus = (v) => {
+  const s = String(v ?? '').trim().toLowerCase();
+  if (s === 'sold') return 'Sold';
+  if (s === 'unsold') return 'Unsold';
+  if (s === 'returned') return 'Returned';
+  return null;
+};
+
+// First non-empty buyer disposition in source column order, else 'Unsold'.
+const deriveFinalStatus = (row, buyerCols) => {
+  for (const col of buyerCols) {
+    const status = dispoToStatus(row?.[col]);
+    if (status) return status;
+  }
+  return 'Unsold';
+};
+
+// ---- Timestamp normalization ------------------------------------------------
+
+// Split a raw slash date's first two numeric components, or null when the
+// value is not a slash date. Used only for date-order detection.
+const slashParts = (raw) => {
+  const m = String(raw ?? '').trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if (!m) return null;
+  return { a: Number(m[1]), b: Number(m[2]) };
+};
+
+// Detect day-first vs month-first across the whole mapped timestamp column.
+// Returns 'day' | 'month' | 'ambiguous'.
+const detectDateOrder = (values) => {
+  let sawSecondOver12 = false;
+  for (const v of values) {
+    const p = slashParts(v);
+    if (!p) continue;
+    if (p.a > 12) return 'day';
+    if (p.b > 12) sawSecondOver12 = true;
+  }
+  return sawSecondOver12 ? 'month' : 'ambiguous';
+};
+
+const pad2 = (n) => String(n).padStart(2, '0');
+
+// Convert a raw timestamp value to canonical naive 'YYYY-MM-DD HH:MM:SS' in
+// APP_TZ wall-clock time. Returns null when it cannot be parsed. `order` is
+// 'day' or 'month' and only affects slash dates. A value carrying an explicit
+// Z / UTC offset is an absolute instant and is converted to APP_TZ wall-clock.
+const normalizeTimestamp = (raw, order) => {
+  const s = String(raw ?? '').trim();
+  if (s === '') return null;
+
+  const fmt = (y, mo, d, h, mi, sec) =>
+    `${y}-${pad2(mo)}-${pad2(d)} ${pad2(h)}:${pad2(mi)}:${pad2(sec)}`;
+
+  // Absolute instant with an explicit offset or Z -> convert to APP_TZ wall time.
+  const hasOffset = /[zZ]$/.test(s) || /\d{2}:\d{2}(:\d{2})?\s*[+-]\d{2}:?\d{2}$/.test(s);
+  if (hasOffset) {
+    const inst = new Date(s.replace(' ', 'T'));
+    if (Number.isNaN(inst.getTime())) return null;
+    const wall = toZonedTime(inst, APP_TZ);
+    return fmt(wall.getFullYear(), wall.getMonth() + 1, wall.getDate(), wall.getHours(), wall.getMinutes(), wall.getSeconds());
+  }
+
+  // ISO-like naive: YYYY-MM-DD [HH:MM[:SS]]
+  const isoM = s.match(/^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2}))?)?$/);
+  if (isoM) {
+    const [, y, mo, d, h, mi, sec] = isoM;
+    return fmt(Number(y), Number(mo), Number(d), Number(h || 0), Number(mi || 0), Number(sec || 0));
+  }
+
+  // Slash date: DD/MM/YYYY or MM/DD/YYYY per `order`, optional time.
+  const slashM = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?$/);
+  if (slashM) {
+    const [, p1, p2, y, h, mi, sec] = slashM;
+    const day = order === 'month' ? Number(p2) : Number(p1);
+    const mon = order === 'month' ? Number(p1) : Number(p2);
+    if (mon < 1 || mon > 12 || day < 1 || day > 31) return null;
+    return fmt(Number(y), mon, day, Number(h || 0), Number(mi || 0), Number(sec || 0));
+  }
+
+  return null;
+};
 
 // ---- Deterministic auto-mapping helpers -------------------------------------
 
@@ -124,9 +229,28 @@ export default function CsvImporter() {
   const [templateName, setTemplateName] = useState('');
   const [dupChecking, setDupChecking] = useState(false);
   const [dupResult, setDupResult] = useState(null); // { newCount, dupCount }
+  const [dateOrder, setDateOrder] = useState('day'); // 'day' | 'month' — user-overridable
+  const [detectedOrder, setDetectedOrder] = useState('ambiguous'); // 'day' | 'month' | 'ambiguous'
 
   const { data: customFields = [] } = useQuery({ queryKey: ['custom-fields'], queryFn: () => api.entities.CustomField.list('sort_order') });
   const { data: templates = [] } = useQuery({ queryKey: ['import-templates'], queryFn: () => api.entities.ImportTemplate.list('-created_date') });
+  const { data: suppliers = [] } = useQuery({ queryKey: ['suppliers'], queryFn: () => api.entities.Supplier.list() });
+
+  // Lookup from normalized (trimmed, lowercased) Supplier.sid -> Supplier.name.
+  // Billing and the supplier portal both match on exact Supplier.name, so the
+  // resolved value must always be the name, never the raw sid.
+  const sidToName = React.useMemo(() => {
+    const m = new Map();
+    suppliers.forEach((s) => {
+      const sid = String(s?.sid ?? '').trim().toLowerCase();
+      if (sid && s?.name) m.set(sid, s.name);
+    });
+    return m;
+  }, [suppliers]);
+  const resolveSupplierName = (sidRaw) => {
+    const key = String(sidRaw ?? '').trim().toLowerCase();
+    return (key && sidToName.get(key)) || 'CSV Import';
+  };
 
   const targetFields = target === 'lead'
     ? [...LEAD_FIELDS, ...customFields.map(f => f.field_name).filter(n => n && !LEAD_FIELDS.includes(n))]
@@ -166,6 +290,68 @@ export default function CsvImporter() {
     if (!mappedFields.has('amount')) miss.push('amount');
     return miss;
   })();
+
+  // Source column that maps to a given target field (or null). The sid and
+  // timestamp custom fields land in the mapped object, so we read their source
+  // columns by looking up which column maps onto them.
+  const columnFor = (field) => Object.entries(mapping).find(([, f]) => f === field)?.[0] || null;
+  const sidColumn = columnFor('sid');
+  const timestampColumn = columnFor('timestamp');
+
+  // Buyer disposition columns detected by value across all source columns.
+  const buyerColumns = React.useMemo(
+    () => (target === 'lead' ? detectBuyerColumns(rows, columns) : []),
+    [target, rows, columns],
+  );
+
+  // Detect the timestamp column's date order once and seed the toggle. Runs
+  // whenever the chosen timestamp column changes.
+  useEffect(() => {
+    if (!timestampColumn) { setDetectedOrder('ambiguous'); setDateOrder('day'); return; }
+    const values = rows.map((r) => r?.[timestampColumn]);
+    const order = detectDateOrder(values);
+    setDetectedOrder(order);
+    setDateOrder(order === 'month' ? 'month' : 'day');
+  }, [timestampColumn, rows]);
+
+  // Non-blocking review diagnostics computed before commit.
+  const importDiagnostics = React.useMemo(() => {
+    if (target !== 'lead' || !rows.length) return null;
+    let unresolvedSid = 0;
+    const unresolvedSidSamples = [];
+    let unparsedTs = 0;
+    const unparsedTsSamples = [];
+    const tsSamples = [];
+    const statusCounts = {};
+    rows.forEach((r) => {
+      // Supplier resolution
+      const sidRaw = sidColumn ? r?.[sidColumn] : null;
+      const key = String(sidRaw ?? '').trim().toLowerCase();
+      if (!key || !sidToName.get(key)) {
+        unresolvedSid += 1;
+        const s = String(sidRaw ?? '').trim();
+        if (s && unresolvedSidSamples.length < 3 && !unresolvedSidSamples.includes(s)) unresolvedSidSamples.push(s);
+      }
+      // Timestamp parsing
+      if (timestampColumn) {
+        const raw = r?.[timestampColumn];
+        const rawStr = String(raw ?? '').trim();
+        if (rawStr !== '') {
+          const norm = normalizeTimestamp(raw, dateOrder);
+          if (norm == null) {
+            unparsedTs += 1;
+            if (unparsedTsSamples.length < 3) unparsedTsSamples.push(rawStr);
+          } else if (tsSamples.length < 3) {
+            tsSamples.push(`${rawStr} -> ${norm}`);
+          }
+        }
+      }
+      // Derived final_status
+      const st = deriveFinalStatus(r, buyerColumns);
+      statusCounts[st] = (statusCounts[st] || 0) + 1;
+    });
+    return { unresolvedSid, unresolvedSidSamples, unparsedTs, unparsedTsSamples, tsSamples, statusCounts };
+  }, [target, rows, sidColumn, sidToName, timestampColumn, dateOrder, buyerColumns]);
 
   const checkDuplicates = async () => {
     setDupChecking(true);
@@ -304,8 +490,25 @@ export default function CsvImporter() {
             out[field] = r[col];
           }
         });
-        if (target === 'lead' && Object.keys(mapped).length) {
-          out.mapped_fields = JSON.stringify(mapped);
+        if (target === 'lead') {
+          // Resolve supplier_name from the row's sid (which lives in mapped),
+          // never the raw sid. Falls back to 'CSV Import' when unresolved.
+          out.supplier_name = resolveSupplierName(mapped.sid);
+          // Derive final_status from the detected buyer disposition columns.
+          // When buyer columns are present they are the source of truth and win
+          // over any column mapped onto final_status. With no buyer columns,
+          // fall back to the mapped final_status value normalized.
+          out.final_status = buyerColumns.length
+            ? deriveFinalStatus(r, buyerColumns)
+            : normalizeStatus(out.final_status);
+          // Normalize the mapped timestamp to canonical APP_TZ wall-clock. Leave
+          // it unset when it cannot be parsed so created_date fallback applies.
+          if (mapped.timestamp != null) {
+            const norm = normalizeTimestamp(mapped.timestamp, dateOrder);
+            if (norm != null) mapped.timestamp = norm;
+            else delete mapped.timestamp;
+          }
+          if (Object.keys(mapped).length) out.mapped_fields = JSON.stringify(mapped);
         }
         return out;
       });
@@ -341,8 +544,6 @@ export default function CsvImporter() {
           if (m) seenMobiles.add(m);
           clean.push({
             ...r,
-            supplier_name: r.supplier_name || 'CSV Import',
-            final_status: normalizeStatus(r.final_status),
             revenue: r.revenue != null ? Number(r.revenue) || 0 : undefined,
             import_batch_id: batchId,
           });
@@ -376,7 +577,10 @@ export default function CsvImporter() {
         setProgress(null);
         qc.invalidateQueries({ queryKey: ['report-leads'] });
         if (failedCount) console.warn('CSV import failed records:', failedRecords);
-        toast.success(`Imported ${createdCount} leads, skipped ${skipped} duplicates${failedCount ? `, ${failedCount} failed` : ''}`);
+        const unresolvedSuffix = importDiagnostics
+          ? `${importDiagnostics.unresolvedSid ? `, ${importDiagnostics.unresolvedSid} unresolved supplier` : ''}${importDiagnostics.unparsedTs ? `, ${importDiagnostics.unparsedTs} unparsed timestamp` : ''}`
+          : '';
+        toast.success(`Imported ${createdCount} leads, skipped ${skipped} duplicates${failedCount ? `, ${failedCount} failed` : ''}${unresolvedSuffix}`);
         reset();
         setBusy(false);
         return;
@@ -484,6 +688,57 @@ export default function CsvImporter() {
               </tbody>
             </table>
           </div>
+
+          {target === 'lead' && importDiagnostics && (
+            <div className="border border-border rounded-[10px] p-3 space-y-2 text-[12px]">
+              <div className="text-[10px] text-muted-foreground uppercase tracking-wider">Pre-import checks (non-blocking)</div>
+
+              <div className="flex flex-wrap items-center gap-x-6 gap-y-1">
+                <span className="text-muted-foreground">
+                  Unresolved suppliers: <span className="text-foreground font-medium">{importDiagnostics.unresolvedSid}</span>
+                  {importDiagnostics.unresolvedSidSamples.length > 0 && (
+                    <span className="text-muted-foreground"> ({importDiagnostics.unresolvedSidSamples.join(', ')})</span>
+                  )}
+                </span>
+                <span className="text-muted-foreground">
+                  Unparsed timestamps: <span className="text-foreground font-medium">{importDiagnostics.unparsedTs}</span>
+                  {importDiagnostics.unparsedTsSamples.length > 0 && (
+                    <span className="text-muted-foreground"> ({importDiagnostics.unparsedTsSamples.join(', ')})</span>
+                  )}
+                </span>
+              </div>
+
+              {timestampColumn && (
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-muted-foreground">Date order:</span>
+                  <span className="text-foreground">detected {detectedOrder}</span>
+                  <div className="flex items-center gap-1">
+                    <Button size="sm" variant={dateOrder === 'day' ? 'default' : 'outline'} className="h-6 px-2 text-[11px]" onClick={() => setDateOrder('day')}>Day-first</Button>
+                    <Button size="sm" variant={dateOrder === 'month' ? 'default' : 'outline'} className="h-6 px-2 text-[11px]" onClick={() => setDateOrder('month')}>Month-first</Button>
+                  </div>
+                  {importDiagnostics.tsSamples.length > 0 && (
+                    <span className="text-muted-foreground font-mono">{importDiagnostics.tsSamples.join('  ·  ')}</span>
+                  )}
+                </div>
+              )}
+
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                <span className="text-muted-foreground">Buyer columns:</span>
+                {buyerColumns.length ? (
+                  buyerColumns.map(c => <Badge key={c} variant="outline" className="text-[10px] text-muted-foreground">{c}</Badge>)
+                ) : (
+                  <span className="text-muted-foreground italic">none detected</span>
+                )}
+              </div>
+
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+                <span className="text-muted-foreground">Derived status:</span>
+                {Object.entries(importDiagnostics.statusCounts).map(([st, n]) => (
+                  <span key={st} className="text-foreground">{st}: <span className="font-medium">{n}</span></span>
+                ))}
+              </div>
+            </div>
+          )}
 
           <div className="flex items-center justify-between pt-1">
             <div className="flex items-center gap-2">
