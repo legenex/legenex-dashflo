@@ -16,6 +16,8 @@ import { toast } from 'sonner';
 import { format, startOfDay, endOfDay, startOfWeek, startOfMonth, endOfMonth, subDays, subMonths, isAfter } from 'date-fns';
 import { processLead } from '@/functions/processLead';
 import { loadColumnConfig, saveColumnConfig, getColumnDef, buildAvailableColumns } from '@/lib/columnConfig';
+import { leadEventInstant } from '@/lib/reportMetrics';
+import { invalidateLeadCaches } from '@/lib/leadCaches';
 
 function getFieldValue(lead, field) {
   if (lead[field] != null && lead[field] !== '') return String(lead[field]);
@@ -213,7 +215,7 @@ export default function LeadsTable({ view }) {
   // Keep the table (and Status column) in sync when leads change in the backend.
   useEffect(() => {
     const unsubscribe = api.entities.Lead.subscribe(() => {
-      qc.invalidateQueries({ queryKey: ['leads-all-non-archived'] });
+      invalidateLeadCaches(qc);
     });
     return () => { if (typeof unsubscribe === 'function') unsubscribe(); };
   }, [qc]);
@@ -306,7 +308,7 @@ export default function LeadsTable({ view }) {
 
   const filtered = useMemo(() => {
     const bounds = getDateBounds(dateRange, customDate);
-    return leads.filter(lead => {
+    const result = leads.filter(lead => {
       if (!matchesView(lead, view)) return false;
       if (bounds.start && !isAfter(new Date(lead.created_date), bounds.start)) return false;
       if (bounds.end && isAfter(new Date(lead.created_date), bounds.end)) return false;
@@ -317,6 +319,16 @@ export default function LeadsTable({ view }) {
       if (sourceFilter && getSource(lead) !== sourceFilter) return false;
       return true;
     });
+    // Sort newest first by the lead's real event time. leadEventInstant is the
+    // single source of truth (it already falls back to created_date). Leads
+    // with no usable event time sort last. result is a fresh array from
+    // filter(), so this does not mutate the query cache.
+    const instant = (lead) => {
+      const d = leadEventInstant(lead);
+      const t = d ? d.getTime() : NaN;
+      return Number.isNaN(t) ? -Infinity : t;
+    };
+    return result.sort((a, b) => instant(b) - instant(a));
   }, [leads, view, dateRange, customDate, customFilters, search, statusFilter, supplierFilter, sourceFilter]);
 
   // Client-side pagination over the filtered set. Selection and bulk actions
@@ -422,7 +434,7 @@ export default function LeadsTable({ view }) {
     toast.success(`${ids.length} lead${ids.length !== 1 ? 's' : ''} deleted`);
     clearSelection();
     setBulkDeleteOpen(false);
-    qc.invalidateQueries({ queryKey: ['leads'] });
+    invalidateLeadCaches(qc);
   };
 
   const handleBulkQueue = async () => {
@@ -432,7 +444,7 @@ export default function LeadsTable({ view }) {
     }
     toast.success(`${ids.length} lead${ids.length !== 1 ? 's' : ''} queued`);
     clearSelection();
-    qc.invalidateQueries({ queryKey: ['leads'] });
+    invalidateLeadCaches(qc);
   };
 
   const handleBulkResubmit = async () => {
@@ -459,7 +471,7 @@ export default function LeadsTable({ view }) {
     setResubmitting(false);
     setResubmitProgress(null);
     clearSelection();
-    qc.invalidateQueries({ queryKey: ['leads'] });
+    invalidateLeadCaches(qc);
   };
 
   const handleBulkEdit = () => {

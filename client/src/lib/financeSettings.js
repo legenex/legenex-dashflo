@@ -8,13 +8,29 @@ import { api } from '@/api/client';
 const CONFIG_NAME = 'finance_settings';
 
 // Default taxonomy. Keys align with the CAT_STYLE map used in the Bank Feed.
+// Each category carries a group (display bucket) and a cost_class that drives
+// the Profitability tab. Existing keys are preserved so all readers keep working.
 export const DEFAULT_CATEGORIES = [
-  { id: 'cat_revenue', key: 'revenue', label: 'Revenue', keywords: ['cashback', 'legenex llc', 'deposit'] },
-  { id: 'cat_media', key: 'media', label: 'Media / Ad Spend', keywords: ['facebk', 'facebook', 'meta', 'google ads', 'tiktok', 'taboola'] },
-  { id: 'cat_tech', key: 'tech', label: 'Tech / Software', keywords: ['openai', 'aws', 'google cloud', 'vercel', 'api'] },
-  { id: 'cat_payouts', key: 'payouts', label: 'Supplier Payouts', keywords: [] },
-  { id: 'cat_personal', key: 'personal', label: 'Personal', keywords: [] },
-  { id: 'cat_other', key: 'other', label: 'Other', keywords: [] },
+  { id: 'cat_revenue', key: 'revenue', label: 'Revenue', group: 'Revenue', cost_class: 'revenue', keywords: ['cashback', 'legenex llc', 'deposit', 'interest payment'] },
+  { id: 'cat_media', key: 'media', label: 'Ad Spend', group: 'Ad Spend', cost_class: 'variable', keywords: ['facebk', 'facebook', 'meta', 'google ads', 'tiktok', 'taboola'] },
+  { id: 'cat_payouts', key: 'payouts', label: 'Supplier Payouts', group: 'Payouts', cost_class: 'variable', keywords: [] },
+  { id: 'cat_tech', key: 'tech', label: 'Software Tools', group: 'Software', cost_class: 'fixed', keywords: ['openai', 'aws', 'google cloud', 'google*workspace', 'vercel', 'api', 'slack', 'canva'] },
+  { id: 'cat_staff', key: 'staff', label: 'Staff and Consultancy', group: 'Staff', cost_class: 'fixed', keywords: ['influxx', 'payroll', 'contractor', 'consult'] },
+  { id: 'cat_fees', key: 'fees', label: 'Bank and Card Fees', group: 'Fees', cost_class: 'fixed', keywords: ['intl. transaction fee', 'transaction fee', 'wire fee'] },
+  { id: 'cat_drawings', key: 'drawings', label: 'Owners Drawings', group: 'Drawings', cost_class: 'drawings', keywords: ['revolut', 'interactive brok', 'nicholas j allen'] },
+  { id: 'cat_personal', key: 'personal', label: 'Personal', group: 'Drawings', cost_class: 'drawings', keywords: [] },
+  { id: 'cat_transfers', key: 'transfers', label: 'Internal Transfers and Card Autopay', group: 'Transfers', cost_class: 'excluded', keywords: ['io autopay', 'send money transaction initiated on mercury', 'stripe payout', 'stripe; transfer'] },
+  { id: 'cat_other', key: 'other', label: 'Other', group: 'Other', cost_class: 'fixed', keywords: [] },
+];
+
+// Cost classes that drive the Profitability tab. Each key groups categories
+// into how they behave against lead volume and the breakeven line.
+export const COST_CLASSES = [
+  { key: 'revenue', label: 'Revenue', hint: 'Money in. Not a cost.' },
+  { key: 'variable', label: 'Variable', hint: 'Scales with lead volume. Sits in contribution margin.' },
+  { key: 'fixed', label: 'Fixed', hint: 'Recurs regardless of volume. Sets the breakeven bar.' },
+  { key: 'drawings', label: 'Drawings', hint: 'Owner money out. Shown below the line, excluded from breakeven.' },
+  { key: 'excluded', label: 'Excluded', hint: 'Internal transfer or card autopay. Would double count real cost.' },
 ];
 
 export function emptySettings() {
@@ -27,15 +43,37 @@ export async function loadFinanceSettings() {
   if (!rec) return { id: null, settings: emptySettings() };
   let parsed = {};
   try { parsed = JSON.parse(rec.config || '{}'); } catch { parsed = {}; }
+  // Backfill group and cost_class on any persisted category that predates them,
+  // so settings saved before this change load without error.
+  const defaultsByKey = new Map(DEFAULT_CATEGORIES.map(c => [c.key, c]));
+  const rawCategories = parsed.categories?.length ? parsed.categories : DEFAULT_CATEGORIES;
+  const categories = rawCategories.map(c => {
+    if (c.cost_class && c.group) return c;
+    const def = defaultsByKey.get(c.key);
+    return {
+      ...c,
+      group: c.group || def?.group || 'Other',
+      cost_class: c.cost_class || def?.cost_class || 'fixed',
+    };
+  });
   return {
     id: rec.id,
     settings: {
-      categories: parsed.categories?.length ? parsed.categories : DEFAULT_CATEGORIES,
+      categories,
       matchRules: parsed.matchRules || [],
       counterparties: parsed.counterparties || [],
       accounts: parsed.accounts || [],
     },
   };
+}
+
+// Resolve the cost_class for a category key. Empty or falsy key means the
+// transaction is uncategorized and is treated as an internal transfer for
+// profitability purposes (excluded). Unknown keys default to fixed.
+export function costClassOf(categoryKey, settings) {
+  if (!categoryKey) return 'excluded';
+  const cat = (settings?.categories || []).find(c => c.key === categoryKey);
+  return cat?.cost_class || 'fixed';
 }
 
 // Persist the whole settings object. Creates the row on first save.

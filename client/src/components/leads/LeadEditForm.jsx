@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button';
 import { api } from '@/api/client';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
+import { invalidateLeadCaches } from '@/lib/leadCaches';
 
 // Direct (top-level) lead columns the operator can edit, grouped for scanning.
 const FIELD_GROUPS = [
@@ -112,7 +113,7 @@ export default function LeadEditForm({ lead, onSaved, onCancel }) {
 
       await api.entities.Lead.update(lead.id, update);
       toast.success('Lead updated');
-      qc.invalidateQueries({ queryKey: ['leads'] });
+      invalidateLeadCaches(qc);
       onSaved?.();
     } catch {
       toast.error('Failed to update lead');

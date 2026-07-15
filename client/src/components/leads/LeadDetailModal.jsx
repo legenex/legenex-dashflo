@@ -16,6 +16,7 @@ import { toast } from 'sonner';
 import { Copy, RotateCcw, Trash2, Archive, Pencil } from 'lucide-react';
 import { format } from 'date-fns';
 import { processLead } from '@/functions/processLead';
+import { invalidateLeadCaches } from '@/lib/leadCaches';
 
 export default function LeadDetailModal({ lead, open, onClose, initialTab = 'summary' }) {
   const qc = useQueryClient();
@@ -90,7 +91,7 @@ export default function LeadDetailModal({ lead, open, onClose, initialTab = 'sum
       if (!key) { toast.error('Supplier key not found'); return; }
       const resp = await processLead({ ...payload, _supplier_key: key });
       toast.success(`Resend result: ${resp.data?.Response || 'Unknown'}`);
-      qc.invalidateQueries({ queryKey: ['leads'] });
+      invalidateLeadCaches(qc);
     } catch (err) {
       toast.error('Resend failed');
     } finally {
@@ -101,7 +102,7 @@ export default function LeadDetailModal({ lead, open, onClose, initialTab = 'sum
   const handleArchive = async () => {
     await api.entities.Lead.update(lead.id, { archived: true });
     toast.success('Lead archived');
-    qc.invalidateQueries({ queryKey: ['leads'] });
+    invalidateLeadCaches(qc);
     onClose();
   };
 
@@ -109,7 +110,7 @@ export default function LeadDetailModal({ lead, open, onClose, initialTab = 'sum
     if (deleteConfirm !== 'DELETE') return;
     await api.entities.Lead.delete(lead.id);
     toast.success('Lead permanently deleted');
-    qc.invalidateQueries({ queryKey: ['leads'] });
+    invalidateLeadCaches(qc);
     onClose();
   };
 

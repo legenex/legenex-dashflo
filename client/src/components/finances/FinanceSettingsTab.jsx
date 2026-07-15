@@ -8,7 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Plus, Trash2, Save, Tags, GitBranch, Users, Landmark } from 'lucide-react';
 import { toast } from 'sonner';
 import { Panel } from '@/components/finances/financeAtoms';
-import { loadFinanceSettings, saveFinanceSettings, emptySettings, newId } from '@/lib/financeSettings';
+import { loadFinanceSettings, saveFinanceSettings, emptySettings, newId, COST_CLASSES } from '@/lib/financeSettings';
 
 const SUB_TABS = [
   { key: 'categories', label: 'Categories', icon: Tags },
@@ -108,18 +108,35 @@ export default function FinanceSettingsTab() {
         <Panel className="p-4 space-y-3">
           <div className="flex items-center justify-between">
             <div className="text-[13px] font-semibold text-foreground">Transaction Categories</div>
-            <Button size="sm" variant="outline" className="gap-1.5" onClick={() => patch('categories', [...settings.categories, { id: newId('cat'), key: newId('cat'), label: 'New Category', keywords: [] }])}>
+            <Button size="sm" variant="outline" className="gap-1.5" onClick={() => patch('categories', [...settings.categories, { id: newId('cat'), key: newId('cat'), label: 'New Category', group: 'Other', cost_class: 'fixed', keywords: [] }])}>
               <Plus className="w-3.5 h-3.5" /> Add Category
             </Button>
           </div>
+          <div className="grid grid-cols-[1fr_1fr_1fr_2fr_auto] gap-2 px-2.5 text-[10px] font-semibold tracking-[0.08em] uppercase text-muted-foreground/70">
+            <div>Label</div>
+            <div>Group</div>
+            <div>Cost Class</div>
+            <div>Keywords</div>
+            <div />
+          </div>
           <div className="space-y-2">
             {settings.categories.map((c, i) => (
-              <div key={c.id} className="grid grid-cols-[1fr_2fr_auto] gap-2 items-center rounded-lg border border-border bg-background/40 p-2.5">
+              <div key={c.id} className="grid grid-cols-[1fr_1fr_1fr_2fr_auto] gap-2 items-center rounded-lg border border-border bg-background/40 p-2.5">
                 <Input
                   value={c.label}
                   onChange={e => { const v = e.target.value; patch('categories', settings.categories.map((x, j) => j === i ? { ...x, label: v, key: x.key?.startsWith('cat_') ? slug(v) : x.key } : x)); }}
                   className="bg-background text-[12px] font-medium"
                 />
+                <Input
+                  value={c.group || ''}
+                  onChange={e => { const v = e.target.value; patch('categories', settings.categories.map((x, j) => j === i ? { ...x, group: v } : x)); }}
+                  placeholder="Group"
+                  className="bg-background text-[12px]"
+                />
+                <Select value={c.cost_class} onValueChange={v => patch('categories', settings.categories.map((x, j) => j === i ? { ...x, cost_class: v } : x))}>
+                  <SelectTrigger className="bg-background text-[12px]"><SelectValue /></SelectTrigger>
+                  <SelectContent>{COST_CLASSES.map(cc => <SelectItem key={cc.key} value={cc.key}>{cc.label}</SelectItem>)}</SelectContent>
+                </Select>
                 <TagsInput value={c.keywords} onChange={kw => patch('categories', settings.categories.map((x, j) => j === i ? { ...x, keywords: kw } : x))} placeholder="Keywords that match this category, comma separated" />
                 <Button size="icon" variant="ghost" className="h-8 w-8 text-muted-foreground hover:text-destructive" onClick={() => patch('categories', settings.categories.filter((_, j) => j !== i))}>
                   <Trash2 className="w-3.5 h-3.5" />
@@ -128,6 +145,7 @@ export default function FinanceSettingsTab() {
             ))}
           </div>
           <p className="text-[11px] text-muted-foreground/70">Keywords are matched against the transaction description to auto-suggest a category in the Bank Feed and the expense drawer.</p>
+          <p className="text-[11px] text-muted-foreground/70">Cost Class drives the Profitability tab: variable costs scale with leads, fixed costs set the breakeven bar, drawings sit below the line, and excluded keeps internal transfers from double counting.</p>
         </Panel>
       )}
 
