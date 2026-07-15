@@ -39,6 +39,7 @@ export const navGroups = [
     label: 'Finances', icon: Wallet, type: 'dropdown', path: '/finances', permKey: 'finances',
     children: [
       { label: 'Overview', path: '/finances', tab: 'overview', permKey: 'finances' },
+      { label: 'Profitability', path: '/finances', tab: 'profit', permKey: 'bank_feed' },
       { label: 'Bank Feed', path: '/finances', tab: 'bank', permKey: 'bank_feed' },
       { label: 'Invoices', path: '/finances', tab: 'invoices', permKey: 'finances' },
       { label: 'Buyer Payments', path: '/finances', tab: 'payments', permKey: 'finances' },

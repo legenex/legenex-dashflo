@@ -2,12 +2,13 @@ import React from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '@/api/client';
-import { LayoutDashboard, Landmark, FileText, CreditCard, Wallet, Megaphone, Settings2 } from 'lucide-react';
+import { LayoutDashboard, Landmark, FileText, CreditCard, Wallet, Megaphone, TrendingUp, Settings2 } from 'lucide-react';
 import { usePermissions } from '@/lib/AuthContext';
 import SubNavShell from '@/components/layout/SubNavShell';
 
 const ITEMS = [
   { label: 'Overview', tab: 'overview', icon: LayoutDashboard },
+  { label: 'Profitability', tab: 'profit', icon: TrendingUp, perm: 'bank_feed' },
   { label: 'Bank Feed', tab: 'bank', icon: Landmark, perm: 'bank_feed' },
   { label: 'Invoices', tab: 'invoices', icon: FileText },
   { label: 'Buyer Payments', tab: 'payments', icon: CreditCard },

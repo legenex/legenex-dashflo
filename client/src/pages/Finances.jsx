@@ -10,7 +10,9 @@ import InvoicesTab from '@/components/finances/InvoicesTab';
 import BuyerPaymentsTab from '@/components/finances/BuyerPaymentsTab';
 import SupplierPayoutsTab from '@/components/finances/SupplierPayoutsTab';
 import AdSpendTab from '@/components/finances/AdSpendTab';
+import ProfitabilityTab from '@/components/finances/ProfitabilityTab';
 import FinanceSettingsTab from '@/components/finances/FinanceSettingsTab';
+import { loadFinanceSettings } from '@/lib/financeSettings';
 import { unmatched, reconcile, workbench } from '@/lib/financeMetrics';
 import { usePermissions } from '@/lib/AuthContext';
 import DateRangeFilter from '@/components/shared/DateRangeFilter';
@@ -25,6 +27,7 @@ const TAB_META = {
   payments: { name: 'Buyer Payments', subtitle: 'Cash actually received from buyers, matched against invoices.' },
   payouts: { name: 'Supplier Payouts', subtitle: 'What is owed to suppliers and what has been paid.' },
   adspend: { name: 'Ad Spend', subtitle: 'Synced platform spend and the true CPL it produces.' },
+  profit: { name: 'Profitability', subtitle: 'What everything costs, and what it takes to break even.' },
   settings: { name: 'Settings', subtitle: 'Categories, matching rules, counterparty aliases, and accounts.' },
 };
 
@@ -50,6 +53,7 @@ export default function Finances() {
   const { data: payouts = [] } = useQuery({ queryKey: ['supplier-payouts'], queryFn: () => api.entities.SupplierPayout.list('-created_date', 500) });
   const { data: adSpend = [] } = useQuery({ queryKey: ['adspend'], queryFn: () => api.entities.AdSpend.list('-date', 2000) });
   const { data: txns = [] } = useQuery({ queryKey: ['bank-txns'], queryFn: () => api.entities.BankTransaction.list('-date', 500) });
+  const { data: financeSettings } = useQuery({ queryKey: ['finance-settings'], queryFn: async () => (await loadFinanceSettings()).settings });
   const { data: mercuryCfg } = useQuery({
     queryKey: ['mercury-config'],
     queryFn: async () => (await api.entities.IntegrationConfig.filter({ name: 'mercury' }))[0] || null,
@@ -95,7 +99,7 @@ export default function Finances() {
   const meta = TAB_META[tab] || TAB_META.overview;
 
   const refresh = () => {
-    ['report-leads', 'buyers', 'suppliers', 'all-invoices', 'buyer-payments', 'supplier-payouts', 'adspend', 'bank-txns', 'mercury-config']
+    ['report-leads', 'buyers', 'suppliers', 'all-invoices', 'buyer-payments', 'supplier-payouts', 'adspend', 'bank-txns', 'mercury-config', 'adspend-mappings', 'finance-settings']
       .forEach(k => qc.invalidateQueries({ queryKey: [k] }));
   };
 
@@ -113,6 +117,7 @@ export default function Finances() {
       {tab === 'payments' && <BuyerPaymentsTab buyers={buyers} win={win} />}
       {tab === 'payouts' && <SupplierPayoutsTab suppliers={suppliers} leads={leads} adSpend={adSpend} win={win} />}
       {tab === 'adspend' && <AdSpendTab win={win} />}
+      {tab === 'profit' && canBank && <ProfitabilityTab win={win} leads={leads} adSpend={adSpend} settings={financeSettings} />}
       {tab === 'settings' && <FinanceSettingsTab />}
     </FinanceShell>
   );

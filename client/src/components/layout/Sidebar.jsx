@@ -4,12 +4,16 @@ import { usePermissions } from '@/lib/AuthContext';
 import { useTheme } from '@/lib/theme';
 import {
   ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown,
+  PanelLeftClose, PanelLeftOpen,
 } from 'lucide-react';
 import ViewAsSwitcher from './ViewAsSwitcher';
 import SidebarProfile from './SidebarProfile';
 import { useSidebarWidth } from '@/hooks/useSidebarWidth';
+import { useCollapsible } from '@/hooks/useCollapsible';
 import ResizeHandle from './ResizeHandle';
 import { navGroups, filterNav } from './navConfig';
+
+const COLLAPSED_WIDTH = 68;
 
 function isChildActive(location, child) {
   if (child.tab) {
@@ -47,23 +51,88 @@ export default function Sidebar() {
     : '/brand/9eecce577_Logo-Wide-Dark-Clear.png';
   const groups = filterNav(navGroups, can);
   const { width, startResize } = useSidebarWidth();
+  const { collapsed, toggle } = useCollapsible({ storageKey: 'legenex_sidebar_collapsed' });
   const [openGroups, setOpenGroups] = useState(() => loadOpenGroups(location));
 
   useEffect(() => {
     try { localStorage.setItem(SIDEBAR_GROUPS_KEY, JSON.stringify(openGroups)); } catch {}
   }, [openGroups]);
 
+  // Keep AppLayout's content margin in sync: collapsed uses the icon-rail width,
+  // expanded uses the resizable width. Runs whenever either value changes.
+  useEffect(() => {
+    if (typeof document !== 'undefined') {
+      document.documentElement.style.setProperty('--sidebar-width', `${collapsed ? COLLAPSED_WIDTH : width}px`);
+    }
+  }, [collapsed, width]);
+
   const toggleGroup = (label) => {
     setOpenGroups(prev => prev.includes(label) ? prev.filter(l => l !== label) : [...prev, label]);
   };
+
+  // Collapsed: icon-only rail. Groups navigate to their path or first child.
+  if (collapsed) {
+    return (
+      <aside className="fixed left-0 top-0 bottom-0 bg-sidebar flex flex-col items-center border-r border-sidebar-border z-50"
+        style={{ width: `${COLLAPSED_WIDTH}px`, borderTopRightRadius: '16px', borderBottomRightRadius: '16px' }}>
+        <Link to="/" className="flex items-center justify-center py-6">
+          <img src={logoSrc} alt="Legenex" className="h-7 w-7 object-contain" />
+        </Link>
+        <nav className="flex-1 px-2 space-y-1 mt-2 overflow-y-auto no-scrollbar w-full flex flex-col items-center">
+          {groups.map(group => {
+            const Icon = group.icon;
+            const highlight = group.type === 'single'
+              ? (group.path === '/' ? location.pathname === '/' : location.pathname === group.path)
+              : (group.children.some(c => isChildActive(location, c)) || (group.path && location.pathname === group.path));
+            const target = group.type === 'single'
+              ? group.path
+              : (group.path || (group.children[0]?.tab ? `${group.children[0].path}?tab=${group.children[0].tab}` : group.children[0]?.path));
+            return (
+              <button
+                key={group.label}
+                onClick={() => navigate(target)}
+                title={group.label}
+                aria-label={group.label}
+                className={`relative w-10 h-10 flex items-center justify-center rounded-lg transition-all duration-150
+                  ${highlight ? 'bg-primary/10 text-primary' : 'text-sidebar-foreground hover:text-foreground hover:bg-sidebar-accent'}`}
+              >
+                {highlight && <div className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-5 bg-primary rounded-r-full" />}
+                <Icon className="w-[18px] h-[18px]" />
+              </button>
+            );
+          })}
+        </nav>
+        <div className="px-2 py-3 border-t border-sidebar-border w-full flex justify-center">
+          <button
+            onClick={toggle}
+            aria-label="Expand sidebar"
+            title="Expand sidebar"
+            className="w-10 h-10 flex items-center justify-center rounded-lg border border-sidebar-border text-sidebar-foreground hover:text-foreground hover:bg-sidebar-accent transition-all duration-150"
+          >
+            <PanelLeftOpen className="w-[18px] h-[18px]" />
+          </button>
+        </div>
+      </aside>
+    );
+  }
 
   return (
     <aside data-resize-origin className="fixed left-0 top-0 bottom-0 bg-sidebar flex flex-col border-r border-sidebar-border z-50"
       style={{ width: `${width}px`, borderTopRightRadius: '16px', borderBottomRightRadius: '16px' }}>
 
-      <Link to="/" className="flex items-center px-5 py-6">
-        <img src={logoSrc} alt="Legenex DashFlo" className="h-10 w-auto max-w-full object-contain" />
-      </Link>
+      <div className="flex items-center justify-between pl-5 pr-3 py-6">
+        <Link to="/" className="flex items-center min-w-0">
+          <img src={logoSrc} alt="Legenex DashFlo" className="h-10 w-auto max-w-full object-contain" />
+        </Link>
+        <button
+          onClick={toggle}
+          aria-label="Collapse sidebar"
+          title="Collapse sidebar"
+          className="shrink-0 w-7 h-7 flex items-center justify-center rounded-md border border-sidebar-border text-sidebar-foreground hover:text-foreground hover:bg-sidebar-accent transition-all duration-150"
+        >
+          <PanelLeftClose className="w-4 h-4" />
+        </button>
+      </div>
 
       <nav className="flex-1 px-3 space-y-0.5 mt-2 overflow-y-auto">
         {groups.map(group => {
