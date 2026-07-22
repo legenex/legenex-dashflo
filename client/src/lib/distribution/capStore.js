@@ -96,7 +96,7 @@ export function makeInMemoryCasStore({ yieldFn } = {}) {
 // ---- Real the backend adapter (runs when deployed; NEEDS-ENV to verify live) ----
 // Uses CapCounter for windowed counts and a claim CapCounter for dedup, each via
 // updateMany CAS. `db` is api.asServiceRole.
-export function makeBase44CapStore(db) {
+export function makeEntityCapStore(db) {
   async function ensureCounter(key) {
     // create-if-missing, then reconcile to a single canonical row (lowest id) so
     // a concurrent create does not leave uncontrolled duplicates.

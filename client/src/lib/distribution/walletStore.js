@@ -63,7 +63,7 @@ export function makeInMemoryWalletStore({ initial = {}, yieldFn } = {}) {
 
 // ---- Real the backend adapter (NEEDS-ENV to verify live) ----
 // Balance in a versioned BuyerWallet record; ledger in WalletTransaction.
-export function makeBase44WalletStore(db) {
+export function makeEntityWalletStore(db) {
   async function ensureWallet(buyerId) {
     let rows = await db.entities.BuyerWallet.filter({ buyer_id: buyerId });
     if (!rows.length) {

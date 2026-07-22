@@ -1139,7 +1139,7 @@ function bypassLeadStatus(finalForBypass) {
 
 export default async function processLead(ctx) {
   const db = ctx.db;
-  const method = ctx.req.method;
+  const method = ctx.req?.method;
 
   if (method === 'GET') return ctx.json({ status: 'ok' }, 200);
 
@@ -1161,16 +1161,25 @@ export default async function processLead(ctx) {
     const body = ctx.body || {};
     const payload = body.payload || body;
 
-    const headers = ctx.req.headers || {};
+    const rawHeaders = ctx.req?.headers || {};
+    const getHeader = (name) => {
+      const target = String(name).toLowerCase();
+      for (const k of Object.keys(rawHeaders)) {
+        if (k.toLowerCase() === target) return rawHeaders[k];
+      }
+      return null;
+    };
     let supplierKeyRaw =
-      headers['x-api-key'] ||
-      headers['x_key'] ||
+      getHeader('X-API-KEY') ||
+      getHeader('X_KEY') ||
+      getHeader('x-api-key') ||
+      getHeader('x_key') ||
       payload['X-API-KEY'] ||
       payload['X_KEY'] ||
       payload._supplier_key ||
       null;
     if (!supplierKeyRaw) {
-      const authHeader = headers['authorization'] || '';
+      const authHeader = getHeader('Authorization') || '';
       if (authHeader.startsWith('Basic ')) {
         const decoded = atob(authHeader.slice(6));
         supplierKeyRaw = decoded.split(':')[0] || null;

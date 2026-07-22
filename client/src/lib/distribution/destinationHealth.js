@@ -46,7 +46,7 @@ export function makeInMemoryHealthStore() {
   };
 }
 
-export function makeBase44HealthStore(db) {
+export function makeEntityHealthStore(db) {
   async function get(destId) {
     const rows = await db.entities.DestinationHealth.filter({ destination_id: destId });
     return rows[0] || null;

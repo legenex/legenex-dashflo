@@ -87,6 +87,7 @@ function transformCode(text) {
     .replace(/@\/api\/base44Client/g, '@/api/client')
     .replace(/\bbase44\b/g, 'api')          // identifier usage
     .replace(/\bBase44\b/g, 'the backend')  // Title-case brand mentions (prose)
+    .replace(/Base44/g, 'Entity')           // embedded in camelCase ids (makeBase44CapStore)
     .replace(/\bBASE44\b/g, 'BACKEND');
 }
 
@@ -227,6 +228,30 @@ function checkSyntax(code) {
 }
 function hashStr(s) { let h = 0; for (let i = 0; i < s.length; i++) { h = (h * 31 + s.charCodeAt(i)) | 0; } return h; }
 
+// Copy shared sibling modules that ported functions import (e.g. each function
+// dir bundles a copy of routingEngine.generated.js, loaded via
+// `import './routingEngine.generated.js'`). One transformed copy in
+// server/src/functions/ serves them all. Ignores entry.ts (that's the function).
+function syncSharedFunctionFiles() {
+  const fnDir = path.join(UPSTREAM, 'base44', 'functions');
+  if (!fs.existsSync(fnDir)) return;
+  const written = new Set();
+  for (const d of fs.readdirSync(fnDir, { withFileTypes: true })) {
+    if (!d.isDirectory()) continue;
+    const inner = path.join(fnDir, d.name);
+    for (const file of fs.readdirSync(inner)) {
+      if (file === 'entry.ts' || !file.endsWith('.js') || written.has(file)) continue;
+      written.add(file);
+      const dest = path.join(SERVER_FUNCS, file);
+      const next = transformCode(fs.readFileSync(path.join(inner, file), 'utf8'));
+      if (!fs.existsSync(dest) || fs.readFileSync(dest, 'utf8') !== next) {
+        fs.writeFileSync(dest, next);
+        actions.push(`shared function file: ${file}`);
+      }
+    }
+  }
+}
+
 function claudeAvailable() {
   try { execFileSync('claude', ['--version'], { encoding: 'utf8', env: { ...process.env, CLAUDE_NOTIFIER_DISABLE: '1' } }); return true; } catch { return false; }
 }
@@ -337,9 +362,14 @@ function portBackendFunction(name, { hasClaude, isNew }) {
   const hasForbidden = /Deno\.|createClientFromRequest|from ['"]npm:|\bbase44\b/i.test(ported);
   const looksLikeCode = /^\s*(import\b|export\b|const\b|\/\/|\/\*)/.test(ported);
   const hasExport = /export\s+default/.test(ported);
-  const hasTsSyntax = /:\s*(string|number|boolean|any|unknown|void)\b|:\s*Record<|<[A-Z]\w*(,\s*\w+)?>|^\s*interface\s/m.test(ported);
+  // `node --check` (syntaxOk) is the authoritative check — real TypeScript
+  // annotations fail to parse and are caught here. We only additionally flag
+  // an `interface` declaration, which can be valid-adjacent; we do NOT flag
+  // `: type` / `<Generic>` patterns since those false-positive on comments and
+  // Graph-API strings, over-staging perfectly valid ports.
+  const hasInterface = /^\s*interface\s+[A-Z]/m.test(ported);
   const syntaxOk = checkSyntax(ported);
-  const dirty = hasForbidden || !looksLikeCode || !hasExport || hasTsSyntax || !syntaxOk;
+  const dirty = hasForbidden || !looksLikeCode || !hasExport || hasInterface || !syntaxOk;
 
   if (isNew) {
     if (dirty) {
@@ -370,7 +400,7 @@ function portBackendFunction(name, { hasClaude, isNew }) {
 // implemented in client/src/api/client.js (this is how api.users.inviteUser
 // first appeared). Ignores our own SDK namespaces and known non-SDK `api` vars
 // (embla carousel instances, hostnames like api.legenex.com).
-const SDK_NAMESPACES = new Set(['entities', 'auth', 'users', 'functions', 'integrations', 'request', 'getToken', 'setToken']);
+const SDK_NAMESPACES = new Set(['entities', 'asServiceRole', 'auth', 'users', 'functions', 'integrations', 'request', 'getToken', 'setToken']);
 const IGNORE_API_PROPS = new Set([
   // embla carousel instance methods
   'on', 'off', 'canScrollNext', 'canScrollPrev', 'scrollTo', 'scrollNext', 'scrollPrev',
@@ -548,6 +578,7 @@ async function main() {
   for (const name of changes.schemas) syncSchema(name);
   regenShims();
   for (const name of changes.funcs) portBackendFunction(name, { hasClaude, isNew: !existingFuncs.has(name) });
+  syncSharedFunctionFiles();
 
   if (changes.depsChanged) installNewDeps();
 

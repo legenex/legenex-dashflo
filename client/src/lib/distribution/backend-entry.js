@@ -16,20 +16,20 @@ export { buildRoutingSnapshot } from './snapshot.js';
 export { runShadow } from './shadowHook.js';
 export { runSimulation } from './simulateReport.js';
 export { loadRoutingSnapshot, hasActiveRouteGroup, _clearActiveGroupCache } from './snapshotLoader.js';
-export { makeBase44CapStore } from './capStore.js';
+export { makeEntityCapStore } from './capStore.js';
 export { reserve, finalize, release, RESERVE } from './reservation.js';
-export { makeBase44WalletStore } from './walletStore.js';
+export { makeEntityWalletStore } from './walletStore.js';
 export { walletDebit, walletCredit, walletCreditReturn, WALLET } from './walletLedger.js';
 export { computeBillingLines, applyReturnAdjustment } from './billing.js';
 export { deliverDirectPost } from './directPost.js';
 export { resolveSubDeliveryCfg, projectSubDeliveryForClient } from './deliveryResolve.js';
 export { runPingPost, buildPingPayload, PING_ALLOWLIST } from './pingpostFlow.js';
 export { distributeLead, orderEligible } from './distribute.js';
-export { makeBase44AttemptStore, makeInMemoryAttemptStore } from './deliveryStore.js';
+export { makeEntityAttemptStore, makeInMemoryAttemptStore } from './deliveryStore.js';
 export { applyTransform } from './transforms.js';
 export { runRetryWorker, manualRetry, backoffWithJitter } from './retryWorker.js';
 export {
-  makeBase44HealthStore, makeInMemoryHealthStore, nextHealth, isBlocked, CIRCUIT,
+  makeEntityHealthStore, makeInMemoryHealthStore, nextHealth, isBlocked, CIRCUIT,
 } from './destinationHealth.js';
 export { wallClock, isWithinSchedule } from './schedule.js';
 export { rankBids, BID_REASON } from './pingpost.js';

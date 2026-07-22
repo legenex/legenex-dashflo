@@ -87,6 +87,12 @@ export const entities = new Proxy({}, {
   },
 });
 
+// Service-role accessor. On the hosted platform this bypassed row-level
+// security; here the backend already scopes entity access by the authenticated
+// user's role (admin/owner have full access), so distribution/operator helpers
+// that expect a service-role `db` can use the same entity client.
+export const asServiceRole = { entities };
+
 // ── Auth ────────────────────────────────────────────────────────────────────
 export const auth = {
   me: () => request('/auth/me'),
@@ -148,5 +154,5 @@ export const integrations = {
   },
 };
 
-export const api = { entities, auth, users, functions, integrations, request, getToken, setToken };
+export const api = { entities, asServiceRole, auth, users, functions, integrations, request, getToken, setToken };
 export default api;

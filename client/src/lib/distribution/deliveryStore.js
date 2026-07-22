@@ -38,7 +38,7 @@ export function makeInMemoryAttemptStore({ yieldFn } = {}) {
   };
 }
 
-export function makeBase44AttemptStore(db) {
+export function makeEntityAttemptStore(db) {
   return {
     async createAttempt(rec) { return db.entities.DeliveryAttempt.create(rec); },
     async updateAttempt(id, patch) { return db.entities.DeliveryAttempt.update(id, patch); },
