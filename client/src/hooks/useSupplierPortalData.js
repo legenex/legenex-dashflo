@@ -5,12 +5,15 @@ import { useSupplierPortalScope } from './useSupplierPortalScope';
 // Fetches supplier-scoped portal data (leads, returns, api key, ad reporting)
 // via the backend function, which enforces scoping server-side.
 export function useSupplierPortalData() {
-  const { previewSupplierId } = useSupplierPortalScope();
+  const { previewSupplierId, rolePreview } = useSupplierPortalScope();
 
   const query = useQuery({
-    queryKey: ['supplier-portal-data', previewSupplierId || 'self'],
+    queryKey: ['supplier-portal-data', previewSupplierId || (rolePreview ? 'role-preview' : 'self')],
     queryFn: async () => {
-      const res = await api.functions.invoke('supplierPortalData', previewSupplierId ? { supplier_id: previewSupplierId } : {});
+      const payload = previewSupplierId
+        ? { supplier_id: previewSupplierId }
+        : (rolePreview ? { preview_role: true } : {});
+      const res = await api.functions.invoke('supplierPortalData', payload);
       return res.data;
     },
     retry: false,

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '@/api/client';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
@@ -11,6 +11,8 @@ import { ArrowLeft, ChevronLeft, Copy, Eye, EyeOff, ExternalLink } from 'lucide-
 import { toast } from 'sonner';
 import { supplierMetrics, money, pct } from '@/lib/partnerMetrics';
 import PostingSpecs from '@/components/suppliers/PostingSpecs';
+import SupplierSourcesTab from '@/components/operations/suppliers/SupplierSourcesTab';
+import SupplierMetaCosts from '@/components/suppliers/SupplierMetaCosts';
 
 function parseArr(raw) {
   if (!raw) return [];
@@ -22,7 +24,12 @@ export default function SupplierDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
   const qc = useQueryClient();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [showKey, setShowKey] = useState(false);
+  const TAB_VALUES = ['overview', 'sources', 'adspend', 'specs', 'portal', 'leads'];
+  const rawTab = searchParams.get('tab') || 'overview';
+  const activeTab = TAB_VALUES.includes(rawTab) ? rawTab : 'overview';
+  const onTabChange = (v) => setSearchParams(v === 'overview' ? {} : { tab: v }, { replace: true });
 
   const { data: supplier, isLoading } = useQuery({
     queryKey: ['supplier', id],
@@ -139,9 +146,11 @@ export default function SupplierDetail() {
         ))}
       </div>
 
-      <Tabs defaultValue="overview">
+      <Tabs value={activeTab} onValueChange={onTabChange}>
         <TabsList>
           <TabsTrigger value="overview">Overview</TabsTrigger>
+          <TabsTrigger value="sources">Sources</TabsTrigger>
+          <TabsTrigger value="adspend">Ad Spend</TabsTrigger>
           <TabsTrigger value="specs">Posting Specs</TabsTrigger>
           <TabsTrigger value="portal">Portal</TabsTrigger>
           <TabsTrigger value="leads">Leads</TabsTrigger>
@@ -189,6 +198,16 @@ export default function SupplierDetail() {
               </div>
             )}
           </div>
+        </TabsContent>
+
+        <TabsContent value="sources" className="mt-4">
+          <div className="bg-card border border-border rounded-[10px] p-5">
+            <SupplierSourcesTab supplier={supplier} />
+          </div>
+        </TabsContent>
+
+        <TabsContent value="adspend" className="mt-4">
+          <SupplierMetaCosts supplier={supplier} />
         </TabsContent>
 
         <TabsContent value="specs" className="mt-4">

@@ -1,15 +1,13 @@
 import React from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { LayoutDashboard, FileText, Undo2, Code2, Settings as SettingsIcon } from 'lucide-react';
+import { LayoutDashboard, FileText, BarChart3 } from 'lucide-react';
 import { useSupplierPortalScope } from '@/hooks/useSupplierPortalScope';
 import SidebarProfile from '@/components/layout/SidebarProfile';
 
 const ITEMS = [
-  { label: 'Dashboard', path: '/supplier-portal', icon: LayoutDashboard },
-  { label: 'My Leads', path: '/supplier-portal/leads', icon: FileText },
-  { label: 'Returns', path: '/supplier-portal/returns', icon: Undo2 },
-  { label: 'API Specs', path: '/supplier-portal/api', icon: Code2 },
-  { label: 'Settings', path: '/supplier-portal/settings', icon: SettingsIcon },
+  { label: 'Overview', path: '/supplier-portal', icon: LayoutDashboard },
+  { label: 'Leads', path: '/supplier-portal/leads', icon: FileText },
+  { label: 'Reports', path: '/supplier-portal/reports', icon: BarChart3 },
 ];
 
 // Minimal left sidebar for the supplier portal. Preserves ?supplier_id= when previewing.

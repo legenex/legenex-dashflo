@@ -8,11 +8,12 @@ import { useSupplierPortalData } from '@/hooks/useSupplierPortalData';
 // Supplier portal shell. Own minimal sidebar, scoped data, never exposes operator sections.
 // Access: supplier-role users scoped to their supplier, or operators previewing via ?supplier_id=.
 export default function SupplierPortalLayout() {
-  const { supplierId, isOperator } = useSupplierPortalScope();
+  const { supplierId, isOperator, rolePreview } = useSupplierPortalScope();
   const { data, isLoading, error } = useSupplierPortalData();
 
-  // No supplier scope at all → not allowed here.
-  if (!supplierId && !isLoading) {
+  // No supplier scope at all → not allowed here. During "View as → Supplier"
+  // role preview the supplier is resolved server-side, so don't bounce on a null id.
+  if (!supplierId && !rolePreview && !isLoading) {
     return <Navigate to="/" replace />;
   }
 

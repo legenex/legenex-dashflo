@@ -4,18 +4,9 @@ import { useAuth } from '@/lib/AuthContext';
 import { sendGmail } from '@/functions/sendGmail';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
-import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
-} from '@/components/ui/select';
-import { Save, Mail, CheckCircle2, Plug, Loader2, User as UserIcon } from 'lucide-react';
+import { Save, Mail, CheckCircle2, Plug, Loader2, User as UserIcon, Lock } from 'lucide-react';
 import { toast } from 'sonner';
 import { Panel, Input, Tag } from '@/components/settings/settingsUi';
-
-const TIMEZONES = [
-  'UTC', 'America/New_York', 'America/Chicago', 'America/Denver', 'America/Los_Angeles',
-  'America/Sao_Paulo', 'Europe/London', 'Europe/Paris', 'Europe/Berlin', 'Africa/Johannesburg',
-  'Asia/Dubai', 'Asia/Kolkata', 'Asia/Singapore', 'Asia/Tokyo', 'Australia/Sydney',
-];
 
 export default function SettingsProfile() {
   const { user, checkUserAuth } = useAuth();
@@ -88,12 +79,10 @@ export default function SettingsProfile() {
           <Input label="Email" value={form.email} onChange={(v) => setForm(p => ({ ...p, email: v }))} placeholder="you@example.com" hint="Your sign-in email is managed by your account." />
           <div>
             <div className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">Timezone</div>
-            <Select value={form.timezone} onValueChange={(v) => setForm(p => ({ ...p, timezone: v }))}>
-              <SelectTrigger className="h-10 bg-background text-[13px]"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                {TIMEZONES.map(tz => <SelectItem key={tz} value={tz} className="text-[13px]">{tz}</SelectItem>)}
-              </SelectContent>
-            </Select>
+            <div className="h-10 flex items-center gap-2 rounded-md border border-border bg-muted/40 px-3 text-[13px] text-muted-foreground">
+              <Lock className="w-3.5 h-3.5 shrink-0" />
+              <span>America/Regina (Saskatchewan), fixed for all reporting</span>
+            </div>
           </div>
           <div className="flex justify-end pt-1">
             <Button size="sm" onClick={save} disabled={saving} className="gap-1.5">

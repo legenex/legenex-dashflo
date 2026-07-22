@@ -29,7 +29,10 @@ export const PERMISSION_GROUPS = [
       { key: 'dist_suppliers', label: 'Suppliers' },
       { key: 'dist_brands', label: 'Brands' },
       { key: 'dist_deliveries', label: 'Deliveries' },
+      { key: 'dist_webhooks', label: 'Webhooks' },
       { key: 'dist_conversion_events', label: 'Conversion Events' },
+      { key: 'dist_routes', label: 'Route Groups' },
+      { key: 'dist_simulator', label: 'Simulator' },
     ],
   },
   {
@@ -98,8 +101,12 @@ export const PATH_KEYS = {
   '/leads/queued': 'leads_queued',
   '/distribution': 'dist_dashboard',
   '/campaigns': 'dist_campaigns',
-  '/deliveries': 'dist_deliveries',
+  '/campaigns/deliveries': 'dist_deliveries',
+  '/distribution/buyers': 'dist_buyers',
+  '/deliveries': 'dist_webhooks',
   '/conversion-events': 'dist_conversion_events',
+  '/distribution/routes': 'dist_routes',
+  '/distribution/simulator': 'dist_simulator',
   '/reports': 'reports',
   '/finances': 'finances',
   '/operations/buyers': 'operations',
@@ -147,6 +154,7 @@ export function keyForLocation(pathname, search) {
   // Detail routes fall under their list permission.
   if (pathname.startsWith('/suppliers/')) return 'dist_suppliers';
   if (pathname.startsWith('/buyers/')) return 'dist_buyers';
+  if (pathname.startsWith('/distribution/buyers/')) return 'dist_buyers';
   return PATH_KEYS[pathname] || null;
 }
 

@@ -26,8 +26,15 @@ export default function ReportSidebar({ active, onSelect, customReports = [], on
     </button>
   );
 
+  const railItems = STANDARD.map(s => ({
+    label: s.label,
+    icon: s.icon,
+    active: active === `std:${s.key}`,
+    onClick: () => onSelect(`std:${s.key}`),
+  }));
+
   return (
-    <SubNavShell>
+    <SubNavShell items={railItems} title="Reports">
       <div className="space-y-0.5 mb-5">
         {STANDARD.map(s => <Item key={s.key} id={`std:${s.key}`} label={s.label} icon={s.icon} />)}
       </div>

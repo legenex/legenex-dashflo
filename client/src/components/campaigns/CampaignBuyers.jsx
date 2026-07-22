@@ -9,13 +9,15 @@ import { Switch } from '@/components/ui/switch';
 import { Badge } from '@/components/ui/badge';
 import { SearchableSelect } from '@/components/ui/searchable-select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
 import { Plus, ArrowDownUp } from 'lucide-react';
 import { toast } from 'sonner';
 import { money } from '@/lib/partnerMetrics';
 import ImportExportDialog from '@/components/shared/ImportExportDialog';
 import { TableShell, Row, Tag, EmptyRow } from '@/components/campaigns/campaignTable';
+import RowActionsMenu from '@/components/campaigns/RowActionsMenu';
 
-const BUYER_TEMPLATE = '1.6fr 0.8fr 0.9fr 1fr 0.9fr 0.9fr 0.9fr 0.9fr 1fr 0.9fr 0.9fr 0.9fr';
+const BUYER_TEMPLATE = '1.6fr 0.8fr 0.9fr 1fr 0.9fr 0.9fr 0.9fr 0.9fr 1fr 0.9fr 0.9fr 0.9fr 0.8fr';
 
 const BLANK = {
   company_name: '', email: '', phone: '', location: '',
@@ -28,7 +30,9 @@ export default function CampaignBuyers() {
   const navigate = useNavigate();
   const [modal, setModal] = useState(false);
   const [form, setForm] = useState(BLANK);
+  const [editId, setEditId] = useState(null);
   const [ioOpen, setIoOpen] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState(null);
 
   const { data: buyers = [] } = useQuery({
     queryKey: ['buyers'],
@@ -40,27 +44,64 @@ export default function CampaignBuyers() {
   });
   const verticalOptions = verticalList.map(v => ({ value: v.code, label: v.name }));
 
-  const openCreate = () => { setForm(BLANK); setModal(true); };
+  const openCreate = () => { setForm(BLANK); setEditId(null); setModal(true); };
+
+  const openEdit = (b, e) => {
+    e.stopPropagation();
+    setForm({
+      company_name: b.company_name || '', email: b.email || '', phone: b.phone || '',
+      location: b.location || '', buyer_type: b.buyer_type || '', vertical: b.vertical || '',
+      billing_mode: b.billing_mode || 'lead_count', billing_model: b.billing_model || '',
+      billing_email: b.billing_email || '', min_balance: b.min_balance ?? 0,
+    });
+    setEditId(b.id); setModal(true);
+  };
+
+  const buyerPayload = () => ({
+    company_name: form.company_name,
+    email: form.email,
+    phone: form.phone,
+    location: form.location,
+    buyer_type: form.buyer_type,
+    vertical: form.vertical,
+    billing_mode: form.billing_mode,
+    billing_model: form.billing_model,
+    billing_email: form.billing_email,
+    min_balance: Number(form.min_balance) || 0,
+  });
 
   const createBuyer = async () => {
-    await api.entities.Buyer.create({
-      company_name: form.company_name,
-      email: form.email,
-      phone: form.phone,
-      location: form.location,
-      buyer_type: form.buyer_type,
-      vertical: form.vertical,
-      billing_mode: form.billing_mode,
-      billing_model: form.billing_model,
-      billing_email: form.billing_email,
-      portal_enabled: false,
-      balance: 0,
-      min_balance: Number(form.min_balance) || 0,
-      active: true,
-    });
+    await api.entities.Buyer.create({ ...buyerPayload(), portal_enabled: false, balance: 0, active: true });
     qc.invalidateQueries({ queryKey: ['buyers'] });
     setModal(false);
     toast.success('Buyer created');
+  };
+
+  const saveEdit = async () => {
+    await api.entities.Buyer.update(editId, buyerPayload());
+    qc.invalidateQueries({ queryKey: ['buyers'] });
+    setModal(false); setEditId(null);
+    toast.success('Buyer updated');
+  };
+
+  const cloneBuyer = async (b, e) => {
+    e.stopPropagation();
+    await api.entities.Buyer.create({
+      company_name: `${b.company_name} (Copy)`, email: b.email, phone: b.phone,
+      location: b.location, buyer_type: b.buyer_type, vertical: b.vertical,
+      billing_mode: b.billing_mode, billing_model: b.billing_model, billing_email: b.billing_email,
+      min_balance: b.min_balance || 0, portal_enabled: false, balance: 0, active: true,
+    });
+    qc.invalidateQueries({ queryKey: ['buyers'] });
+    toast.success('Buyer cloned');
+  };
+
+  const deleteBuyer = async () => {
+    if (!deleteTarget) return;
+    await api.entities.Buyer.delete(deleteTarget.id);
+    setDeleteTarget(null);
+    qc.invalidateQueries({ queryKey: ['buyers'] });
+    toast.success('Buyer deleted');
   };
 
   const togglePortal = async (b, e) => {
@@ -69,7 +110,7 @@ export default function CampaignBuyers() {
     qc.invalidateQueries({ queryKey: ['buyers'] });
   };
 
-  const COLS = ['Buyer Name', 'Portal', 'Type', 'Vertical', 'Balance', 'Min Balance', 'Card', 'Auto Recharge', 'Billing', 'Revenue', 'Cost', 'Profit'];
+  const COLS = ['Buyer Name', 'Portal', 'Type', 'Vertical', 'Balance', 'Min Balance', 'Card', 'Auto Recharge', 'Billing', 'Revenue', 'Cost', 'Profit', 'Actions'];
 
   return (
     <div>
@@ -111,13 +152,20 @@ export default function CampaignBuyers() {
             <span className="text-right font-mono text-[12px] status-sold">-</span>
             <span className="text-right font-mono text-[12px] text-foreground">-</span>
             <span className="text-right font-mono text-[12px] text-foreground">-</span>
+            <span className="flex items-center justify-end">
+              <RowActionsMenu
+                onEdit={(e) => openEdit(b, e)}
+                onClone={(e) => cloneBuyer(b, e)}
+                onDelete={(e) => { e.stopPropagation(); setDeleteTarget(b); }}
+              />
+            </span>
           </Row>
         ))}
       </TableShell>
 
       <Dialog open={modal} onOpenChange={setModal}>
         <DialogContent className="bg-popover border-border max-w-[520px]">
-          <DialogHeader><DialogTitle>New Buyer</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle>{editId ? 'Edit Buyer' : 'New Buyer'}</DialogTitle></DialogHeader>
           <div className="space-y-4">
             <div><Label className="text-[12px]">Company Name *</Label><Input value={form.company_name} onChange={e => setForm(p => ({ ...p, company_name: e.target.value }))} placeholder="e.g. Acme Legal" className="mt-1 bg-background" /></div>
             <div className="grid grid-cols-2 gap-3">
@@ -173,11 +221,28 @@ export default function CampaignBuyers() {
             <p className="text-[11px] text-muted-foreground">Portal access, wallet funding, and invoicing can be configured after creation.</p>
           </div>
           <DialogFooter>
-            <Button variant="ghost" onClick={() => setModal(false)}>Cancel</Button>
-            <Button onClick={createBuyer} disabled={!form.company_name}>Create Buyer</Button>
+            <Button variant="ghost" onClick={() => { setModal(false); setEditId(null); }}>Cancel</Button>
+            {editId ? (
+              <Button onClick={saveEdit} disabled={!form.company_name}>Save Changes</Button>
+            ) : (
+              <Button onClick={createBuyer} disabled={!form.company_name}>Create Buyer</Button>
+            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <AlertDialog open={!!deleteTarget} onOpenChange={(v) => { if (!v) setDeleteTarget(null); }}>
+        <AlertDialogContent className="bg-popover border-border">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete buyer?</AlertDialogTitle>
+            <AlertDialogDescription>This will permanently delete "{deleteTarget?.company_name}". This action cannot be undone.</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={deleteBuyer} className="bg-destructive text-destructive-foreground">Delete</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

@@ -4,7 +4,7 @@ import MetricCard from './MetricCard';
 import MetricPicker from './MetricPicker';
 import ReportWidget from './ReportWidget';
 import AddWidgetPicker from './AddWidgetPicker';
-import { computeMetrics, dailySeries, applyFilters, METRIC_CATALOG, leadField } from '@/lib/reportMetrics';
+import { computeMetrics, dailySeries, applyFilters, METRIC_CATALOG, leadField, seriesWindow } from '@/lib/reportMetrics';
 import { reorder } from '@/lib/reorder';
 
 let idc = 0;
@@ -37,7 +37,8 @@ export default function PerformanceCanvas({
 
   const filtered = applyFilters(leads, filters);
   const metrics = computeMetrics(filtered, adSpend);
-  const series = dailySeries(filtered, adSpend, 14);
+  // Sparklines follow the selected date range, not a fixed trailing 14 days.
+  const series = dailySeries(filtered, adSpend, 14, seriesWindow(filters));
   const revSeries = series.map(s => s.revenue);
 
   const cardValue = (card) => {
@@ -156,6 +157,7 @@ export default function PerformanceCanvas({
             }}
             leads={filtered}
             adSpend={adSpend}
+            filters={filters}
             onChange={(next) => updateWidget(w.id, next)}
           />
         ))}

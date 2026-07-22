@@ -36,7 +36,10 @@ import Reports from '@/pages/Reports';
 import Finances from '@/pages/Finances';
 
 import Deliveries from '@/pages/Deliveries';
+import DistributionBuyers from '@/pages/distribution/DistributionBuyers';
 import ConversionEvents from '@/pages/ConversionEvents';
+import RouteSimulator from '@/pages/RouteSimulator';
+import RouteGroups from '@/pages/RouteGroups';
 import Notifications from '@/pages/Notifications';
 import Verification from '@/pages/Verification';
 import Settings from '@/pages/Settings';
@@ -44,6 +47,7 @@ import CustomCalculations from '@/pages/CustomCalculations';
 import OperationsBuyers from '@/pages/operations/OperationsBuyers';
 import OperationsSuppliers from '@/pages/operations/OperationsSuppliers';
 import OperationsActiveStates from '@/pages/operations/OperationsActiveStates';
+import OperationsVerticals from '@/pages/operations/OperationsVerticals';
 import OperationsBillingReports from '@/pages/operations/OperationsBillingReports';
 import OperationsBuyerOnboarding from '@/pages/operations/OperationsBuyerOnboarding';
 import OperationsDashboard from '@/pages/operations/OperationsDashboard';
@@ -57,12 +61,14 @@ import ToolsDashboard from '@/pages/ToolsDashboard';
 import PortalLayout from '@/components/portal/PortalLayout';
 import PortalDashboard from '@/pages/portal/PortalDashboard';
 import PortalLeads from '@/pages/portal/PortalLeads';
+import PortalReports from '@/pages/portal/PortalReports';
 import PortalReturns from '@/pages/portal/PortalReturns';
 import PortalSettings from '@/pages/portal/PortalSettings';
 
 import SupplierPortalLayout from '@/components/supplierportal/SupplierPortalLayout';
 import SupplierPortalDashboard from '@/pages/supplierportal/SupplierPortalDashboard';
 import SupplierPortalLeads from '@/pages/supplierportal/SupplierPortalLeads';
+import SupplierPortalReports from '@/pages/supplierportal/SupplierPortalReports';
 import SupplierPortalReturns from '@/pages/supplierportal/SupplierPortalReturns';
 import SupplierPortalApi from '@/pages/supplierportal/SupplierPortalApi';
 import SupplierPortalSettings from '@/pages/supplierportal/SupplierPortalSettings';
@@ -158,6 +164,7 @@ const AuthenticatedApp = () => {
         <Route element={<PortalLayout />}>
           <Route path="/portal" element={<PortalDashboard />} />
           <Route path="/portal/leads" element={<PortalLeads />} />
+          <Route path="/portal/reports" element={<PortalReports />} />
           <Route path="/portal/returns" element={<PortalReturns />} />
           <Route path="/portal/settings" element={<PortalSettings />} />
         </Route>
@@ -165,6 +172,7 @@ const AuthenticatedApp = () => {
         <Route element={<SupplierPortalLayout />}>
           <Route path="/supplier-portal" element={<SupplierPortalDashboard />} />
           <Route path="/supplier-portal/leads" element={<SupplierPortalLeads />} />
+          <Route path="/supplier-portal/reports" element={<SupplierPortalReports />} />
           <Route path="/supplier-portal/returns" element={<SupplierPortalReturns />} />
           <Route path="/supplier-portal/api" element={<SupplierPortalApi />} />
           <Route path="/supplier-portal/settings" element={<SupplierPortalSettings />} />
@@ -186,8 +194,17 @@ const AuthenticatedApp = () => {
           <Route element={<DistributionLayout />}>
             <Route path="/distribution" element={<DistributionDashboard />} />
             <Route path="/campaigns" element={<Campaigns />} />
+            {/* Buyer-centric IA: buyers list + per-buyer detail (Routing / Deliveries / Summary tabs). */}
+            <Route path="/distribution/buyers" element={<DistributionBuyers />} />
+            <Route path="/distribution/buyers/:id" element={<DistributionBuyers />} />
+            {/* Deliveries are now a per-buyer tab; the old standalone page redirects there. */}
+            <Route path="/campaigns/deliveries" element={<Navigate to="/distribution/buyers" replace />} />
+            {/* Nick's live rename: /deliveries stays and renders the Webhooks page. */}
             <Route path="/deliveries" element={<Deliveries />} />
             <Route path="/conversion-events" element={<ConversionEvents />} />
+            {/* Route Groups (Advanced) + Simulator stay routable, out of nav. */}
+            <Route path="/distribution/routes" element={<RouteGroups />} />
+            <Route path="/distribution/simulator" element={<RouteSimulator />} />
           </Route>
           <Route path="/suppliers/:id" element={<SupplierDetail />} />
           <Route path="/buyers/:id" element={<BuyerDetail />} />
@@ -201,6 +218,7 @@ const AuthenticatedApp = () => {
             <Route path="/operations" element={<OperationsDashboard />} />
             <Route path="/operations/buyers" element={<OperationsBuyers />} />
             <Route path="/operations/suppliers" element={<OperationsSuppliers />} />
+            <Route path="/operations/verticals" element={<OperationsVerticals />} />
             <Route path="/operations/active-states" element={<OperationsActiveStates />} />
             <Route path="/operations/billing-reports" element={<OperationsBillingReports />} />
             <Route path="/operations/buyer-onboarding" element={<OperationsBuyerOnboarding />} />

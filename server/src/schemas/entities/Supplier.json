@@ -34,6 +34,10 @@
       "default": false,
       "description": "True when this supplier delivers inbound calls rather than form leads"
     },
+    "contact_name": {
+      "type": "string",
+      "description": "Primary contact person name. Required (with email) before the source portal can be enabled and an invite sent."
+    },
     "notify_email": {
       "type": "string",
       "description": "Email address for supplier notifications. Nullable."
@@ -68,6 +72,30 @@
     "payout_value": {
       "type": "number",
       "description": "Price for Flat CPL, or percentage for Revenue % / Profit %"
+    },
+    "payment_terms": {
+      "type": "string",
+      "enum": [
+        "Net 7",
+        "Net 15",
+        "Net 30",
+        "Net 60",
+        "Prepaid",
+        "Manual"
+      ],
+      "description": "Payment terms that drive the Money Due accrual for this supplier. Nullable. Money Due is accrued unpaid cost computed from these terms; no billing records are created from it."
+    },
+    "payment_day_of_month": {
+      "type": "number",
+      "description": "Day of the month this supplier is paid on, when payment_terms uses a monthly cycle. Nullable."
+    },
+    "payment_method": {
+      "type": "string",
+      "description": "How this supplier is paid, for example ACH, wire, PayPal. Nullable."
+    },
+    "billing_contact_email": {
+      "type": "string",
+      "description": "Billing contact email for this supplier. Nullable."
     },
     "email": {
       "type": "string"

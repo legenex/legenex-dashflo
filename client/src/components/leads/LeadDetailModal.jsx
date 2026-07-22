@@ -3,20 +3,93 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog';
 import StatusPill from '@/components/shared/StatusPill';
 import JsonViewer from '@/components/shared/JsonViewer';
 import CapiLogView from '@/components/leads/CapiLogView';
 import DeliveryStatusList from '@/components/leads/DeliveryStatusList';
+import DeliveryLogView from '@/components/leads/DeliveryLogView';
 import LeadEditForm from '@/components/leads/LeadEditForm';
 import { api } from '@/api/client';
 import { useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import { Copy, RotateCcw, Trash2, Archive, Pencil } from 'lucide-react';
-import { format } from 'date-fns';
+import { Copy, RotateCcw, Trash2, Archive, Pencil, Settings2, ChevronUp, ChevronDown } from 'lucide-react';
+import { formatLeadTime } from '@/lib/leadTime';
+import { formatInTimeZone } from 'date-fns-tz';
+import { APP_TZ } from '@/lib/periodRange';
+import { leadEventInstant } from '@/lib/reportMetrics';
 import { processLead } from '@/functions/processLead';
 import { invalidateLeadCaches } from '@/lib/leadCaches';
+
+// ---- Lead Details field registry ---------------------------------------------
+// The Summary tab renders these in a 2-column grid. Default order is Nick's
+// canonical layout; the operator can re-arrange it from inside the popup and
+// the order persists per browser. Unknown keys from future additions append at
+// the end in registry order.
+const DETAIL_ORDER_KEY = 'legenex_lead_detail_order_v1';
+
+const ci = (mapped, key) => {
+  const lower = String(key).toLowerCase();
+  for (const [k, v] of Object.entries(mapped)) {
+    if (k.toLowerCase() === lower && v != null && String(v).trim() !== '') return v;
+  }
+  return null;
+};
+
+const DETAIL_FIELDS = [
+  { key: 'timestamp', label: 'Timestamp', value: (lead) => {
+    const inst = leadEventInstant(lead);
+    if (!inst || Number.isNaN(inst.getTime())) return null;
+    return formatInTimeZone(inst, APP_TZ, 'MMM d, yyyy HH:mm');
+  } },
+  { key: 'name', label: 'Name', value: (lead) => `${lead.first_name || ''} ${lead.last_name || ''}`.trim() || null },
+  { key: 'email', label: 'Email', value: (lead) => lead.email },
+  { key: 'mobile', label: 'Mobile', value: (lead) => lead.mobile },
+  { key: 'zip', label: 'Zip', value: (lead, m) => ci(m, 'zip') || ci(m, 'geoip_zip') },
+  { key: 'state', label: 'State', value: (lead, m) => ci(m, 'accident_state') || ci(m, 'geoip_state') || ci(m, 'state') },
+  { key: 'vertical', label: 'Vertical', value: (lead, m) => lead.lead_vertical || ci(m, 'vertical') },
+  { key: 'ip_address', label: 'Ip Address', value: (lead, m) => ci(m, 'ip_address') },
+  { key: 'lead_type', label: 'Lead Type', value: (lead, m) => ci(m, 'lead_type') },
+  { key: 'lead_status', label: 'Lead Status', value: (lead, m) => ci(m, 'lead_status') || lead.final_status },
+  { key: 'revenue', label: 'Revenue', value: (lead) => `$${Number(lead.revenue || 0).toFixed(2)}` },
+  { key: 'buyer', label: 'Buyer', value: (lead, m) => lead.buyer_name || ci(m, 'buyer_name') || ci(m, 'buyer') },
+  { key: 'buyer_id', label: 'Buyer ID', value: (lead, m) => lead.buyer_id || ci(m, 'buyer_id') },
+  { key: 'buyer_feedback', label: 'Buyer Feedback', value: (lead, m) => lead.buyer_feedback || ci(m, 'buyer_feedback') },
+  { key: 'returned', label: 'Returned', value: (lead, m) => (lead.buyer_returned === true ? 'Yes' : ci(m, 'returned') || 'No') },
+  { key: 'returned_reason', label: 'Returned Reason', value: (lead, m) => lead.buyer_return_reason || ci(m, 'returned_reason') },
+  { key: 'supplier', label: 'Supplier', value: (lead) => lead.supplier_name },
+  { key: 'supplier_subid', label: 'Supplier SubID', value: (lead, m) => ci(m, 'ssid') },
+  { key: 'supplier_source', label: 'Supplier Source', value: (lead, m) => ci(m, 'Supplier Source') || ci(m, 'source') || ci(m, 'utm_source') },
+  { key: 'supplier_brand', label: 'Supplier Brand', value: (lead, m) => ci(m, 'supplier_brand') },
+  { key: 'optin_url', label: 'Optin URL', value: (lead, m) => ci(m, 'optin_url') },
+  { key: 'trustedform_url', label: 'TrustedForm URL', value: (lead, m, extra) => ci(m, 'trustedform_url') || extra.reportedTrustedFormUrl },
+];
+
+// Mapped keys already surfaced in Lead Details above (case-insensitive). These
+// must never reappear under Lead Data, which shows only the leftover raw
+// fields. Includes the base identity keys (rendered from top-level columns)
+// and every mapped key any Lead Details field reads.
+const CONSUMED_MAPPED_KEYS = new Set([
+  // identity shown at the top from top-level lead columns
+  'first_name', 'last_name', 'name', 'email', 'mobile',
+  // everything a DETAIL_FIELDS entry pulls from mapped_fields
+  'timestamp', 'vertical', 'zip', 'geoip_zip', 'accident_state', 'geoip_state',
+  'state', 'ip_address', 'lead_type', 'lead_status', 'buyer', 'buyer_name',
+  'buyer_id', 'buyer_feedback', 'returned', 'returned_reason', 'ssid',
+  'supplier source', 'source', 'utm_source', 'supplier_brand', 'optin_url',
+  'trustedform_url', 'revenue',
+]);
+
+const loadDetailOrder = () => {
+  try {
+    const raw = JSON.parse(localStorage.getItem(DETAIL_ORDER_KEY) || 'null');
+    if (!Array.isArray(raw)) return DETAIL_FIELDS.map(f => f.key);
+    const known = new Set(DETAIL_FIELDS.map(f => f.key));
+    const ordered = raw.filter(k => known.has(k));
+    DETAIL_FIELDS.forEach(f => { if (!ordered.includes(f.key)) ordered.push(f.key); });
+    return ordered;
+  } catch { return DETAIL_FIELDS.map(f => f.key); }
+};
 
 export default function LeadDetailModal({ lead, open, onClose, initialTab = 'summary' }) {
   const qc = useQueryClient();
@@ -24,10 +97,12 @@ export default function LeadDetailModal({ lead, open, onClose, initialTab = 'sum
   const [resending, setResending] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState('');
   const [activeTab, setActiveTab] = useState(initialTab);
+  const [arranging, setArranging] = useState(false);
+  const [detailOrder, setDetailOrder] = useState(loadDetailOrder);
 
   // Sync active tab when a new lead or initial tab is requested
   useEffect(() => {
-    if (open) setActiveTab(initialTab);
+    if (open) { setActiveTab(initialTab); setArranging(false); }
   }, [open, initialTab]);
 
   if (!lead) return null;
@@ -40,36 +115,60 @@ export default function LeadDetailModal({ lead, open, onClose, initialTab = 'sum
   try { mappedFields = JSON.parse(lead.mapped_fields || '{}') || {}; } catch {}
 
   // The reported TrustedForm cert URL is stored only inside the outcome
-  // payload, never in mapped_fields / trustedform_valid / cert_source. Parse
-  // it defensively for read-only display.
+  // payload. Parse it defensively for read-only display.
   let outcomePayload = {};
   try { outcomePayload = JSON.parse(lead.leadbyte_outcome_payload || '{}') || {}; } catch {}
   const reportedTrustedFormUrl = outcomePayload.contact_trustedform_url;
   const toTitleCase = (k) => String(k).replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
-  const mappedEntries = Object.entries(mappedFields).filter(([, v]) => v != null && String(v).trim() !== '');
-
-  // LeadByte outcome fields. Built in display order, then filtered so only
-  // populated values render. Currency and date values are pre-formatted here.
   const fmtCurrency = (v) => (typeof v === 'number' ? `$${v.toFixed(2)}` : v);
-  let outcomeReceived = null;
-  if (lead.leadbyte_outcome_at) {
-    const d = new Date(lead.leadbyte_outcome_at);
-    if (!Number.isNaN(d.getTime())) outcomeReceived = format(d, 'PPpp');
-  }
-  const outcomeEntries = [
-    ['Buyer', lead.buyer_name],
-    ['Buyer ID', lead.buyer_id],
-    ['Revenue', fmtCurrency(lead.revenue)],
+
+  const fieldByKey = Object.fromEntries(DETAIL_FIELDS.map(f => [f.key, f]));
+  const orderedDetails = detailOrder.map(k => fieldByKey[k]).filter(Boolean);
+
+  const persistOrder = (next) => {
+    setDetailOrder(next);
+    try { localStorage.setItem(DETAIL_ORDER_KEY, JSON.stringify(next)); } catch { /* private mode */ }
+  };
+  const moveField = (key, dir) => {
+    const idx = detailOrder.indexOf(key);
+    const to = idx + dir;
+    if (idx < 0 || to < 0 || to >= detailOrder.length) return;
+    const next = [...detailOrder];
+    [next[idx], next[to]] = [next[to], next[idx]];
+    persistOrder(next);
+  };
+  const resetOrder = () => {
+    try { localStorage.removeItem(DETAIL_ORDER_KEY); } catch { /* private mode */ }
+    setDetailOrder(DETAIL_FIELDS.map(f => f.key));
+  };
+
+  // Remaining mapped fields for the Lead Data section.
+  const leadDataEntries = Object.entries(mappedFields)
+    .filter(([k, v]) => v != null && String(v).trim() !== '' && !CONSUMED_MAPPED_KEYS.has(String(k).toLowerCase()));
+
+  // Outcome values without a home in Lead Details, appended to Lead Data.
+  const outcomeReceived = lead.leadbyte_outcome_at
+    ? formatLeadTime(lead.leadbyte_outcome_at, 'MMM d, yyyy HH:mm')
+    : null;
+  const extraEntries = [
     ['Supplier Payout', fmtCurrency(lead.supplier_payout)],
     ['Tier', lead.lead_tier],
     ['Lead Score', lead.lead_score],
-    ['Vertical', lead.lead_vertical],
     ['Conversion', lead.buyer_conversion],
-    ['Returned', lead.buyer_returned === true ? 'Yes' : null],
-    ['Return Reason', lead.buyer_return_reason],
     ['Outcome Received', outcomeReceived],
-    ['TrustedForm URL (reported)', reportedTrustedFormUrl],
+    ['TrustedForm Valid', lead.trustedform_valid === true ? 'Yes' : lead.trustedform_valid === false ? 'No' : null],
+    ['Queue Reason', lead.queue_reason],
   ].filter(([, v]) => v != null && String(v).trim() !== '');
+
+  // System Response header fields, in the exact required order.
+  const systemResponseEntries = [
+    ['Response Code', lbResp.code !== undefined ? lbResp.code : '-'],
+    ['Response Message', lbResp.message || '-'],
+    ['Response Errors', Array.isArray(lbResp.errors) && lbResp.errors.length ? lbResp.errors.join('; ') : (lbResp.errors || '-')],
+    ['Process Time', lead.process_time_ms ? `${lead.process_time_ms}ms` : '-'],
+    ['HLR Status', lead.hlr_status || '-'],
+    ['HLR Score', lead.hlr_summary_score ?? '-'],
+  ];
 
   const handleCopyPayload = () => {
     navigator.clipboard.writeText(lead.raw_payload || '{}');
@@ -116,10 +215,19 @@ export default function LeadDetailModal({ lead, open, onClose, initialTab = 'sum
 
   const startEdit = () => setEditing(true);
 
+  const FieldCell = ({ label, value, breakAll = true }) => (
+    <div>
+      <div className="text-[11px] text-muted-foreground uppercase tracking-wider">{label}</div>
+      <div className={`text-[13px] text-foreground font-medium mt-0.5 font-mono ${breakAll ? 'break-all' : ''}`}>{value == null || String(value).trim() === '' ? '-' : String(value)}</div>
+    </div>
+  );
+
   return (
     <Dialog open={open} onOpenChange={onClose}>
-      <DialogContent className="max-w-[700px] w-[calc(100vw-2rem)] bg-popover border-border max-h-[90vh] overflow-y-auto overflow-x-hidden">
-        <DialogHeader>
+      {/* Fixed-size shell: the modal never grows or shrinks between tabs; each
+          tab scrolls inside the content region instead. */}
+      <DialogContent className="max-w-[760px] w-[calc(100vw-2rem)] h-[85vh] bg-popover border-border flex flex-col overflow-hidden">
+        <DialogHeader className="shrink-0">
           <div className="flex items-center gap-3">
             <DialogTitle className="font-mono text-[14px] text-foreground">{lead.id}</DialogTitle>
             <StatusPill status={lead.final_status} size="lg" />
@@ -129,138 +237,118 @@ export default function LeadDetailModal({ lead, open, onClose, initialTab = 'sum
             </span>
           </div>
           <div className="text-[12px] text-muted-foreground mt-1">
-            {lead.supplier_name} - {lead.created_date ? format(new Date(lead.created_date), 'PPpp') : ''}
+            {lead.supplier_name} - {lead.created_date ? formatLeadTime(lead.created_date, 'MMM d, yyyy HH:mm') : ''}
           </div>
         </DialogHeader>
 
-        <Tabs value={activeTab} onValueChange={setActiveTab} className="mt-4">
-          <TabsList className="bg-muted">
+        <Tabs value={activeTab} onValueChange={setActiveTab} className="mt-4 flex-1 min-h-0 flex flex-col">
+          <TabsList className="bg-muted shrink-0 self-start">
             <TabsTrigger value="summary">Summary</TabsTrigger>
-            <TabsTrigger value="raw">Raw Data</TabsTrigger>
+            <TabsTrigger value="raw">System Response</TabsTrigger>
             <TabsTrigger value="hlr">HLR Trace</TabsTrigger>
-            <TabsTrigger value="leadbyte">LeadByte Trace</TabsTrigger>
             <TabsTrigger value="capi">CAPI Log</TabsTrigger>
             <TabsTrigger value="delivery">Delivery Log</TabsTrigger>
           </TabsList>
 
-          <TabsContent value="summary" className="space-y-4 mt-4">
-            {editing ? (
-              <LeadEditForm
-                lead={lead}
-                onSaved={() => { setEditing(false); onClose(); }}
-                onCancel={() => setEditing(false)}
-              />
-            ) : (
-              <div className="grid grid-cols-2 gap-3">
-                {[
-                  ['Name', `${lead.first_name || ''} ${lead.last_name || ''}`],
-                  ['Mobile', lead.mobile],
-                  ['Email', lead.email],
-                  ['HLR Status', lead.hlr_status],
-                  ['HLR Score', lead.hlr_summary_score],
-                  ['LeadByte Status', lead.leadbyte_record_status],
-                  ['LeadByte Lead ID', lead.leadbyte_lead_id],
-                  ['Queue ID', lead.leadbyte_queue_id],
-                  ['Response Code', lbResp.code !== undefined ? lbResp.code : '-'],
-                  ['Response Message', lbResp.message || '-'],
-                  ['Response Errors', Array.isArray(lbResp.errors) && lbResp.errors.length ? lbResp.errors.join('; ') : (lbResp.errors || '-')],
-                  ['Process Time', lead.process_time_ms ? `${lead.process_time_ms}ms` : '-'],
-                  ['TrustedForm Valid', lead.trustedform_valid === true ? 'Yes' : lead.trustedform_valid === false ? 'No' : '-'],
-                  ['Queue Reason', lead.queue_reason || '-'],
-                  ['Buyer Feedback', lead.buyer_feedback || '-'],
-                ].map(([label, val]) => (
-                  <div key={label}>
-                    <div className="text-[11px] text-muted-foreground uppercase tracking-wider">{label}</div>
-                    <div className="text-[13px] text-foreground font-medium mt-0.5 font-mono">{val || '-'}</div>
-                  </div>
-                ))}
-              </div>
-            )}
-            {!editing && outcomeEntries.length > 0 && (
-              <div className="mt-4 pt-4 border-t border-border">
-                <div className="text-[11px] text-muted-foreground uppercase tracking-wider mb-3">Outcome</div>
-                <div className="grid grid-cols-2 gap-3">
-                  {outcomeEntries.map(([label, val]) => (
-                    <div key={label}>
-                      <div className="text-[11px] text-muted-foreground uppercase tracking-wider">{label}</div>
-                      <div className="text-[13px] text-foreground font-medium mt-0.5 font-mono">{String(val)}</div>
-                    </div>
-                  ))}
-                </div>
-                {reportedTrustedFormUrl != null && String(reportedTrustedFormUrl).trim() !== '' && (
-                  <div className="text-[12px] text-muted-foreground mt-2">Reported by LeadByte. Not a captured certificate.</div>
-                )}
-              </div>
-            )}
-            {!editing && mappedEntries.length > 0 && (
-              <div className="mt-4 pt-4 border-t border-border">
-                <div className="text-[11px] text-muted-foreground uppercase tracking-wider mb-3">Lead Fields</div>
-                <div className="grid grid-cols-2 gap-3">
-                  {mappedEntries.map(([key, val]) => (
-                    <div key={key}>
-                      <div className="text-[11px] text-muted-foreground uppercase tracking-wider">{toTitleCase(key)}</div>
-                      <div className="text-[13px] text-foreground font-medium mt-0.5 font-mono">{String(val) || '-'}</div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-            <div className="mt-4 pt-4 border-t border-border">
-              <DeliveryStatusList lead={lead} />
-            </div>
-          </TabsContent>
-
-          <TabsContent value="raw" className="mt-4">
-            <JsonViewer data={lead.raw_payload} title="Inbound Payload" />
-          </TabsContent>
-
-          <TabsContent value="hlr" className="mt-4 space-y-4">
-            <JsonViewer data={lead.hlr_request} title="HLR Request" />
-            <JsonViewer data={lead.hlr_response} title="HLR Response" />
-            {lead.hlr_error && (
-              <div className="bg-status-error rounded-lg p-3 text-[12px] status-error">{lead.hlr_error}</div>
-            )}
-          </TabsContent>
-
-          <TabsContent value="leadbyte" className="mt-4 space-y-4">
-            {(() => {
-              const isEmpty = (v) => {
-                if (v == null) return true;
-                const s = String(v).trim();
-                return s === '' || s.toLowerCase() === 'null';
-              };
-              const hasRequest = !isEmpty(lead.leadbyte_request);
-              const hasResponse = !isEmpty(lead.leadbyte_response);
-              const hasOutcome = !!lead.leadbyte_outcome_payload;
-              if (!hasRequest && !hasResponse && !hasOutcome) {
-                return <div className="text-[12px] text-muted-foreground">No LeadByte trace recorded for this lead.</div>;
-              }
-              return (
+          <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden mt-4 pr-1">
+            <TabsContent value="summary" className="space-y-4 mt-0">
+              {editing ? (
+                <LeadEditForm
+                  lead={lead}
+                  onSaved={() => { setEditing(false); onClose(); }}
+                  onCancel={() => setEditing(false)}
+                />
+              ) : (
                 <>
-                  {hasRequest && <JsonViewer data={lead.leadbyte_request} title="LeadByte Request" />}
-                  {hasResponse && <JsonViewer data={lead.leadbyte_response} title="LeadByte Response" />}
-                  {hasOutcome && (
-                    <div className="space-y-1.5">
-                      <JsonViewer data={lead.leadbyte_outcome_payload} title="Inbound Outcome Payload" />
-                      <div className="text-[12px] text-muted-foreground">Received from LeadByte via the inbound outcome webhook.</div>
+                  <div>
+                    <div className="flex items-center justify-between mb-3">
+                      <div className="text-[11px] text-muted-foreground uppercase tracking-wider">Lead Details</div>
+                      <div className="flex items-center gap-2">
+                        {arranging && (
+                          <button onClick={resetOrder} className="text-[11px] text-muted-foreground hover:text-foreground transition-colors">Reset order</button>
+                        )}
+                        <button
+                          onClick={() => setArranging(a => !a)}
+                          className={`inline-flex items-center gap-1 text-[11px] rounded-md px-2 py-1 transition-colors ${arranging ? 'bg-primary/15 text-primary' : 'text-muted-foreground hover:text-foreground hover:bg-accent'}`}
+                          title="Re-arrange the Lead Details fields"
+                        >
+                          <Settings2 className="w-3 h-3" /> {arranging ? 'Done' : 'Arrange'}
+                        </button>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      {orderedDetails.map((f) => (
+                        <div key={f.key} className={arranging ? 'flex items-start gap-1.5 rounded-md border border-border bg-card p-2' : ''}>
+                          {arranging && (
+                            <div className="flex flex-col shrink-0">
+                              <button onClick={() => moveField(f.key, -1)} className="text-muted-foreground hover:text-foreground" aria-label={`Move ${f.label} up`}><ChevronUp className="w-3.5 h-3.5" /></button>
+                              <button onClick={() => moveField(f.key, 1)} className="text-muted-foreground hover:text-foreground" aria-label={`Move ${f.label} down`}><ChevronDown className="w-3.5 h-3.5" /></button>
+                            </div>
+                          )}
+                          <FieldCell label={f.label} value={f.value(lead, mappedFields, { reportedTrustedFormUrl })} />
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {(leadDataEntries.length > 0 || extraEntries.length > 0) && (
+                    <div className="mt-4 pt-4 border-t border-border">
+                      <div className="text-[11px] text-muted-foreground uppercase tracking-wider mb-3">Lead Data</div>
+                      <div className="grid grid-cols-2 gap-3">
+                        {leadDataEntries.map(([key, val]) => (
+                          <FieldCell key={key} label={toTitleCase(key)} value={val} />
+                        ))}
+                        {extraEntries.map(([label, val]) => (
+                          <FieldCell key={label} label={label} value={val} />
+                        ))}
+                      </div>
+                      {reportedTrustedFormUrl != null && String(reportedTrustedFormUrl).trim() !== '' && (
+                        <div className="text-[12px] text-muted-foreground mt-2">TrustedForm URL reported by LeadByte. Not a captured certificate.</div>
+                      )}
                     </div>
                   )}
+
+                  <div className="mt-4 pt-4 border-t border-border">
+                    <DeliveryStatusList lead={lead} />
+                  </div>
                 </>
-              );
-            })()}
-          </TabsContent>
+              )}
+            </TabsContent>
 
-          <TabsContent value="capi" className="mt-4">
-            <CapiLogView capiLog={lead.capi_log} />
-          </TabsContent>
+            <TabsContent value="raw" className="mt-0 space-y-4">
+              <div>
+                <div className="text-[11px] text-muted-foreground uppercase tracking-wider mb-3">System Response</div>
+                <div className="grid grid-cols-2 gap-3">
+                  {systemResponseEntries.map(([label, val]) => (
+                    <FieldCell key={label} label={label} value={val} />
+                  ))}
+                </div>
+              </div>
+              <div className="pt-4 border-t border-border">
+                <JsonViewer data={lead.raw_payload} title="Inbound Payload" />
+              </div>
+            </TabsContent>
 
-          <TabsContent value="delivery" className="mt-4">
-            <JsonViewer data={lead.delivery_log} title="Delivery Log" />
-          </TabsContent>
+            <TabsContent value="hlr" className="mt-0 space-y-4">
+              <JsonViewer data={lead.hlr_request} title="HLR Request" />
+              <JsonViewer data={lead.hlr_response} title="HLR Response" />
+              {lead.hlr_error && (
+                <div className="bg-status-error rounded-lg p-3 text-[12px] status-error">{lead.hlr_error}</div>
+              )}
+            </TabsContent>
+
+            <TabsContent value="capi" className="mt-0">
+              <CapiLogView capiLog={lead.capi_log} />
+            </TabsContent>
+
+            <TabsContent value="delivery" className="mt-0">
+              <DeliveryLogView lead={lead} />
+            </TabsContent>
+          </div>
         </Tabs>
 
         {/* Actions */}
-        <div className="flex items-center gap-2 mt-4 pt-4 border-t border-border flex-wrap">
+        <div className="shrink-0 flex items-center gap-2 mt-4 pt-4 border-t border-border flex-wrap">
           <Button variant="ghost" size="sm" onClick={startEdit} className="gap-1.5 text-primary">
             <Pencil className="w-3.5 h-3.5" /> Edit
           </Button>

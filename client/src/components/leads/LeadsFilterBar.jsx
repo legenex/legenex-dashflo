@@ -3,21 +3,12 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { SearchableSelect } from '@/components/ui/searchable-select';
+import { MultiSelect } from '@/components/ui/multi-select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { Panel } from '@/components/settings/settingsUi';
 import MobileFilterSheet from '@/components/shared/MobileFilterSheet';
+import LeadsPeriodFilter from '@/components/shared/LeadsPeriodFilter';
 import { Search, Filter, Plus, X, Save, Trash2 } from 'lucide-react';
-
-const DATE_RANGES = [
-  { value: 'all', label: 'All Time' },
-  { value: 'today', label: 'Today' },
-  { value: 'yesterday', label: 'Yesterday' },
-  { value: 'this_week', label: 'This Week' },
-  { value: 'this_month', label: 'This Month' },
-  { value: 'last_month', label: 'Last Month' },
-  { value: 'this_year', label: 'This Year' },
-  { value: 'custom', label: 'Custom' },
-];
 
 const OPERATORS = [
   { value: 'equals', label: 'Equals' },
@@ -36,8 +27,8 @@ const NO_VALUE_OPERATORS = ['is_empty', 'is_not_empty'];
 
 export default function LeadsFilterBar({
   search, setSearch,
-  dateRange, setDateRange,
-  customDate, setCustomDate,
+  period, setPeriod,
+  customPeriod, setCustomPeriod,
   customFilters, setCustomFilters,
   savedSets, onSaveSet, onDeleteSet, onApplySet,
   filterFields,
@@ -65,13 +56,13 @@ export default function LeadsFilterBar({
 
   const clearAll = () => {
     setSearch('');
-    setDateRange('all');
-    setCustomDate({ start: '', end: '' });
+    setPeriod('this_month');
+    setCustomPeriod({ from: '', to: '' });
     setCustomFilters([]);
     setActiveSetId('');
-    if (setStatusFilter) setStatusFilter('');
-    if (setSupplierFilter) setSupplierFilter('');
-    if (setSourceFilter) setSourceFilter('');
+    if (setStatusFilter) setStatusFilter([]);
+    if (setSupplierFilter) setSupplierFilter([]);
+    if (setSourceFilter) setSourceFilter([]);
   };
 
   const handleApplySet = (id) => {
@@ -97,59 +88,47 @@ export default function LeadsFilterBar({
     if (activeSetId === id) setActiveSetId('');
   };
 
-  const hasActiveFilters = search || dateRange !== 'all' || customFilters.length > 0 || statusFilter || supplierFilter || sourceFilter;
+  const statusCount = Array.isArray(statusFilter) ? statusFilter.length : 0;
+  const supplierCount = Array.isArray(supplierFilter) ? supplierFilter.length : 0;
+  const sourceCount = Array.isArray(sourceFilter) ? sourceFilter.length : 0;
+  const hasActiveFilters = search || period !== 'this_month' || customFilters.length > 0 || statusCount || supplierCount || sourceCount;
 
   // Count active filters for the mobile Filters badge (search is separate).
-  const activeCount = (dateRange !== 'all' ? 1 : 0) + customFilters.length +
-    (statusFilter ? 1 : 0) + (supplierFilter ? 1 : 0) + (sourceFilter ? 1 : 0);
+  const activeCount = (period !== 'this_month' ? 1 : 0) + customFilters.length +
+    statusCount + supplierCount + sourceCount;
 
   // Status / Suppliers / Sources / Time / Filters / Save controls. Rendered
   // inline on desktop and inside the mobile sheet. Identical markup either way.
   const controls = (
     <>
-      <SearchableSelect
-        value={statusFilter || ''}
+      <MultiSelect
+        value={Array.isArray(statusFilter) ? statusFilter : []}
         onValueChange={setStatusFilter}
-        className="w-full lg:w-[140px] bg-card border-border"
-        options={statusOptions}
-      />
-      <SearchableSelect
-        value={supplierFilter || ''}
-        onValueChange={setSupplierFilter}
         className="w-full lg:w-[160px] bg-card border-border"
+        options={statusOptions}
+        placeholder="All Status"
+      />
+      <MultiSelect
+        value={Array.isArray(supplierFilter) ? supplierFilter : []}
+        onValueChange={setSupplierFilter}
+        className="w-full lg:w-[180px] bg-card border-border"
         options={supplierOptions}
+        placeholder="All Suppliers"
       />
-      <SearchableSelect
-        value={sourceFilter || ''}
+      <MultiSelect
+        value={Array.isArray(sourceFilter) ? sourceFilter : []}
         onValueChange={setSourceFilter}
-        className="w-full lg:w-[150px] bg-card border-border"
+        className="w-full lg:w-[170px] bg-card border-border"
         options={sourceOptions}
+        placeholder="All Sources"
       />
 
-      <SearchableSelect
-        value={dateRange}
-        onValueChange={setDateRange}
-        className="w-full lg:w-[140px] bg-card border-border"
-        options={DATE_RANGES}
+      <LeadsPeriodFilter
+        period={period}
+        custom={customPeriod}
+        onPeriodChange={setPeriod}
+        onCustomChange={setCustomPeriod}
       />
-
-      {dateRange === 'custom' && (
-        <div className="flex items-center gap-2">
-          <Input
-            type="date"
-            value={customDate.start}
-            onChange={e => setCustomDate(p => ({ ...p, start: e.target.value }))}
-            className="bg-card border-border w-full lg:w-[140px]"
-          />
-          <span className="text-muted-foreground text-xs">→</span>
-          <Input
-            type="date"
-            value={customDate.end}
-            onChange={e => setCustomDate(p => ({ ...p, end: e.target.value }))}
-            className="bg-card border-border w-full lg:w-[140px]"
-          />
-        </div>
-      )}
 
       {savedSets.length > 0 && (
         <div className="flex items-center gap-1">

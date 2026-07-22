@@ -18,7 +18,11 @@ const OPTIONAL_FILTERS = [
 const fmt = (d) => formatInTimeZone(d, APP_TZ, 'yyyy-MM-dd');
 
 // Report-level filter bar. Matches the Leads filter bar styling.
-// value = { date_from, date_to, campaign, vertical, supplier_name, buyer_id, brand, ...optional }
+// value = { date_from, date_to, campaign, vertical, supplier_name, buyer, brand, ...optional }
+// Keys here must be canonical report field names, since applyFilters resolves
+// each one against the lead through the report field aliases. This used to send
+// buyer_id (a Buyer record id on the lead) while selecting a company name, so
+// the Buyer filter could never match anything.
 export default function ReportFilterBar({ value, onChange, options }) {
   const { campaigns = [], verticals = [], suppliers = [], buyers = [], brands = [] } = options || {};
   const [showFilters, setShowFilters] = useState(false);
@@ -58,7 +62,7 @@ export default function ReportFilterBar({ value, onChange, options }) {
 
   // Count active filters for the mobile Filters badge.
   const activeCount = extra.length + (value.campaign ? 1 : 0) + (value.vertical ? 1 : 0) +
-    (value.supplier_name ? 1 : 0) + (value.buyer_id ? 1 : 0) + (value.brand ? 1 : 0);
+    (value.supplier_name ? 1 : 0) + (value.buyer ? 1 : 0) + (value.brand ? 1 : 0);
 
   return (
     <div className="mb-5 space-y-3">
@@ -82,7 +86,7 @@ export default function ReportFilterBar({ value, onChange, options }) {
         <SearchableSelect value={value.campaign || ''} onValueChange={v => set('campaign', v)} className="w-full lg:w-[150px] bg-card border-border" options={opt('Campaign: All', campaigns.map(c => ({ value: c.name, label: c.name })))} />
         <SearchableSelect value={value.vertical || ''} onValueChange={v => set('vertical', v)} className="w-full lg:w-[140px] bg-card border-border" options={opt('Vertical: All', verticals.map(v => ({ value: v.code, label: v.name })))} />
         <SearchableSelect value={value.supplier_name || ''} onValueChange={v => set('supplier_name', v)} className="w-full lg:w-[150px] bg-card border-border" options={opt('Supplier: All', suppliers.map(s => ({ value: s.name, label: s.name })))} />
-        <SearchableSelect value={value.buyer_id || ''} onValueChange={v => set('buyer_id', v)} className="w-full lg:w-[150px] bg-card border-border" options={opt('Buyer: All', buyers.map(b => ({ value: b.company_name, label: b.company_name })))} />
+        <SearchableSelect value={value.buyer || ''} onValueChange={v => set('buyer', v)} className="w-full lg:w-[150px] bg-card border-border" options={opt('Buyer: All', buyers.map(b => ({ value: b.company_name, label: b.company_name })))} />
         <SearchableSelect value={value.brand || ''} onValueChange={v => set('brand', v)} className="w-full lg:w-[140px] bg-card border-border" options={opt('Brand: All', brands.map(b => ({ value: b.brand_code, label: b.brand_name })))} />
 
         <Button

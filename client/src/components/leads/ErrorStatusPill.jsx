@@ -77,7 +77,7 @@ export default function ErrorStatusPill({ lead, errorLogEntry, onOpenDetail, siz
                 <div className="text-[11px] uppercase tracking-wider text-muted-foreground mb-0.5">Duplicate reason</div>
                 <div className="text-foreground break-words leading-relaxed">{reason}</div>
                 {onOpenDetail && (
-                  <button type="button" onClick={() => { setOpen(false); onOpenDetail(lead, 'leadbyte'); }} className="mt-2 text-[11px] text-primary hover:underline">
+                  <button type="button" onClick={() => { setOpen(false); onOpenDetail(lead, 'delivery'); }} className="mt-2 text-[11px] text-primary hover:underline">
                     Open details
                   </button>
                 )}

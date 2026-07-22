@@ -55,7 +55,7 @@ export default function LeadsRejections() {
   });
 
   const openLeadDetail = (lead, stage) => {
-    const tab = stage === 'hlr' ? 'hlr' : stage === 'leadbyte' ? 'leadbyte' : 'summary';
+    const tab = stage === 'hlr' ? 'hlr' : stage === 'leadbyte' ? 'delivery' : 'summary';
     setInitialTab(tab);
     setSelectedLead(lead);
   };
@@ -130,7 +130,7 @@ export default function LeadsRejections() {
                   <td className="px-4 py-3 font-mono text-[12px]">{lead.mobile}</td>
                   <td className="px-4 py-3">{lead.hlr_status || '-'}</td>
                   <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
-                    <span onClick={() => { setInitialTab('leadbyte'); setSelectedLead(lead); }}>{lead.leadbyte_record_status || '-'}</span>
+                    <span onClick={() => { setInitialTab('delivery'); setSelectedLead(lead); }}>{lead.leadbyte_record_status || '-'}</span>
                   </td>
                   <td className="px-4 py-3">
                     <ErrorStatusPill

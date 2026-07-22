@@ -1,14 +1,13 @@
 import React from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { LayoutDashboard, FileText, Undo2, Settings as SettingsIcon } from 'lucide-react';
+import { LayoutDashboard, FileText, BarChart3 } from 'lucide-react';
 import { usePortalScope } from '@/hooks/usePortalScope';
 import SidebarProfile from '@/components/layout/SidebarProfile';
 
 const ITEMS = [
-  { label: 'Dashboard', path: '/portal', icon: LayoutDashboard },
-  { label: 'My Leads', path: '/portal/leads', icon: FileText },
-  { label: 'Returns', path: '/portal/returns', icon: Undo2 },
-  { label: 'Settings', path: '/portal/settings', icon: SettingsIcon },
+  { label: 'Overview', path: '/portal', icon: LayoutDashboard },
+  { label: 'Leads', path: '/portal/leads', icon: FileText },
+  { label: 'Reports', path: '/portal/reports', icon: BarChart3 },
 ];
 
 // Minimal left sidebar for the buyer portal. Preserves ?buyer_id= when previewing.

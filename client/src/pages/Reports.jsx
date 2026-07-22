@@ -11,6 +11,7 @@ import { toast } from 'sonner';
 import ReportSidebar, { STANDARD } from '@/components/reports/ReportSidebar';
 import ReportFilterBar from '@/components/reports/ReportFilterBar';
 import PerformanceCanvas, { makeDefaultCards, makeDefaultWidgets } from '@/components/reports/PerformanceCanvas';
+import { leadField } from '@/lib/reportMetrics';
 import DailyReport from '@/components/reports/views/DailyReport';
 import PnlReport from '@/components/reports/views/PnlReport';
 import AdReport from '@/components/reports/views/AdReport';
@@ -20,6 +21,21 @@ import SectionHeader from '@/components/shared/SectionHeader';
 function safeParse(raw, fallback) {
   if (!raw) return fallback;
   try { const p = JSON.parse(raw); return p ?? fallback; } catch { return fallback; }
+}
+
+// A single the backend page is capped at 500 rows regardless of the limit asked for,
+// so anything that requests more silently truncates. Reports used to ask for
+// 2000 leads and quietly analysed only the newest 500, which is why the numbers
+// here disagreed with the Leads tab. Page until a short page comes back.
+// list() also returns null rather than [] for an empty entity, so coalesce.
+const PAGE = 500;
+async function fetchAll(fn) {
+  const all = [];
+  for (let page = 0; ; page += 1) {
+    const batch = (await fn(PAGE, page * PAGE)) || [];
+    all.push(...batch);
+    if (batch.length < PAGE) return all;
+  }
 }
 
 export default function Reports() {
@@ -50,9 +66,13 @@ export default function Reports() {
   const [stdCards, setStdCards] = useState(makeDefaultCards());
   const [stdWidgets, setStdWidgets] = useState(makeDefaultWidgets());
 
-  const { data: leads = [] } = useQuery({ queryKey: ['report-leads'], queryFn: () => api.entities.Lead.list('-created_date', 2000) });
-  const { data: adSpend = [] } = useQuery({ queryKey: ['adspend'], queryFn: () => api.entities.AdSpend.list('-date', 2000) });
-  const { data: bankTx = [] } = useQuery({ queryKey: ['report-banktx'], queryFn: () => api.entities.BankTransaction.list('-date', 2000) });
+  // Mirrors the Leads tab query (archived excluded) so the two tabs agree.
+  const { data: leads = [] } = useQuery({
+    queryKey: ['report-leads'],
+    queryFn: () => fetchAll((limit, skip) => api.entities.Lead.filter({ archived: false }, '-created_date', limit, skip)),
+  });
+  const { data: adSpend = [] } = useQuery({ queryKey: ['adspend'], queryFn: () => fetchAll((limit, skip) => api.entities.AdSpend.list('-date', limit, skip)) });
+  const { data: bankTx = [] } = useQuery({ queryKey: ['report-banktx'], queryFn: () => fetchAll((limit, skip) => api.entities.BankTransaction.list('-date', limit, skip)) });
   const { data: adMappings = [] } = useQuery({ queryKey: ['report-admappings'], queryFn: () => api.entities.AdSpendMapping.list() });
   const { data: integrations = [] } = useQuery({ queryKey: ['report-integrations'], queryFn: () => api.entities.IntegrationConfig.list() });
   const { data: reports = [] } = useQuery({ queryKey: ['reports'], queryFn: () => api.entities.Report.filter({ group: 'custom' }, 'sort_order') });
@@ -62,6 +82,19 @@ export default function Reports() {
   const { data: suppliers = [] } = useQuery({ queryKey: ['suppliers'], queryFn: () => api.entities.Supplier.list() });
   const { data: buyers = [] } = useQuery({ queryKey: ['buyers'], queryFn: () => api.entities.Buyer.list() });
   const { data: brands = [] } = useQuery({ queryKey: ['brands'], queryFn: () => api.entities.Brand.list() });
+
+  // The Campaign filter matches against the campaign a lead actually carries
+  // (mapped_fields.utm_campaign, resolved via the report field aliases), so the
+  // dropdown has to offer those values. Campaign records are unioned in for
+  // campaigns that are configured but have not received a lead yet.
+  const campaignOptions = useMemo(() => {
+    const names = new Set(campaigns.map(c => c.name).filter(Boolean));
+    for (const l of leads) {
+      const v = leadField(l, 'campaign');
+      if (v) names.add(String(v));
+    }
+    return [...names].sort((a, b) => a.localeCompare(b)).map(name => ({ name }));
+  }, [campaigns, leads]);
 
   const isCustom = active.startsWith('custom:');
   const activeReport = isCustom ? reports.find(r => r.id === active.slice(7)) : null;
@@ -155,7 +188,7 @@ export default function Reports() {
       <ReportFilterBar
         value={effectiveFilters}
         onChange={(v) => setFilters(v)}
-        options={{ campaigns, verticals, suppliers, buyers, brands }}
+        options={{ campaigns: campaignOptions, verticals, suppliers, buyers, brands }}
       />
 
       {active === 'std:daily' ? (

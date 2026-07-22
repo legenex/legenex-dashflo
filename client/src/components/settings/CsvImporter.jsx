@@ -12,6 +12,7 @@ import Papa from 'papaparse';
 import { toZonedTime } from 'date-fns-tz';
 import { APP_TZ } from '@/lib/periodRange';
 import { invalidateLeadCaches } from '@/lib/leadCaches';
+import { materializeRecord, finalizePendingImports } from '@/lib/importFinalize';
 
 // Core target fields per entity. Custom fields (for leads) are appended at runtime.
 const LEAD_FIELDS = ['first_name', 'last_name', 'email', 'mobile', 'supplier_name', 'revenue', 'conv_value', 'final_status', 'email_valid'];
@@ -27,9 +28,11 @@ const STATUS_LOOKUP = {
   error: 'Error', err: 'Error',
   queued: 'Queued', queue: 'Queued',
   returned: 'Returned', return: 'Returned',
-  processing: 'Processing', new: 'Processing',
+  // Processing is a live-pipeline transit state, never an imported outcome:
+  // anything unknown or transit-like lands on Qualified.
+  processing: 'Qualified', new: 'Qualified',
 };
-const normalizeStatus = (raw) => STATUS_LOOKUP[String(raw ?? '').trim().toLowerCase()] || 'Processing';
+const normalizeStatus = (raw) => STATUS_LOOKUP[String(raw ?? '').trim().toLowerCase()] || 'Qualified';
 const normEmail = (v) => String(v ?? '').trim().toLowerCase();
 const normMobile = (v) => String(v ?? '').replace(/\D/g, '');
 
@@ -229,6 +232,48 @@ export default function CsvImporter() {
   const [step, setStep] = useState('upload'); // upload | review
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState(null); // { done, total } while lead import runs
+  const [finalizing, setFinalizing] = useState(null); // { done, total } while the repair pass runs
+  const [backfilling, setBackfilling] = useState(false); // lead_type backfill in flight
+
+  // One-tap lead_type backfill. Calls the deployed backfillLeadType function
+  // which runs server-side against the live DB: sid LEADFLOW/LGNX -> Quiz, every
+  // other supplier -> Affiliate. Idempotent, so it is safe to press again.
+  const runLeadTypeBackfill = async () => {
+    setBackfilling(true);
+    try {
+      const res = await api.functions.invoke('backfillLeadType', {
+        mode: 'apply',
+        confirm: 'YES_BACKFILL_LEAD_TYPE',
+      });
+      const data = res?.data ?? res;
+      const updated = data?.updated ?? 0;
+      const q = data?.set_breakdown?.Quiz ?? 0;
+      const a = data?.set_breakdown?.Affiliate ?? 0;
+      toast.success(`Lead type set on ${updated} leads (${q} Quiz, ${a} Affiliate)`);
+      invalidateLeadCaches(qc);
+    } catch (err) {
+      toast.error('Lead type backfill failed. It is safe to try again.');
+    } finally {
+      setBackfilling(false);
+    }
+  };
+
+  // Repair pass for already-imported leads: promotes mapped_fields values onto
+  // top-level columns, fills lead_type, and clears Processing statuses.
+  const runFinalizePending = async () => {
+    setFinalizing({ done: 0, total: 0 });
+    try {
+      const res = await finalizePendingImports(api, {
+        onProgress: (done, total) => setFinalizing({ done, total }),
+      });
+      toast.success(`Finalized ${res.updated} of ${res.scanned} imported leads`);
+      invalidateLeadCaches(qc);
+    } catch (err) {
+      toast.error('Finalize failed partway. Run it again to continue where it stopped.');
+    } finally {
+      setFinalizing(null);
+    }
+  };
   const [rows, setRows] = useState([]);
   const [columns, setColumns] = useState([]);
   const [mapping, setMapping] = useState({});
@@ -553,6 +598,10 @@ export default function CsvImporter() {
             if (norm != null) mapped.timestamp = norm;
             else delete mapped.timestamp;
           }
+          // Promote mapped values onto top-level Lead columns (buyer, vertical,
+          // payout, revenue, email_valid) and derive lead_type, so imported
+          // leads are complete at creation and never sit in Processing.
+          materializeRecord(out, mapped);
           if (Object.keys(mapped).length) out.mapped_fields = JSON.stringify(mapped);
         }
         return out;
@@ -679,6 +728,28 @@ export default function CsvImporter() {
             {busy ? <Loader2 className="w-6 h-6 animate-spin" /> : <Upload className="w-6 h-6" />}
             <span className="text-[13px]">{busy ? 'Reading & auto-mapping…' : 'Click to upload a CSV / Excel file'}</span>
           </button>
+          {target === 'lead' && (
+            <div className="rounded-lg border border-border bg-card p-4 flex items-center justify-between gap-4">
+              <div>
+                <div className="text-[13px] text-foreground font-medium">Finalize pending imports</div>
+                <div className="text-[12px] text-muted-foreground mt-0.5">Repairs previously imported leads: fills lead type and buyer fields from the mapped data and resolves Processing statuses.</div>
+              </div>
+              <Button size="sm" variant="outline" onClick={runFinalizePending} disabled={!!finalizing} className="shrink-0">
+                {finalizing ? `${finalizing.done}/${finalizing.total || '…'}` : 'Run repair'}
+              </Button>
+            </div>
+          )}
+          {target === 'lead' && (
+            <div className="rounded-lg border border-border bg-card p-4 flex items-center justify-between gap-4">
+              <div>
+                <div className="text-[13px] text-foreground font-medium">Backfill lead type</div>
+                <div className="text-[12px] text-muted-foreground mt-0.5">Sets lead type on every lead missing one: LEADFLOW and LGNX suppliers become Quiz, all others Affiliate. Safe to run more than once.</div>
+              </div>
+              <Button size="sm" variant="outline" onClick={runLeadTypeBackfill} disabled={backfilling} className="shrink-0">
+                {backfilling ? 'Working…' : 'Backfill lead type'}
+              </Button>
+            </div>
+          )}
         </div>
       )}
 

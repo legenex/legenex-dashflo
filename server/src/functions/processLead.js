@@ -1,3 +1,5 @@
+import { sendMail } from '../lib/mailer.js';
+
 // Resolve phone_verified value from HLR result based on configured source
 function resolvePhoneVerified(hlrResult, source) {
   if (!hlrResult) return '';
@@ -7,15 +9,44 @@ function resolvePhoneVerified(hlrResult, source) {
   return hlrResult.lh_hlr_response || '';
 }
 
+// The app operates on America/Regina (Saskatchewan, UTC-6, no DST) for ALL
+// reporting. Every lead timestamp must be stamped in this zone, never UTC, so
+// the Leads table (which interprets mapped_fields.timestamp as APP_TZ local)
+// shows the correct local time.
+const APP_TZ = 'America/Regina';
+
+// Extract America/Regina wall-clock parts from a Date via Intl, then render the
+// requested format string. Falls back to UTC parts only if Intl is unavailable.
 function formatTimestamp(date, fmt) {
   const pad = (n) => String(n).padStart(2, '0');
+  let parts;
+  try {
+    const dtf = new Intl.DateTimeFormat('en-US', {
+      timeZone: APP_TZ, hourCycle: 'h23',
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit',
+    });
+    const p = {};
+    for (const { type, value } of dtf.formatToParts(date)) p[type] = value;
+    parts = {
+      YYYY: p.year, MM: p.month, DD: p.day,
+      hh: p.hour, mm: p.minute, ss: p.second,
+    };
+  } catch {
+    parts = {
+      YYYY: String(date.getUTCFullYear()), MM: pad(date.getUTCMonth() + 1), DD: pad(date.getUTCDate()),
+      hh: pad(date.getUTCHours()), mm: pad(date.getUTCMinutes()), ss: pad(date.getUTCSeconds()),
+    };
+  }
+  // Replace largest tokens first; time tokens use distinct placeholders so the
+  // second MM (minutes) is not clobbered by the month replacement.
   return (fmt || 'MM/DD/YYYY HH:MM:SS')
-    .replace('YYYY', date.getUTCFullYear())
-    .replace('MM', pad(date.getUTCMonth() + 1))
-    .replace('DD', pad(date.getUTCDate()))
-    .replace('HH', pad(date.getUTCHours()))
-    .replace('MM', pad(date.getUTCMinutes()))
-    .replace('SS', pad(date.getUTCSeconds()));
+    .replace('YYYY', parts.YYYY)
+    .replace('DD', parts.DD)
+    .replace('HH', parts.hh)
+    .replace('SS', parts.ss)
+    .replace(/MM/, parts.MM)   // first MM = month
+    .replace(/MM/, parts.mm);  // second MM = minutes
 }
 
 // Evaluate a single conditional condition against the full lead context.
@@ -70,6 +101,18 @@ function evalCalcNode(ctx, node, depth = 0) {
   return true;
 }
 
+// Resolve {{token}} placeholders in a calculated field output against the
+// evaluation context. Unknown tokens resolve to an empty string. Plain text
+// with no placeholders is returned unchanged.
+function resolveCalcOutput(text, ctx) {
+  const s = String(text ?? '');
+  if (!s.includes('{{')) return s;
+  return s.replace(/\{\{\s*([\w. ]+)\s*\}\}/g, (_m, token) => {
+    const v = ctx[String(token).trim()];
+    return v == null ? '' : String(v);
+  });
+}
+
 function runCalculations(calcs, leadData, hlrResult, phoneVerifiedSource, phoneVerifiedFieldName, supplierType) {
   const enriched = { ...leadData };
   enriched[phoneVerifiedFieldName || 'phone_verified'] = resolvePhoneVerified(hlrResult, phoneVerifiedSource);
@@ -117,10 +160,10 @@ function runCalculations(calcs, leadData, hlrResult, phoneVerifiedSource, phoneV
         }
       } else if (calc.transform_type === 'conditional') {
         const rules = Array.isArray(cfg.rules) ? cfg.rules : [];
-        let output = cfg.fallback ?? '';
+        let output = resolveCalcOutput(cfg.fallback ?? '', ctx);
         for (const rule of rules) {
           const allMatch = evalCalcNode(ctx, normalizeCalcConditions(rule.conditions));
-          if (allMatch) { output = rule.output ?? ''; break; }
+          if (allMatch) { output = resolveCalcOutput(rule.output ?? '', ctx); break; }
         }
         enriched[calc.output_token] = output;
       } else if (calc.transform_type === 'clone') {
@@ -573,9 +616,9 @@ async function sendDestinationAwait(dest, leadData, leadId, trigger) {
 
 // Built-in lead statuses that fire via lifecycle triggers. Any other lead_status
 // value (e.g. "24m Lead") fires via the custom-status trigger point after enrichment.
-const BUILTIN_LEAD_STATUSES = ['Qualified', 'Disqualified', 'Sold', 'Unsold', 'Rejected', 'Duplicates', 'Queued'];
+const BUILTIN_LEAD_STATUSES = ['Qualified', 'Disqualified', 'Sold', 'Unsold', 'Rejected', 'Duplicates', 'Queued', 'Error'];
 function triggerKeyForStatus(statusLabel) {
-  const map = { Qualified: 'on_received', Sold: 'on_sold', Unsold: 'on_unsold', Disqualified: 'on_dq', Queued: 'on_queued', Rejected: 'on_rejected', Duplicates: 'on_duplicates' };
+  const map = { Qualified: 'on_received', Sold: 'on_sold', Unsold: 'on_unsold', Disqualified: 'on_dq', Queued: 'on_queued', Rejected: 'on_rejected', Duplicates: 'on_duplicates', Error: 'on_error' };
   if (map[statusLabel]) return map[statusLabel];
   const slug = String(statusLabel || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
   return `on_${slug || 'status'}`;
@@ -790,12 +833,12 @@ function fireDeliveries(db, destinations, trigger, leadData, leadId, supplierAtt
     if (!connectorMatchesFilters(dest, leadData, supplierAttribution, supplierRecord)) continue;
     if (!connectorMatchesConditions(dest, leadData)) continue;
 
-    const conn = { ...dest, name: dest.api_name };
-    sendHttpEvent(conn, leadData, leadId, '')
+    sendDestinationAwait(dest, leadData, leadId, trigger)
       .then(async (result) => {
         await appendDeliveryLog(db, leadId, {
           connector: dest.api_name, trigger, http_status: result.http_status,
           success: !!result.success, error: result.error || '',
+          payload: result.payload, response: result.response,
           timestamp: new Date().toISOString(),
         });
         if (!result.success) {
@@ -1052,6 +1095,15 @@ function isQueueableRejection(reasonText) {
   return QUEUE_REJECTION_PATTERNS.some(p => lower.includes(p));
 }
 
+// Patterns that indicate a LeadByte rejection is a content/value mismatch, which
+// should classify as Disqualified (fires on_dq) rather than a catch-all Error.
+const CONTENT_REJECTION_PATTERNS = ['not an expected value', 'not accepted', 'not allowed', 'out of range', 'does not match'];
+
+function isContentRejection(reasonText) {
+  const lower = String(reasonText || '').toLowerCase();
+  return CONTENT_REJECTION_PATTERNS.some(p => lower.includes(p));
+}
+
 // ── Response envelope ──────────────────────────────────────────────────────
 // Builds the layered response returned to suppliers. Keeps the legacy `Response`
 // field as a mirror so existing suppliers keep working. The `Response` value is
@@ -1109,17 +1161,16 @@ export default async function processLead(ctx) {
     const body = ctx.body || {};
     const payload = body.payload || body;
 
+    const headers = ctx.req.headers || {};
     let supplierKeyRaw =
-      ctx.req.get('X-API-KEY') ||
-      ctx.req.get('X_KEY') ||
-      ctx.req.get('x-api-key') ||
-      ctx.req.get('x_key') ||
+      headers['x-api-key'] ||
+      headers['x_key'] ||
       payload['X-API-KEY'] ||
       payload['X_KEY'] ||
       payload._supplier_key ||
       null;
     if (!supplierKeyRaw) {
-      const authHeader = ctx.req.get('Authorization') || '';
+      const authHeader = headers['authorization'] || '';
       if (authHeader.startsWith('Basic ')) {
         const decoded = atob(authHeader.slice(6));
         supplierKeyRaw = decoded.split(':')[0] || null;
@@ -1229,6 +1280,11 @@ export default async function processLead(ctx) {
     const gatewayModeRaw = String(appSettings.gateway_mode || '').trim().toLowerCase();
     const gatewayMode = ['live', 'test', 'capture_only'].includes(gatewayModeRaw) ? gatewayModeRaw : 'live';
     const captureOnly = gatewayMode === 'capture_only';
+    // Distribution engine mode (ADDITIVE, flag-gated). Default legacy_only keeps
+    // the existing LeadByte path fully authoritative and runs no new code.
+    const distModeRaw = String(appSettings.distribution_mode || '').trim().toLowerCase();
+    const distributionMode = ['legacy_only', 'shadow', 'canary', 'new_primary_with_legacy_fallback', 'new_only']
+      .includes(distModeRaw) ? distModeRaw : 'legacy_only';
     const tsFmt = appSettings.timestamp_format || 'MM/DD/YYYY HH:MM:SS';
     leadPayload.timestamp = formatTimestamp(now, tsFmt);
 
@@ -1244,6 +1300,38 @@ export default async function processLead(ctx) {
     const systemLeadId = await nextLeadId(db);
     leadPayload.lead_id = systemLeadId;
     await db.entities.Lead.update(leadId, { lead_id: systemLeadId });
+
+    // ── Distribution engine SHADOW hook (ADDITIVE, flag-gated) ────────────────
+    // Runs ONLY when distribution_mode is past legacy_only. Calls the ONE
+    // canonical engine (via the generated bundle) through the snapshot loader and
+    // writes ONLY a RouteDecisionTrace. It sends/reserves/bills nothing and is
+    // fully isolated: the dynamic import runs only when enabled (so production on
+    // legacy_only never loads it), and any error is caught so it can never alter
+    // the legacy outcome or the supplier response envelope. Deployment of
+    // the generated bundle to the function runtime is verified in staging (CAP-2).
+    if (distributionMode !== 'legacy_only') {
+      try {
+        const leadDist = await import('./routingEngine.generated.js');
+        await leadDist.runShadow(db, {
+          distributionMode,
+          leadId,
+          campaignId: leadPayload.campaign_id || leadPayload._campaign || null,
+          idempotencyKey: String(systemLeadId),
+          leadData: leadPayload,
+          nowMs: Date.now(),
+        });
+      } catch (shadowErr) {
+        // The new engine must never break the authoritative legacy path. Record
+        // the failure best-effort; do not rethrow.
+        try {
+          await db.entities.RouteDecisionTrace.create({
+            lead_id: leadId, distribution_mode: distributionMode, result: 'engine_load_error',
+            error_message: String(shadowErr && shadowErr.message || shadowErr).slice(0, 300),
+            created_at: new Date().toISOString(),
+          });
+        } catch (_ignore) { /* nothing else is safe to do */ }
+      }
+    }
 
     // Load all config in parallel
     const [hlrSettingsArr, emailSettingsArr, allDestinations, calcs, customFields, apiConnectors, responseMappings] = await Promise.all([
@@ -1295,8 +1383,9 @@ export default async function processLead(ctx) {
       event: leadRouteRaw.includes('event'),
       queue: leadRouteRaw.includes('queue'),
       test: leadRouteRaw.includes('test'),
+      internal: leadRouteRaw.includes('internal'),
     };
-    routeIs.standard = !routeIs.direct && !routeIs.data && !routeIs.event && !routeIs.queue && !routeIs.test;
+    routeIs.standard = !routeIs.direct && !routeIs.data && !routeIs.event && !routeIs.queue && !routeIs.test && !routeIs.internal;
 
     // TEST route: save only - no processing, no triggers
     if (routeIs.test) {
@@ -1313,6 +1402,28 @@ export default async function processLead(ctx) {
         response_returned: JSON.stringify(testResponse),
       });
       return ctx.json(testResponse, 200);
+    }
+
+    // INTERNAL route: save only - a real lead saved to the system with nothing
+    // else fired. Same shape as the TEST route, but it is a genuine lead (not a
+    // test record), so it keeps a reporting-visible final_status.
+    if (routeIs.internal) {
+      const internalInbound = String(leadPayload.lead_status || '').trim();
+      const internalFinalStatus = (internalInbound && BUILTIN_LEAD_STATUSES.includes(internalInbound))
+        ? internalInbound : 'Qualified';
+      const internalResponse = buildEnvelope(traceId, {
+        ok: true, acceptance: 'accepted', lead_id: systemLeadId, lead_status: 'accepted',
+        code: 'INTERNAL_ROUTE', reason: 'Internal route - lead saved to system only',
+        message: 'Internal route - lead saved to system only', Response: internalFinalStatus,
+      });
+      await db.entities.Lead.update(leadId, {
+        final_status: internalFinalStatus,
+        queue_reason: '',
+        processed_at: new Date().toISOString(),
+        process_time_ms: Date.now() - startTime,
+        response_returned: JSON.stringify(internalResponse),
+      });
+      return ctx.json(internalResponse, 200);
     }
 
     // QUEUE route: hold for manual processing - fire on_queued, skip LeadByte
@@ -1564,6 +1675,11 @@ export default async function processLead(ctx) {
       enrichedData[emailValidFieldName] = emailValidResult;
     }
 
+    // Persist the enriched payload back to mapped_fields so calculated fields
+    // (lead_type, Supplier Source, accident_date buckets, state maps, etc.) are
+    // visible in the Leads table and lead summary, not just used for forwarding.
+    await db.entities.Lead.update(leadId, { mapped_fields: JSON.stringify(enrichedData) });
+
     // ── d. GATE: TrustedForm cert (hard enforce) ─────────────────────────
     const requireCert = appSettings.require_trustedform_cert !== false;
     const trustedformUrl = leadPayload.trustedform_url || leadPayload.trustedform_cert || '';
@@ -1707,26 +1823,28 @@ export default async function processLead(ctx) {
     }
 
     // ── e. ROUTE: direct / event bypass LeadByte ────────────────────────
+    // The lead is not forwarded to LeadByte, so no sale has occurred. It is
+    // reported as Qualified (not Sold) with no revenue. Connectors and
+    // Conversion Events still fire where their own filters/conditions match,
+    // but are passed the real lead payload, never a fabricated sold outcome.
     if (!routeIs.standard) {
-      // Inject revenue (0 for direct/event routes) so {{revenue}} resolves in CAPI custom_data.
-      const soldData = { ...leadPayload, revenue: 0 };
-      fireConnectors(db, apiConnectors, 'on_sold', soldData, leadId, supplierAttribution, supplierRecord);
+      fireConnectors(db, apiConnectors, 'on_sold', leadPayload, leadId, supplierAttribution, supplierRecord);
       if (!routeIs.event) {
-        fireDeliveries(db, allDestinations, 'on_sold', soldData, leadId, supplierAttribution, supplierRecord);
+        fireDeliveries(db, allDestinations, 'on_sold', leadPayload, leadId, supplierAttribution, supplierRecord);
       }
-      const soldResponse = buildEnvelope(traceId, {
-        ok: true, acceptance: 'accepted', lead_id: systemLeadId, lead_status: 'sold',
-        sold: true, revenue: 0, code: 'SOLD', reason: null,
-        message: 'Lead sold', Response: 'Sold',
+      const qualifiedResponse = buildEnvelope(traceId, {
+        ok: true, acceptance: 'accepted', lead_id: systemLeadId, lead_status: 'qualified',
+        sold: false, code: 'QUALIFIED', reason: null,
+        message: 'Lead qualified', Response: 'Qualified',
       });
       await db.entities.Lead.update(leadId, {
-        final_status: 'Sold',
-        revenue: 0,
+        final_status: 'Qualified',
+        revenue_source: 'direct_route',
         processed_at: new Date().toISOString(),
         process_time_ms: Date.now() - startTime,
-        response_returned: JSON.stringify(soldResponse),
+        response_returned: JSON.stringify(qualifiedResponse),
       });
-      return ctx.json(soldResponse, 200);
+      return ctx.json(qualifiedResponse, 200);
     }
 
     // ── e. FORWARD TO LEADBYTE (standard route) ────────────────────────
@@ -1884,15 +2002,21 @@ export default async function processLead(ctx) {
             revenueSum += Number(b.revenue) || 0;
           }
         }
+        let revenueSource = 'unknown';
         if (foundSoldBuyer) {
           capturedRevenue = revenueSum;
-        } else if (lbResult.revenue != null) {
+          revenueSource = 'leadbyte_buyers';
+        } else if (lbResult.revenue != null && !isNaN(Number(lbResult.revenue))) {
           capturedRevenue = Number(lbResult.revenue);
+          revenueSource = 'leadbyte_root';
         } else {
-          capturedRevenue = 0;
+          capturedRevenue = null;
+          revenueSource = 'unknown';
         }
         if (capturedRevenue != null && !isNaN(capturedRevenue)) {
-          await db.entities.Lead.update(leadId, { revenue: capturedRevenue });
+          await db.entities.Lead.update(leadId, { revenue: capturedRevenue, revenue_source: revenueSource });
+        } else {
+          await db.entities.Lead.update(leadId, { revenue_source: 'unknown' });
         }
 
         // Fire on_sold connectors (fire-and-forget). Inject captured revenue so
@@ -1936,6 +2060,8 @@ export default async function processLead(ctx) {
         });
         await evaluateNotifications(db, ['api_error'], { id: leadId }, supplierAttribution,
           { message: `Unexpected LeadByte status: ${recordStatus}` }).catch(() => {});
+        fireConnectors(db, apiConnectors, 'on_error', enrichedData, leadId, supplierAttribution, supplierRecord);
+        fireDeliveries(db, allDestinations, 'on_error', enrichedData, leadId, supplierAttribution, supplierRecord);
       }
     } else {
       // ── f. Top-level non-success: handle errors[] shape ──────────────
@@ -1960,6 +2086,13 @@ export default async function processLead(ctx) {
         fireConnectors(db, apiConnectors, 'on_queued', leadPayload, leadId, supplierAttribution, supplierRecord);
         fireDeliveries(db, allDestinations, 'on_queued', leadPayload, leadId, supplierAttribution, supplierRecord);
         await evaluateNotifications(db, ['lead_queued', 'missing_fields'], { id: leadId, queue_reason: queueReason }, supplierAttribution, { queue_reason: queueReason });
+      } else if (isContentRejection(firstError)) {
+        finalStatus = 'Disqualified';
+        supplierResponse = { Response: 'Disqualified', reason: firstError };
+        envAcceptance = 'accepted'; envLeadStatus = 'disqualified'; envCode = 'CONTENT_REJECTED';
+        await db.entities.Lead.update(leadId, { queue_reason: `LeadByte content rejection: ${firstError}` });
+        fireConnectors(db, apiConnectors, 'on_dq', enrichedData, leadId, supplierAttribution, supplierRecord);
+        fireDeliveries(db, allDestinations, 'on_dq', enrichedData, leadId, supplierAttribution, supplierRecord);
       } else {
         finalStatus = 'Error';
         supplierResponse = { Response: 'Error', reason: firstError || lbResult.message || 'LeadByte returned non-success' };
@@ -1971,6 +2104,8 @@ export default async function processLead(ctx) {
         });
         await evaluateNotifications(db, ['api_error'], { id: leadId }, supplierAttribution,
           { message: firstError || lbResult.message || 'LeadByte returned non-success' }).catch(() => {});
+        fireConnectors(db, apiConnectors, 'on_error', enrichedData, leadId, supplierAttribution, supplierRecord);
+        fireDeliveries(db, allDestinations, 'on_error', enrichedData, leadId, supplierAttribution, supplierRecord);
       }
     }
 

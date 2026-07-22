@@ -1,7 +1,7 @@
 import React, { useMemo } from 'react';
 import { Button } from '@/components/ui/button';
 import { Download } from 'lucide-react';
-import { dailySeries, applyFilters, money } from '@/lib/reportMetrics';
+import { dailySeries, applyFilters, money, seriesWindow } from '@/lib/reportMetrics';
 import { ReportKpi, THead, TRow, AINote } from '@/components/reports/reportViewAtoms';
 
 const TEMPLATE = '1.3fr repeat(6, 1fr)';
@@ -13,8 +13,10 @@ function fmtDay(key) {
 }
 
 export default function DailyReport({ leads, adSpend, filters }) {
+  // The table covers the selected date range. Without this it always showed the
+  // trailing 14 days from today and went blank for any other period.
   const rows = useMemo(
-    () => dailySeries(applyFilters(leads, filters), adSpend, 14),
+    () => dailySeries(applyFilters(leads, filters), adSpend, 14, seriesWindow(filters)),
     [leads, adSpend, filters]
   );
 
@@ -60,7 +62,7 @@ export default function DailyReport({ leads, adSpend, filters }) {
         <ReportKpi
           label="Daily Avg Leads"
           value={stats.avgLeads.toFixed(2)}
-          hint="last 14 days"
+          hint={`over ${rows.length} days`}
         />
         <ReportKpi
           label="Active Days"

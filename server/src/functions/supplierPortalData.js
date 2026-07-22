@@ -1,19 +1,27 @@
-import { requireUser } from './_runtime.js';
+import { requireUser, HttpError } from './_runtime.js';
 
-// Authenticated supplier-portal data endpoint. Returns everything the supplier
-// portal needs, strictly scoped to a single Supplier record. Reads Lead
-// (admin-only) but never returns another supplier's data, another supplier's
-// leads, buyer identities, or operator-only sections.
+// Caller model: SUPPLIER-SCOPED. Authenticated supplier-portal data endpoint.
+// Returns everything the supplier portal needs, strictly scoped to a single
+// Supplier record. Reads Lead with full (admin) visibility but never returns
+// another supplier's data, another supplier's leads, buyer identities, buyer
+// revenue or internal cost, raw payloads, routing traces, or the raw API key
+// (prefix + metadata only). Deny-by-default field allowlist.
 //
 // Scoping rules:
 // - A supplier-role user is scoped to their own user.linked_supplier_id.
 // - An operator (admin) may pass supplier_id to PREVIEW a supplier's portal.
 //   Non-admin callers cannot override their linked supplier.
 
-async function resolveSupplierScope(user, requestedSupplierId) {
+async function resolveSupplierScope(db, user, requestedSupplierId, previewRole) {
   const isOperator = user.role === 'admin';
   if (isOperator && requestedSupplierId) return requestedSupplierId;
   if (user.linked_supplier_id) return user.linked_supplier_id;
+  // Operator using "View as → Supplier" with no specific target: preview the
+  // first portal-enabled supplier so the portal renders a real example.
+  if (isOperator && previewRole) {
+    const enabled = await db.entities.Supplier.filter({ portal_enabled: true }, '-created_date', 1).catch(() => []);
+    if (enabled && enabled.length > 0) return enabled[0].id;
+  }
   return null;
 }
 
@@ -24,13 +32,14 @@ function parseArr(raw) {
 }
 
 export default async function supplierPortalData(ctx) {
-  try {
-    const user = requireUser(ctx);
-    const db = ctx.db;
+  const user = requireUser(ctx);
+  const db = ctx.db;
 
+  try {
     const body = ctx.body || {};
     const requestedSupplierId = body.supplier_id || null;
-    const supplierId = await resolveSupplierScope(user, requestedSupplierId);
+    const previewRole = !!body.preview_role;
+    const supplierId = await resolveSupplierScope(db, user, requestedSupplierId, previewRole);
     if (!supplierId) return ctx.json({ error: 'No supplier linked to this account' }, 403);
 
     const supplier = await db.entities.Supplier.get(supplierId).catch(() => null);
@@ -60,8 +69,7 @@ export default async function supplierPortalData(ctx) {
       mobile: l.mobile,
       email: l.email,
       final_status: l.final_status,
-      revenue: l.revenue,
-      cost: l.cost,
+      response_reason: l.response_reason,
       created_date: l.created_date,
     }));
 
@@ -71,7 +79,12 @@ export default async function supplierPortalData(ctx) {
       const keys = await db.entities.ApiKey.filter({ supplier_id: supplier.id });
       const byName = keys.length ? keys : await db.entities.ApiKey.filter({ supplier_name: supplier.name });
       const active = byName.find((k) => k.active) || byName[0];
-      if (active) apiKey = { key: active.key, key_prefix: active.key_prefix, name: active.name };
+      // Deny-by-default: never return the raw secret. Prefix + metadata only.
+      if (active) apiKey = {
+        key_prefix: active.key_prefix || (active.key ? String(active.key).slice(0, 6) : null),
+        name: active.name, active: active.active !== false,
+        last_used_at: active.last_used_at || null, request_count: active.request_count || 0,
+      };
     } catch { apiKey = null; }
 
     // Ad reporting — ONLY for internal sources connected through Facebook.
@@ -131,6 +144,7 @@ export default async function supplierPortalData(ctx) {
       adReporting,
     };
   } catch (error) {
+    if (error instanceof HttpError) throw error;
     return ctx.json({ error: error.message }, 500);
   }
 }

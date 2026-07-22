@@ -119,6 +119,7 @@ export default function SettingsGeneral() {
               ['standard', 'Goes to Leadbyte (default)'],
               ['direct', 'Bypasses Leadbyte and allows all other delivery / event processing'],
               ['data', 'Allows leads to be sent to data partners'],
+              ['internal', 'Sends lead to the system only. No webhooks, deliveries or conversion events fire.'],
               ['event', 'Only allows leads to be sent to Conversion Events'],
               ['queue', 'Holds lead for manual processing'],
               ['test', 'Sends test lead to system and does nothing else - sits in system for testing'],

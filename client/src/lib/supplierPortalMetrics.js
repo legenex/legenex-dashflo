@@ -59,6 +59,24 @@ export function supplierPortalMetrics(leads) {
   };
 }
 
+// Groups a supplier's own leads into per-day rows (YYYY-MM-DD) with volume,
+// accepted count, revenue and cost. Sorted most-recent first.
+export function dailyBreakdown(leads) {
+  const map = {};
+  for (const l of leads) {
+    if (!l.created_date) continue;
+    const day = new Date(l.created_date).toISOString().slice(0, 10);
+    if (!map[day]) map[day] = { day, total: 0, accepted: 0, revenue: 0, cost: 0 };
+    map[day].total++;
+    if (statusBucket(l.final_status) === 'accepted') map[day].accepted++;
+    map[day].revenue += num(l.revenue);
+    map[day].cost += num(l.cost);
+  }
+  return Object.values(map)
+    .map(r => ({ ...r, acceptedPct: r.total > 0 ? (r.accepted / r.total) * 100 : 0 }))
+    .sort((a, b) => (a.day < b.day ? 1 : -1));
+}
+
 // Aggregates ad spend rows into totals + per-campaign breakdown for internal
 // Facebook-connected suppliers.
 export function adReportSummary(adReporting, leadCount) {

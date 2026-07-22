@@ -19,6 +19,10 @@
       ],
       "default": "date_age_bucket"
     },
+    "vertical": {
+      "type": "string",
+      "description": "Vertical code this calculation applies to. Empty means it applies to all verticals."
+    },
     "input_field": {
       "type": "string",
       "description": "Token name of the input field"

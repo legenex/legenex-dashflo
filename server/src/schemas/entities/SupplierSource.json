@@ -8,24 +8,30 @@
     },
     "source_code": {
       "type": "string",
-      "description": "Distinct economic feed code for this supplier, for example INBNDS-SURVEY or INBNDS-PVL"
+      "description": "Optional supplier SubID (SSID) for this source, formed as sid-brand, for example LGNX-DS or LGNX-CMC. When present it is the primary match key for inbound leads: the payload ssid wins over any brand fallback. A supplier with a single source does not need one."
     },
-    "utm_source": {
+    "brand": {
       "type": "string",
-      "description": "How this source identifies itself on the inbound lead. Nullable."
+      "description": "Optional supplier_brand this source resolves for. Used as the fallback match when an inbound lead carries no ssid: the source whose brand equals the lead's supplier_brand is selected. Lets one supplier hold sources on different brands, for example LGNX holding CMC and Dont Settle."
     },
     "pricing_model": {
       "type": "string",
       "enum": [
-        "rev_share",
+        "none",
         "flat_cpl",
+        "profit_pct",
+        "revenue_pct",
         "tiered"
       ],
-      "description": "Pricing model for this source"
+      "description": "Pricing model for this source. none means this source carries no CPL of its own (used by Internal supplier sources whose cost comes from mapped ad accounts, and by any source that should fall back to the lead's supplier_payout)."
     },
-    "rev_share_pct": {
+    "profit_pct": {
       "type": "number",
-      "description": "Revenue share percentage. Used when pricing_model is rev_share. Nullable."
+      "description": "Percentage of profit, where profit is revenue minus cost. Used when pricing_model is profit_pct. Nullable."
+    },
+    "revenue_pct": {
+      "type": "number",
+      "description": "Percentage of revenue. Used when pricing_model is revenue_pct. Nullable."
     },
     "flat_cpl": {
       "type": "number",
@@ -33,7 +39,7 @@
     },
     "tier_rules": {
       "type": "array",
-      "description": "Used when pricing_model is tiered. Each element has a conditions array using the exact same {field, operator, value} condition shape and operators as the LeadByteConnector field conditions (equals, not_equals, contains, not_contains, starts_with, ends_with, is_empty, is_not_empty, gt, lt), plus a numeric price. Rules are evaluated top down and the first match wins. Nullable.",
+      "description": "Used when pricing_model is tiered. Each element has a conditions array using the exact same {field, operator, value} condition shape and operators as the LeadByteConnector field conditions (equals, not_equals, contains, not_contains, starts_with, ends_with, is_empty, is_not_empty, gt, lt), plus a numeric price. Rules are evaluated top down and the first match wins. Per-state CPL is expressed here with a condition on the state field. Nullable.",
       "items": {
         "type": "object",
         "properties": {
@@ -79,7 +85,6 @@
   },
   "required": [
     "supplier_id",
-    "source_code",
     "pricing_model"
   ],
   "unique": [

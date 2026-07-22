@@ -13,11 +13,12 @@ import { Panel, Tag, riseIn } from '@/components/settings/settingsUi';
 import { Checkbox } from '@/components/ui/checkbox';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
 import { toast } from 'sonner';
-import { format, startOfDay, endOfDay, startOfWeek, startOfMonth, endOfMonth, subDays, subMonths, isAfter } from 'date-fns';
 import { processLead } from '@/functions/processLead';
+import { bulkDeleteLeads } from '@/functions/bulkDeleteLeads';
 import { loadColumnConfig, saveColumnConfig, getColumnDef, buildAvailableColumns } from '@/lib/columnConfig';
 import { leadEventInstant } from '@/lib/reportMetrics';
 import { invalidateLeadCaches } from '@/lib/leadCaches';
+import { resolvePeriod } from '@/lib/periodRange';
 
 function getFieldValue(lead, field) {
   if (lead[field] != null && lead[field] !== '') return String(lead[field]);
@@ -38,23 +39,6 @@ function matchesView(lead, view) {
       return lead.final_status === 'Duplicate' || /reject/i.test(lead.leadbyte_record_status || '');
     case 'queued': return lead.final_status === 'Queued';
     default: return true;
-  }
-}
-
-function getDateBounds(range, customDate) {
-  const now = new Date();
-  switch (range) {
-    case 'today': return { start: startOfDay(now) };
-    case 'yesterday': { const y = subDays(now, 1); return { start: startOfDay(y), end: endOfDay(y) }; }
-    case 'this_week': return { start: startOfWeek(now, { weekStartsOn: 1 }) };
-    case 'this_month': return { start: startOfMonth(now) };
-    case 'last_month': { const lm = subMonths(now, 1); return { start: startOfMonth(lm), end: endOfMonth(lm) }; }
-    case 'this_year': return { start: new Date(now.getFullYear(), 0, 1) };
-    case 'custom': return {
-      start: customDate.start ? startOfDay(new Date(customDate.start)) : null,
-      end: customDate.end ? endOfDay(new Date(customDate.end)) : null,
-    };
-    default: return {};
   }
 }
 
@@ -88,7 +72,6 @@ function matchesSearch(lead, q) {
 
 // Permanent filter dropdown options shown above every leads table.
 const STATUS_FILTER_OPTIONS = [
-  { value: '', label: 'All Status' },
   { value: 'Sold', label: 'Sold' },
   { value: 'Qualified', label: 'Qualified' },
   { value: 'Disqualified', label: 'Disqualified' },
@@ -177,34 +160,54 @@ export default function LeadsTable({ view }) {
   const config = VIEW_CONFIGS[view] || VIEW_CONFIGS.all;
 
   const [search, setSearch] = useState('');
-  const [dateRange, setDateRange] = useState('all');
-  const [customDate, setCustomDate] = useState({ start: '', end: '' });
+  // Every leads table defaults to This Month (APP_TZ calendar month).
+  const [period, setPeriod] = useState('this_month');
+  const [customPeriod, setCustomPeriod] = useState({ from: '', to: '' });
   const [customFilters, setCustomFilters] = useState([]);
   const [selectedLead, setSelectedLead] = useState(null);
   const [initialTab, setInitialTab] = useState('summary');
   const [savedSets, setSavedSets] = useState(() => loadSavedSets(view));
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [resubmitting, setResubmitting] = useState(false);
   const [resubmitProgress, setResubmitProgress] = useState(null);
   const [columnConfig, setColumnConfig] = useState(() => loadColumnConfig(view));
-  const [statusFilter, setStatusFilter] = useState('');
-  const [supplierFilter, setSupplierFilter] = useState('');
-  const [sourceFilter, setSourceFilter] = useState('');
+  const [statusFilter, setStatusFilter] = useState([]);
+  const [supplierFilter, setSupplierFilter] = useState([]);
+  const [sourceFilter, setSourceFilter] = useState([]);
   const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(20);
+  // Rows per page. 50 unless the operator saved a different default with the
+  // tick box next to the selector (persisted per browser).
+  const PAGE_SIZE_KEY = 'legenex_leads_page_size_default';
+  const [pageSize, setPageSize] = useState(() => {
+    try {
+      const v = parseInt(localStorage.getItem(PAGE_SIZE_KEY), 10);
+      return [20, 50, 100, 200].includes(v) ? v : 50;
+    } catch { return 50; }
+  });
+  const [savedPageSize, setSavedPageSize] = useState(() => {
+    try {
+      const v = parseInt(localStorage.getItem(PAGE_SIZE_KEY), 10);
+      return [20, 50, 100, 200].includes(v) ? v : 50;
+    } catch { return 50; }
+  });
+  const saveDefaultPageSize = (n) => {
+    try { localStorage.setItem(PAGE_SIZE_KEY, String(n)); } catch { /* private mode */ }
+    setSavedPageSize(n);
+  };
 
   useEffect(() => {
     setSearch('');
-    setDateRange('all');
-    setCustomDate({ start: '', end: '' });
+    setPeriod('this_month');
+    setCustomPeriod({ from: '', to: '' });
     setCustomFilters([]);
     setSavedSets(loadSavedSets(view));
     setSelectedIds(new Set());
     setColumnConfig(loadColumnConfig(view));
-    setStatusFilter('');
-    setSupplierFilter('');
-    setSourceFilter('');
+    setStatusFilter([]);
+    setSupplierFilter([]);
+    setSourceFilter([]);
   }, [view]);
 
   // Persist column layout whenever it changes.
@@ -267,13 +270,13 @@ export default function LeadsTable({ view }) {
   const supplierOptions = useMemo(() => {
     const set = new Set();
     leads.forEach(l => { if (l.supplier_name) set.add(l.supplier_name); });
-    return [{ value: '', label: 'All Suppliers' }, ...Array.from(set).sort().map(s => ({ value: s, label: s }))];
+    return Array.from(set).sort().map(s => ({ value: s, label: s }));
   }, [leads]);
 
   const sourceOptions = useMemo(() => {
     const set = new Set();
     leads.forEach(l => { const s = getSource(l); if (s) set.add(s); });
-    return [{ value: '', label: 'All Sources' }, ...Array.from(set).sort().map(s => ({ value: s, label: s }))];
+    return Array.from(set).sort().map(s => ({ value: s, label: s }));
   }, [leads]);
 
   const columns = columnConfig.columns;
@@ -307,16 +310,18 @@ export default function LeadsTable({ view }) {
   }, [handleResizeMove, handleResizeEnd]);
 
   const filtered = useMemo(() => {
-    const bounds = getDateBounds(dateRange, customDate);
+    const { start, end } = resolvePeriod(period, customPeriod);
     const result = leads.filter(lead => {
       if (!matchesView(lead, view)) return false;
-      if (bounds.start && !isAfter(new Date(lead.created_date), bounds.start)) return false;
-      if (bounds.end && isAfter(new Date(lead.created_date), bounds.end)) return false;
+      // Bound by the lead's real event time in APP_TZ, matching reporting.
+      const inst = leadEventInstant(lead);
+      if (start && (!inst || inst < start)) return false;
+      if (end && (!inst || inst > end)) return false;
       if (!customFilters.every(f => matchesFilter(lead, f))) return false;
       if (search && !matchesSearch(lead, search)) return false;
-      if (statusFilter && lead.final_status !== statusFilter) return false;
-      if (supplierFilter && lead.supplier_name !== supplierFilter) return false;
-      if (sourceFilter && getSource(lead) !== sourceFilter) return false;
+      if (statusFilter.length > 0 && !statusFilter.includes(lead.final_status)) return false;
+      if (supplierFilter.length > 0 && !supplierFilter.includes(lead.supplier_name)) return false;
+      if (sourceFilter.length > 0 && !sourceFilter.includes(getSource(lead))) return false;
       return true;
     });
     // Sort newest first by the lead's real event time. leadEventInstant is the
@@ -329,7 +334,7 @@ export default function LeadsTable({ view }) {
       return Number.isNaN(t) ? -Infinity : t;
     };
     return result.sort((a, b) => instant(b) - instant(a));
-  }, [leads, view, dateRange, customDate, customFilters, search, statusFilter, supplierFilter, sourceFilter]);
+  }, [leads, view, period, customPeriod, customFilters, search, statusFilter, supplierFilter, sourceFilter]);
 
   // Client-side pagination over the filtered set. Selection and bulk actions
   // still span the whole filtered set; only the rendered rows are sliced.
@@ -340,7 +345,7 @@ export default function LeadsTable({ view }) {
     [filtered, safePage, pageSize]
   );
   // Reset to page 1 whenever the view, search, or any filter changes.
-  useEffect(() => { setPage(1); }, [view, search, dateRange, customDate, customFilters, statusFilter, supplierFilter, sourceFilter, pageSize]);
+  useEffect(() => { setPage(1); }, [view, search, period, customPeriod, customFilters, statusFilter, supplierFilter, sourceFilter, pageSize]);
 
   // Real telemetry for the shell footer, computed across all loaded leads.
   const telemetry = useMemo(() => ({
@@ -367,19 +372,19 @@ export default function LeadsTable({ view }) {
   };
 
   const openLeadDetail = (lead, stage) => {
-    setInitialTab(stage === 'hlr' ? 'hlr' : stage === 'leadbyte' ? 'leadbyte' : 'summary');
+    setInitialTab(stage === 'hlr' ? 'hlr' : stage === 'leadbyte' ? 'delivery' : 'summary');
     setSelectedLead(lead);
   };
 
   const applySavedSet = (set) => {
-    setDateRange(set.dateRange || 'all');
-    setCustomDate(set.customDate || { start: '', end: '' });
+    setPeriod(set.period || 'this_month');
+    setCustomPeriod(set.customPeriod || { from: '', to: '' });
     setCustomFilters(set.customFilters || []);
     setSearch(set.search || '');
   };
 
   const saveCurrentAsSet = (name) => {
-    const newSet = { id: Date.now().toString(), name, dateRange, customDate, customFilters, search };
+    const newSet = { id: Date.now().toString(), name, period, customPeriod, customFilters, search };
     const updated = [...savedSets, newSet];
     setSavedSets(updated);
     persistSavedSets(view, updated);
@@ -391,23 +396,26 @@ export default function LeadsTable({ view }) {
     persistSavedSets(view, updated);
   };
 
-  const filteredIds = useMemo(() => new Set(filtered.map(l => l.id)), [filtered]);
+  // Two-stage select all: the header checkbox toggles ONLY the current page's
+  // rows. A banner then offers to extend the selection to the whole filtered set.
+  const pageIds = useMemo(() => paged.map(l => l.id), [paged]);
+  const allPageSelected = pageIds.length > 0 && pageIds.every(id => selectedIds.has(id));
   const allFilteredSelected = filtered.length > 0 && filtered.every(l => selectedIds.has(l.id));
 
   const toggleSelectAll = () => {
-    if (allFilteredSelected) {
-      setSelectedIds(prev => {
-        const next = new Set(prev);
-        for (const id of filteredIds) next.delete(id);
-        return next;
-      });
-    } else {
-      setSelectedIds(prev => {
-        const next = new Set(prev);
-        for (const l of filtered) next.add(l.id);
-        return next;
-      });
-    }
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (allPageSelected) {
+        for (const id of pageIds) next.delete(id);
+      } else {
+        for (const id of pageIds) next.add(id);
+      }
+      return next;
+    });
+  };
+
+  const selectAllFiltered = () => {
+    setSelectedIds(() => new Set(filtered.map(l => l.id)));
   };
 
   const toggleSelectRow = (id) => {
@@ -428,13 +436,23 @@ export default function LeadsTable({ view }) {
 
   const handleBulkDelete = async () => {
     const ids = Array.from(selectedIds);
-    for (const id of ids) {
-      await api.entities.Lead.delete(id);
-    }
-    toast.success(`${ids.length} lead${ids.length !== 1 ? 's' : ''} deleted`);
-    clearSelection();
+    if (ids.length === 0) return;
+    setDeleting(true);
     setBulkDeleteOpen(false);
-    invalidateLeadCaches(qc);
+    try {
+      const res = await bulkDeleteLeads({ ids });
+      const deleted = res?.data?.deleted ?? 0;
+      toast.success(`${deleted} lead${deleted !== 1 ? 's' : ''} deleted`);
+      clearSelection();
+      invalidateLeadCaches(qc);
+      await Promise.all([
+        qc.refetchQueries({ queryKey: ['leads-all-non-archived'] }),
+        qc.refetchQueries({ queryKey: ['leads-nav-counts'] }),
+      ]);
+    } catch (e) {
+      toast.error(`Delete failed: ${e?.message || 'unknown error'}`);
+    }
+    setDeleting(false);
   };
 
   const handleBulkQueue = async () => {
@@ -485,7 +503,17 @@ export default function LeadsTable({ view }) {
       title={config.title}
       subtitle={config.subtitle}
       count={filtered.length}
-      onRefresh={() => qc.invalidateQueries()}
+      onRefresh={async () => {
+        // Force a fresh network fetch of the leads list plus the nav counts,
+        // bypassing staleness so a just-arrived lead shows without a full page
+        // reload. refetchQueries forces the fetch; invalidate keeps other lead
+        // views (Reports, Finances, campaign metrics) in sync too.
+        await Promise.all([
+          qc.refetchQueries({ queryKey: ['leads-all-non-archived'], type: 'active' }),
+          qc.refetchQueries({ queryKey: ['leads-nav-counts'], type: 'active' }),
+        ]);
+        invalidateLeadCaches(qc);
+      }}
       onExport={exportCSV}
       columnConfig={columnConfig}
       availableColumns={availableColumns}
@@ -497,10 +525,10 @@ export default function LeadsTable({ view }) {
       <LeadsFilterBar
         search={search}
         setSearch={setSearch}
-        dateRange={dateRange}
-        setDateRange={setDateRange}
-        customDate={customDate}
-        setCustomDate={setCustomDate}
+        period={period}
+        setPeriod={setPeriod}
+        customPeriod={customPeriod}
+        setCustomPeriod={setCustomPeriod}
         customFilters={customFilters}
         setCustomFilters={setCustomFilters}
         savedSets={savedSets}
@@ -530,10 +558,30 @@ export default function LeadsTable({ view }) {
         resubmitting={resubmitting}
         progress={resubmitProgress}
       />
+
+      {allPageSelected && !allFilteredSelected && filtered.length > paged.length && (
+        <div className="mt-2 flex items-center justify-center gap-2 rounded-md border border-primary/30 bg-primary/5 px-4 py-2 text-[13px] text-foreground flex-wrap">
+          <span>All {paged.length} leads on this page are selected.</span>
+          <button
+            onClick={selectAllFiltered}
+            className="font-semibold text-primary hover:underline"
+          >
+            Select all {filtered.length} leads matching filters
+          </button>
+        </div>
+      )}
+      {allFilteredSelected && filtered.length > paged.length && (
+        <div className="mt-2 flex items-center justify-center gap-2 rounded-md border border-primary/30 bg-primary/5 px-4 py-2 text-[13px] text-foreground flex-wrap">
+          <span>All {filtered.length} leads matching filters are selected.</span>
+          <button onClick={clearSelection} className="font-semibold text-primary hover:underline">
+            Clear selection
+          </button>
+        </div>
+      )}
       </div>
 
       {/* Mobile card list: below lg only */}
-      <div className="lg:hidden flex-1 min-h-0 overflow-y-auto space-y-2">
+      <div className="lg:hidden flex-1 min-h-0 overflow-y-auto space-y-1.5">
         {isLoading && (
           <div className="px-4 py-8 text-center text-muted-foreground">Loading...</div>
         )}
@@ -551,9 +599,9 @@ export default function LeadsTable({ view }) {
               <tr className="border-b border-border bg-muted sticky top-0 z-10">
                 <th className="px-4 py-3 w-[40px]">
                   <Checkbox
-                    checked={allFilteredSelected}
+                    checked={allPageSelected}
                     onCheckedChange={toggleSelectAll}
-                    aria-label="Select all"
+                    aria-label="Select all on this page"
                   />
                 </th>
                 {columns.map((col) => {
@@ -665,6 +713,15 @@ export default function LeadsTable({ view }) {
             >
               {[20, 50, 100, 200].map(n => <option key={n} value={n}>{n} / page</option>)}
             </select>
+            <label className="flex items-center gap-1.5 text-[12px] text-muted-foreground cursor-pointer select-none" title="Use the selected page length as the default">
+              <input
+                type="checkbox"
+                checked={savedPageSize === pageSize}
+                onChange={(e) => { if (e.target.checked) saveDefaultPageSize(pageSize); }}
+                className="h-3.5 w-3.5 rounded border-border bg-card accent-[hsl(var(--primary))]"
+              />
+              Default
+            </label>
             <button
               onClick={() => setPage(p => Math.max(1, p - 1))}
               disabled={safePage <= 1}
@@ -684,6 +741,15 @@ export default function LeadsTable({ view }) {
         </div>
       )}
 
+      {deleting && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-background/60 backdrop-blur-sm">
+          <div className="flex items-center gap-3 rounded-lg border border-border bg-card px-6 py-4 shadow-xl">
+            <div className="w-5 h-5 border-2 border-primary/20 border-t-primary rounded-full animate-spin" />
+            <span className="text-[13px] text-foreground">Deleting leads...</span>
+          </div>
+        </div>
+      )}
+
       <AlertDialog open={bulkDeleteOpen} onOpenChange={setBulkDeleteOpen}>
         <AlertDialogContent className="bg-popover border-border">
           <AlertDialogHeader>
@@ -693,9 +759,9 @@ export default function LeadsTable({ view }) {
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={handleBulkDelete} className="bg-destructive text-destructive-foreground">
-              Delete {selectedIds.size} Lead{selectedIds.size !== 1 ? 's' : ''}
+            <AlertDialogCancel disabled={deleting}>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={handleBulkDelete} disabled={deleting} className="bg-destructive text-destructive-foreground">
+              {deleting ? 'Deleting...' : `Delete ${selectedIds.size} Lead${selectedIds.size !== 1 ? 's' : ''}`}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

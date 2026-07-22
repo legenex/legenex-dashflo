@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Search, RefreshCw } from 'lucide-react';
 import { PulseDot } from '@/components/finances/financeUi';
 import { formatDistanceToNowStrict } from 'date-fns';
+import { SectionHeaderSlot } from '@/components/layout/SectionShell';
 
 // Per-page shell for the Tools section: header row (title + LIVE pill + Search/Refresh),
 // subtitle, the page content, and a TOOLS TELEMETRY footer with real values loaded once here.
@@ -51,6 +52,7 @@ export default function ToolsShell({ title, subtitle, actions, onSearch, onRefre
   return (
     <div className="flex flex-col min-h-full">
       {/* Header */}
+      <SectionHeaderSlot>
       <div className="flex items-start justify-between gap-4 mb-5">
         <div>
           <div className="flex items-center gap-2.5">
@@ -73,6 +75,7 @@ export default function ToolsShell({ title, subtitle, actions, onSearch, onRefre
           </Button>
         </div>
       </div>
+      </SectionHeaderSlot>
 
       {/* Content */}
       <div className="flex-1">{children}</div>

@@ -1,13 +1,13 @@
 import React from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { LayoutDashboard, FileText, BarChart3, Settings } from 'lucide-react';
+import { LayoutDashboard, FileText, SlidersHorizontal, BarChart3 } from 'lucide-react';
 import { usePermissions } from '@/lib/AuthContext';
 
 const TABS = [
   { label: 'Overview', path: '/', icon: LayoutDashboard, permKey: 'overview' },
   { label: 'Leads', path: '/leads', icon: FileText, permKey: 'leads_all' },
+  { label: 'Operations', path: '/operations', icon: SlidersHorizontal, permKey: 'operations' },
   { label: 'Reports', path: '/reports', icon: BarChart3, permKey: 'reports' },
-  { label: 'Settings', path: '/settings', icon: Settings, permKey: 'set_users' },
 ];
 
 // Sticky bottom tab bar, mobile only (hidden at lg and up). The drawer still

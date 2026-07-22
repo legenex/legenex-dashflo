@@ -18,7 +18,7 @@ import { Panel, riseIn } from '@/components/settings/settingsUi';
 const severityColors = {
   warning: 'bg-status-unsold status-unsold',
   error: 'bg-status-error status-error',
-  critical: 'bg-[rgba(229,72,77,0.3)] status-error font-bold',
+  critical: 'bg-status-error status-error font-bold',
 };
 
 export default function ErrorLogs({ embedded = false }) {
@@ -138,7 +138,7 @@ export default function ErrorLogs({ embedded = false }) {
                 <td className="px-4 py-3 text-secondary-foreground">{err.supplier_name || '-'}</td>
                 <td className="px-4 py-3 text-foreground truncate max-w-[300px]">{err.message}</td>
                 <td className="px-4 py-3">{err.lead_id ? <ExternalLink className="w-3.5 h-3.5 text-primary" /> : '-'}</td>
-                <td className="px-4 py-3">{err.resolved ? <CheckCircle className="w-4 h-4 text-[#3DD68C]" /> : '-'}</td>
+                <td className="px-4 py-3">{err.resolved ? <CheckCircle className="w-4 h-4 status-sold" /> : '-'}</td>
               </motion.tr>
             ))}
           </tbody>

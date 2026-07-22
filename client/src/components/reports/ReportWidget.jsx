@@ -6,7 +6,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Checkbox } from '@/components/ui/checkbox';
 import { Filter, Columns3 } from 'lucide-react';
 import { Bar, Line, Area, ComposedChart, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, CartesianGrid } from 'recharts';
-import { money, moneyShort, pct, int, dailySeries, groupBy, statusBreakdown } from '@/lib/reportMetrics';
+import { money, moneyShort, pct, int, dailySeries, groupBy, statusBreakdown, seriesWindow } from '@/lib/reportMetrics';
 import { downloadCsv } from '@/lib/csv';
 
 const DONUT_COLORS = ['#3DD68C', '#E5484D', '#FACC14', '#3182BD', '#7564CC', '#41D9C7', '#EC4899'];
@@ -22,14 +22,14 @@ const cssVar = (name, fallback) => {
 const TABLE_DEFS = {
   campaigns: { title: 'Top Campaigns', field: 'campaign', label: 'Campaign' },
   states: { title: 'State Performance', field: 'state', label: 'State' },
-  buyers: { title: 'Buyers Performance', field: 'buyer_id', label: 'Buyer' },
+  buyers: { title: 'Buyers Performance', field: 'buyer', label: 'Buyer' },
   suppliers: { title: 'Suppliers Performance', field: 'supplier_name', label: 'Supplier' },
   utm_source: { title: 'UTM Source', field: 'utm_source', label: 'Source' },
   buyer_feedback: { title: 'Buyer Feedback', field: 'buyer_feedback', label: 'Disposition' },
   injury_type: { title: 'Injury Type', field: 'injury_type', label: 'Injury Type' },
   accident_date: { title: 'Accident Date', field: 'accident_date', label: 'Accident Date' },
   treatment_time: { title: 'Treatment Time', field: 'treatment_time', label: 'Treatment Time' },
-  phone_verification: { title: 'Phone Verification', field: 'hlr_status', label: 'Verification' },
+  phone_verification: { title: 'Phone Verification', field: 'phone_verified', label: 'Verification' },
 };
 
 const GROUP_COLUMNS = [
@@ -111,11 +111,13 @@ function GroupTable({ def, leads, adSpend, widget, onChange }) {
 }
 
 // Main dispatcher for a widget by type.
-export default function ReportWidget({ widget, leads, adSpend, onChange }) {
+export default function ReportWidget({ widget, leads, adSpend, onChange, filters }) {
   const type = widget.type;
+  // Follow the report's date filter rather than always charting today backwards.
+  const win = seriesWindow(filters);
 
   if (type === 'rev_spend_profit') {
-    const data = dailySeries(leads, adSpend, 14);
+    const data = dailySeries(leads, adSpend, 14, win);
     return (
       <WidgetShell title="Revenue vs Spend vs Profit" wide={widget.wide !== false}
         onToggleWide={() => onChange({ ...widget, wide: widget.wide === false })}
@@ -175,7 +177,7 @@ export default function ReportWidget({ widget, leads, adSpend, onChange }) {
   }
 
   if (type === 'daily_metrics') {
-    const data = dailySeries(leads, adSpend, 30).reverse();
+    const data = dailySeries(leads, adSpend, 30, win).reverse();
     return (
       <WidgetShell title="Daily Metrics" wide={widget.wide !== false}
         onToggleWide={() => onChange({ ...widget, wide: widget.wide === false })}

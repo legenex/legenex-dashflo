@@ -15,6 +15,7 @@ export const DEFAULT_LEAD_STATUSES = [
   'Rejected',
   'Duplicates',
   'Queued',
+  'Error',
 ];
 
 // Status triggers that always appear in the trigger picker, regardless of whether
@@ -34,6 +35,7 @@ export const STATUS_TO_TRIGGER = {
   Queued: 'on_queued',
   Rejected: 'on_rejected',
   Duplicates: 'on_duplicates',
+  Error: 'on_error',
 };
 
 export const TRIGGER_TO_STATUS = Object.fromEntries(

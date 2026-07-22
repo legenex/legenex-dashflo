@@ -1,29 +1,27 @@
-import { requireUser } from './_runtime.js';
+import { requireUser, HttpError } from './_runtime.js';
 
-// Authenticated buyer-portal data endpoint. Returns everything the portal needs,
-// strictly scoped to a single buyer_id. Reads Lead (admin-only) but never returns
-// another buyer's data.
-//
-// Scoping rules:
-// - A buyer-role user is scoped to their own user.linked_buyer_id.
-// - An operator (admin) may pass buyer_id to PREVIEW a buyer's portal.
-//   Non-admin callers cannot override their linked buyer.
-
-async function resolveBuyerScope(user, requestedBuyerId) {
+async function resolveBuyerScope(db, user, requestedBuyerId, previewRole) {
   const isOperator = user.role === 'admin';
   if (isOperator && requestedBuyerId) return requestedBuyerId;
   if (user.linked_buyer_id) return user.linked_buyer_id;
+  // Operator using "View as → Buyer" with no specific target: preview the first
+  // portal-enabled buyer so the portal renders a real example.
+  if (isOperator && previewRole) {
+    const enabled = await db.entities.Buyer.filter({ portal_enabled: true }, '-created_date', 1).catch(() => []);
+    if (enabled && enabled.length > 0) return enabled[0].id;
+  }
   return null;
 }
 
 export default async function portalData(ctx) {
   try {
-    const user = requireUser(ctx);
     const db = ctx.db;
+    const user = requireUser(ctx);
 
     const body = ctx.body || {};
     const requestedBuyerId = body.buyer_id || null;
-    const buyerId = await resolveBuyerScope(user, requestedBuyerId);
+    const previewRole = !!body.preview_role;
+    const buyerId = await resolveBuyerScope(db, user, requestedBuyerId, previewRole);
     if (!buyerId) return ctx.json({ error: 'No buyer linked to this account' }, 403);
 
     const buyer = await db.entities.Buyer.get(buyerId).catch(() => null);
@@ -47,7 +45,6 @@ export default async function portalData(ctx) {
       email: l.email,
       final_status: l.final_status,
       revenue: l.revenue,
-      cost: l.cost,
       buyer_feedback: l.buyer_feedback,
       created_date: l.created_date,
     }));
@@ -64,6 +61,7 @@ export default async function portalData(ctx) {
       returns,
     };
   } catch (error) {
+    if (error instanceof HttpError) throw error;
     return ctx.json({ error: error.message }, 500);
   }
 }

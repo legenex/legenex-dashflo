@@ -13,6 +13,7 @@ import SourceEditor from './SourceEditor';
 import { parseRules } from './tierRules';
 
 const MODEL_TONE = {
+  none: 'tag-neutral',
   rev_share: 'bg-status-queued status-queued',
   flat_cpl: 'bg-status-sold status-sold',
   tiered: 'bg-primary/15 text-primary',
@@ -32,6 +33,7 @@ function priceSummary(src) {
     const n = parseRules(src.tier_rules).length;
     return `${n} rule${n === 1 ? '' : 's'}`;
   }
+  if (src.pricing_model === 'none') return 'No CPL';
   return '-';
 }
 
@@ -116,12 +118,15 @@ export default function SupplierSourcesTab({ supplier }) {
             <div key={src.id} className="flex items-center gap-3 rounded-lg border border-border bg-card px-3.5 py-3">
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
-                  <span className="font-mono text-[13px] font-medium text-foreground truncate">{src.source_code}</span>
+                  <span className="font-mono text-[13px] font-medium text-foreground truncate">
+                    {src.source_code || <span className="text-muted-foreground">no ssid</span>}
+                  </span>
                   <span className={`inline-flex items-center rounded-md px-1.5 py-0.5 text-[10px] font-semibold ${MODEL_TONE[src.pricing_model] || 'tag-neutral'}`}>
                     {src.pricing_model}
                   </span>
                 </div>
                 <div className="flex items-center gap-2 mt-1 text-[11px] text-muted-foreground">
+                  {src.brand && <><span>brand: <span className="text-foreground">{src.brand}</span></span><span className="text-muted-foreground/40">|</span></>}
                   {src.utm_source && <><span className="font-mono">{src.utm_source}</span><span className="text-muted-foreground/40">|</span></>}
                   <span className="font-mono tabular-nums">{priceSummary(src)}</span>
                 </div>

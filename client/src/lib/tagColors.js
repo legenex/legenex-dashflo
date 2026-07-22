@@ -122,6 +122,7 @@ export const TRIGGER_TAG = {
   on_duplicates: { label: 'Duplicate', className: 'bg-status-duplicate status-duplicate' },
   on_24m_lead: { label: '24m Lead', className: 'bg-status-24m status-24m' },
   on_returned: { label: 'Returned', className: 'bg-status-returned status-returned' },
+  on_error: { label: 'Error', className: 'bg-status-error status-error' },
 };
 
 export function triggerTagClass(triggerKey) {

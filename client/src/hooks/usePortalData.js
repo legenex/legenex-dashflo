@@ -5,12 +5,15 @@ import { usePortalScope } from './usePortalScope';
 // Fetches buyer-scoped portal data (leads, feedback, returns) via the backend
 // function, which enforces scoping server-side.
 export function usePortalData() {
-  const { previewBuyerId } = usePortalScope();
+  const { previewBuyerId, rolePreview } = usePortalScope();
 
   const query = useQuery({
-    queryKey: ['portal-data', previewBuyerId || 'self'],
+    queryKey: ['portal-data', previewBuyerId || (rolePreview ? 'role-preview' : 'self')],
     queryFn: async () => {
-      const res = await api.functions.invoke('portalData', previewBuyerId ? { buyer_id: previewBuyerId } : {});
+      const payload = previewBuyerId
+        ? { buyer_id: previewBuyerId }
+        : (rolePreview ? { preview_role: true } : {});
+      const res = await api.functions.invoke('portalData', payload);
       return res.data;
     },
     retry: false,

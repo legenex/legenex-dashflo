@@ -4,20 +4,25 @@
   "properties": {
     "name": {
       "type": "string",
-      "description": "Campaign display name"
+      "description": "Campaign display name. A campaign IS a vertical: the campaign name defines the vertical."
     },
     "vertical": {
       "type": "string",
-      "description": "Vertical code this campaign belongs to"
+      "description": "Vertical code this campaign belongs to. A campaign is a vertical, so this mirrors the campaign identity."
+    },
+    "brand": {
+      "type": "string",
+      "description": "Brand code / name this campaign is associated with. Nullable."
     },
     "send_mode": {
       "type": "string",
       "enum": [
         "ping_post",
-        "direct_post"
+        "direct_post",
+        "both"
       ],
       "default": "direct_post",
-      "description": "How sources send leads into this campaign: Ping Post or Direct Post"
+      "description": "How sources send leads into this campaign: Ping Post, Direct Post, or Both. Not a forced either/or."
     },
     "supplier_ids": {
       "type": "string",
@@ -26,6 +31,15 @@
     "active": {
       "type": "boolean",
       "default": true
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "active",
+        "disabled"
+      ],
+      "default": "active",
+      "description": "Campaign lifecycle status. Kept in sync with the active boolean: active derives active true, disabled derives active false."
     },
     "sort_order": {
       "type": "number",

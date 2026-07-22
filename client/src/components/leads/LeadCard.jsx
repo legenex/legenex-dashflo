@@ -16,13 +16,13 @@ export default function LeadCard({ lead, onOpen }) {
     <button
       type="button"
       onClick={() => onOpen(lead)}
-      className="tap-target w-full text-left bg-card border border-border rounded-[10px] p-3.5 flex items-center gap-3 active:bg-accent/50 transition-colors"
+      className="tap-target w-full text-left bg-card border border-border rounded-[10px] px-3.5 py-2.5 flex items-center gap-3 active:bg-accent/50 transition-colors"
     >
       <div className="min-w-0 flex-1">
         <div className="text-[14px] font-medium text-foreground truncate">{name}</div>
         <div className="text-[12px] text-muted-foreground mt-0.5">{relative}</div>
       </div>
-      <div className="flex flex-col items-end gap-1 shrink-0">
+      <div className="flex flex-col items-end gap-0.5 shrink-0">
         {lead.final_status && <StatusPill status={lead.final_status} />}
         <div className="text-[13px] font-mono text-foreground">${revenue.toFixed(2)}</div>
       </div>

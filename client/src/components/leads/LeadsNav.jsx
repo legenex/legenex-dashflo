@@ -35,8 +35,20 @@ export default function LeadsNav() {
   const location = useLocation();
 
   const { data: leads = [] } = useQuery({
-    queryKey: ['leads-all-non-archived'],
-    queryFn: () => api.entities.Lead.filter({ archived: false }, '-created_date', 500),
+    queryKey: ['leads-nav-counts'],
+    queryFn: async () => {
+      const all = [];
+      let p = 0;
+      const size = 500;
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
+        const batch = await api.entities.Lead.filter({ archived: false }, '-created_date', size, p * size);
+        all.push(...batch);
+        if (batch.length < size) break;
+        p += 1;
+      }
+      return all;
+    },
   });
 
   const counts = useMemo(() => {
@@ -50,12 +62,11 @@ export default function LeadsNav() {
     return leads.filter(l => l.final_status === 'Queued' && l.created_date && differenceInHours(now, new Date(l.created_date)) >= 5).length;
   }, [leads]);
 
-  const railItems = ITEMS.map(item => ({ label: item.label, to: item.path, active: location.pathname === item.path }));
+  const railItems = ITEMS.map(item => ({ label: item.label, icon: item.icon, to: item.path, active: location.pathname === item.path }));
 
   return (
-    <SubNavShell items={railItems}>
+    <SubNavShell items={railItems} title="Leads">
       <div className="flex flex-col h-full">
-        <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider px-2 mb-1.5">Leads</div>
         <div className="space-y-0.5">
           {ITEMS.map(item => {
             const active = location.pathname === item.path;

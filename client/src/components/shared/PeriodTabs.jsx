@@ -11,7 +11,7 @@ export default function PeriodTabs({ value, onChange, custom, onCustomChange, ex
   const [draft, setDraft] = useState(custom || { from: '', to: '' });
 
   return (
-    <div className="inline-flex items-center gap-2 flex-wrap">
+    <div className="inline-flex items-center gap-1.5 sm:gap-2 flex-wrap">
       <div className="inline-flex items-center bg-card border border-border rounded-lg p-0.5">
         {PERIODS.map(p => {
           const active = p.value === value;
@@ -21,7 +21,7 @@ export default function PeriodTabs({ value, onChange, custom, onCustomChange, ex
                 <PopoverTrigger asChild>
                   <button
                     onClick={() => onChange('custom')}
-                    className={`px-3 py-1.5 text-[12px] font-medium rounded-md transition-colors inline-flex items-center gap-1.5 ${active ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground hover:bg-accent/50'}`}
+                    className={`px-2 sm:px-3 py-1 sm:py-1.5 text-[11px] sm:text-[12px] font-medium rounded-md transition-colors inline-flex items-center gap-1.5 ${active ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground hover:bg-accent/50'}`}
                   >
                     <CalendarIcon className="w-3.5 h-3.5" /> Custom
                   </button>
@@ -46,7 +46,7 @@ export default function PeriodTabs({ value, onChange, custom, onCustomChange, ex
             <button
               key={p.value}
               onClick={() => onChange(p.value)}
-              className={`px-3 py-1.5 text-[12px] font-medium rounded-md transition-colors ${active ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground hover:bg-accent/50'}`}
+              className={`px-2 sm:px-3 py-1 sm:py-1.5 text-[11px] sm:text-[12px] font-medium rounded-md transition-colors ${active ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground hover:bg-accent/50'}`}
             >
               {p.label}
             </button>

@@ -108,6 +108,7 @@
       "enum": [
         "Processing",
         "Sold",
+        "Qualified",
         "Unsold",
         "Queued",
         "Disqualified",
@@ -205,6 +206,10 @@
     "leadbyte_outcome_payload": {
       "type": "string",
       "description": "Full raw JSON of the LeadByte outcome webhook"
+    },
+    "revenue_source": {
+      "type": "string",
+      "description": "How the revenue value on this lead was determined: leadbyte_buyers, leadbyte_root, direct_route, or unknown. Diagnostic only, does not affect final_status."
     }
   },
   "required": [

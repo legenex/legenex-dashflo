@@ -16,7 +16,7 @@ import {
 } from 'recharts';
 import {
   Copy, Link2, Workflow, Users, CheckCircle2, Ban, Clock, RotateCcw, XCircle, AlertTriangle,
-  Target, Phone, Mail, MessageSquare, Brain, Sparkles, ArrowUpRight, RefreshCw,
+  Target, Phone, Mail, MessageSquare, Brain, Sparkles, ArrowUpRight, RefreshCw, Route as RouteIcon, GitBranch,
 } from 'lucide-react';
 
 const rise = {
@@ -60,7 +60,7 @@ const Panel = ({ children, className = '', glow = false, style = {} }) => (
   </div>
 );
 
-const PulseDot = ({ className = 'bg-[hsl(152_65%_54%)]', size = 7 }) => (
+const PulseDot = ({ className = 'bg-current status-sold', size = 7 }) => (
   <span className="relative inline-flex" style={{ width: size, height: size }}>
     <motion.span
       className={`absolute inset-0 rounded-full ${className}`}
@@ -75,9 +75,9 @@ const Tag = ({ children, tone = 'slate', mono }) => {
   const map = {
     slate: 'tag-neutral border-border',
     red: 'bg-primary/10 text-primary border-primary/35',
-    green: 'bg-status-sold status-sold border-[hsl(152_65%_54%/0.35)]',
-    amber: 'bg-status-unsold status-unsold border-[hsl(38_78%_58%/0.35)]',
-    blue: 'bg-status-duplicate status-duplicate border-[hsl(220_82%_65%/0.35)]',
+    green: 'bg-status-sold status-sold border-border',
+    amber: 'bg-status-unsold status-unsold border-border',
+    blue: 'bg-status-duplicate status-duplicate border-border',
   }[tone];
   return (
     <span className={`px-2 py-0.5 rounded-md text-[10.5px] font-medium tracking-wide border ${mono ? 'font-mono' : ''} ${map}`}>
@@ -185,6 +185,21 @@ export default function DistributionDashboard() {
     <div>
       <SectionHeader title="Distribution Dashboard" subtitle="Operational pipeline health, volume, status mix, verification and source performance">
         <div className="flex items-center gap-3 flex-wrap">
+          {/* Routing tools live off the Dashboard now that they are out of the nav. */}
+          <button
+            type="button"
+            onClick={() => navigate('/distribution/simulator')}
+            className="inline-flex items-center gap-1.5 h-8 px-3 rounded-md border border-border text-[13px] text-muted-foreground hover:text-foreground hover:bg-accent/40 transition-colors"
+          >
+            <RouteIcon className="w-4 h-4" />Simulator
+          </button>
+          <button
+            type="button"
+            onClick={() => navigate('/distribution/routes')}
+            className="inline-flex items-center gap-1.5 h-8 px-3 rounded-md border border-border text-[13px] text-muted-foreground hover:text-foreground hover:bg-accent/40 transition-colors"
+          >
+            <GitBranch className="w-4 h-4" />Route Groups
+          </button>
           <PeriodTabs value={period} onChange={setPeriod} custom={custom} onCustomChange={setCustom} />
           <RefreshButton onClick={() => qc.invalidateQueries()} />
         </div>
@@ -200,7 +215,7 @@ export default function DistributionDashboard() {
           />
           <div className="relative flex flex-col xl:flex-row xl:items-center gap-4 px-5 py-4">
             <div className="flex items-center gap-3 min-w-0 flex-1">
-              <div className="w-9 h-9 rounded-lg grid place-items-center shrink-0 bg-status-sold border border-[hsl(152_65%_54%/0.3)]">
+              <div className="w-9 h-9 rounded-lg grid place-items-center shrink-0 bg-status-sold border border-border">
                 <Link2 size={15} className="status-sold" />
               </div>
               <div className="min-w-0 flex-1">
@@ -218,7 +233,7 @@ export default function DistributionDashboard() {
               {verifications.map((v) => (
                 <div
                   key={v.name}
-                  className={`flex items-center gap-2 px-3 h-9 rounded-lg border ${v.ok ? 'bg-status-sold border-[hsl(152_65%_54%/0.3)]' : 'bg-primary/10 border-primary/30'}`}
+                  className={`flex items-center gap-2 px-3 h-9 rounded-lg border ${v.ok ? 'bg-status-sold border-border' : 'bg-primary/10 border-primary/30'}`}
                 >
                   <v.icon size={13} className={v.ok ? 'status-sold' : 'text-primary'} />
                   <span className="text-[11.5px] font-medium text-foreground">{v.name}</span>
@@ -250,7 +265,7 @@ export default function DistributionDashboard() {
                   animate="show"
                   custom={i}
                   whileHover={{ y: -3 }}
-                  className={`p-3.5 rounded-lg border bg-background/40 ${highlightAmber ? 'border-[hsl(38_78%_58%/0.4)]' : 'border-border/60'}`}
+                  className={`p-3.5 rounded-lg border ${highlightAmber ? 'bg-status-unsold border-border' : 'bg-background/40 border-border/60'}`}
                 >
                   <div className="flex items-center justify-between">
                     <span className="text-[9.5px] font-semibold tracking-[0.1em] uppercase text-muted-foreground">{s.label}</span>

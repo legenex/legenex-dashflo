@@ -23,6 +23,7 @@ export default function LeadsShell({
 }) {
   const [refreshedAt, setRefreshedAt] = useState(Date.now());
   const [nowTick, setNowTick] = useState(Date.now());
+  const [refreshing, setRefreshing] = useState(false);
 
   useEffect(() => {
     const id = setInterval(() => setNowTick(Date.now()), 1000);
@@ -31,9 +32,15 @@ export default function LeadsShell({
 
   const secsAgo = Math.max(0, Math.round((nowTick - refreshedAt) / 1000));
 
-  const handleRefresh = () => {
-    onRefresh?.();
-    setRefreshedAt(Date.now());
+  const handleRefresh = async () => {
+    if (refreshing) return;
+    setRefreshing(true);
+    try {
+      await onRefresh?.();
+    } finally {
+      setRefreshing(false);
+      setRefreshedAt(Date.now());
+    }
   };
 
   const { total = 0, sold = 0, queued = 0, errors = 0, lastLeadAt = null } = telemetry || {};
@@ -55,9 +62,10 @@ export default function LeadsShell({
           <span className="text-[12px] text-muted-foreground font-mono tabular-nums ml-1">{count} leads</span>
           <button
             onClick={handleRefresh}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-2.5 h-8 text-[12px] text-muted-foreground hover:text-foreground transition-colors"
+            disabled={refreshing}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-2.5 h-8 text-[12px] text-muted-foreground hover:text-foreground transition-colors disabled:opacity-60"
           >
-            <RefreshCw className="w-3.5 h-3.5" /> Refresh
+            <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin' : ''}`} /> Refresh
           </button>
           <div className="hidden lg:block">
             <ColumnManager config={columnConfig} availableColumns={availableColumns} onChange={onColumnChange} />

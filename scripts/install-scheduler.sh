@@ -50,11 +50,13 @@ cat > "$SERVER_PLIST" <<PLIST
 <plist version="1.0">
 <dict>
   <key>Label</key><string>$SERVER_LABEL</string>
+  <!-- Run node directly (no bash -l login-shell wrapper, which is fragile under
+       launchd), and keep the agent's stdout on its own file — pointing launchd
+       at a path the process also opens fails the job with EX_CONFIG (78). -->
   <key>ProgramArguments</key>
   <array>
-    <string>/bin/bash</string>
-    <string>-lc</string>
-    <string>exec "$NODE_BIN" "$ROOT/server/src/index.js"</string>
+    <string>$NODE_BIN</string>
+    <string>$ROOT/server/src/index.js</string>
   </array>
   <key>EnvironmentVariables</key>
   <dict>
@@ -64,8 +66,8 @@ cat > "$SERVER_PLIST" <<PLIST
   </dict>
   <key>KeepAlive</key><true/>
   <key>RunAtLoad</key><true/>
-  <key>StandardOutPath</key><string>$ROOT/sync/state/server.log</string>
-  <key>StandardErrorPath</key><string>$ROOT/sync/state/server.log</string>
+  <key>StandardOutPath</key><string>$ROOT/sync/state/server-agent.log</string>
+  <key>StandardErrorPath</key><string>$ROOT/sync/state/server-agent.log</string>
 </dict>
 </plist>
 PLIST

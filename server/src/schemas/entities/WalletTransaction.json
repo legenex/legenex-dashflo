@@ -24,6 +24,18 @@
     },
     "description": {
       "type": "string"
+    },
+    "idempotency_key": {
+      "type": "string",
+      "description": "Additive. Dedupe key so a debit/credit applies at most once (native ledger)"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "applied",
+        "rejected"
+      ],
+      "description": "Additive. applied = balance moved; rejected = insufficient/over-limit, no balance change"
     }
   },
   "required": [

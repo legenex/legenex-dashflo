@@ -29,6 +29,24 @@ export function portalMetrics(leads) {
   };
 }
 
+// Groups leads into per-day rows (YYYY-MM-DD) with volume, revenue, cost and
+// sold counts. Sorted most-recent first.
+export function dailyBreakdown(leads) {
+  const map = {};
+  for (const l of leads) {
+    if (!l.created_date) continue;
+    const day = new Date(l.created_date).toISOString().slice(0, 10);
+    if (!map[day]) map[day] = { day, total: 0, sold: 0, revenue: 0, cost: 0 };
+    map[day].total++;
+    if (String(l.final_status) === 'Sold') map[day].sold++;
+    map[day].revenue += num(l.revenue);
+    map[day].cost += num(l.cost);
+  }
+  return Object.values(map)
+    .map(r => ({ ...r, convRate: r.total > 0 ? (r.sold / r.total) * 100 : 0 }))
+    .sort((a, b) => (a.day < b.day ? 1 : -1));
+}
+
 export function feedbackSummary(feedback) {
   const map = {};
   for (const f of feedback) {

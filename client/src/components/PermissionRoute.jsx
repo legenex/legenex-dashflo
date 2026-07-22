@@ -6,7 +6,18 @@ import { keyForLocation, firstAllowedPath } from '@/lib/permissions';
 // user lacks the matching permission key for, redirecting to their first allowed page.
 export default function PermissionRoute() {
   const location = useLocation();
-  const { can } = usePermissions();
+  const { can, role } = usePermissions();
+
+  // Buyer / Supplier roles (real OR previewed via "View as") never see the
+  // operator app. They live entirely inside their own portal, which has its
+  // own scoped sidebar (Overview / Leads / Reports) and trimmed report set.
+  // Redirect any operator route into the matching portal root.
+  if (role === 'buyer') {
+    return <Navigate to="/portal" replace />;
+  }
+  if (role === 'supplier') {
+    return <Navigate to="/supplier-portal" replace />;
+  }
 
   const key = keyForLocation(location.pathname, location.search);
 

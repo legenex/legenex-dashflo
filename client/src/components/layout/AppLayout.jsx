@@ -43,6 +43,32 @@ export default function AppLayout() {
     { enabled: ptrEnabled }
   );
 
+  // Safety net for the mobile menu. Radix can leave pointer-events:none on
+  // <body> when the drawer closes during navigation, which silently kills the
+  // menu button until a full reload. Clear it once the drawer is closed.
+  React.useEffect(() => {
+    if (drawerOpen) return;
+    const id = setTimeout(() => {
+      if (document.body.style.pointerEvents === 'none') {
+        document.body.style.pointerEvents = '';
+      }
+    }, 350);
+    return () => clearTimeout(id);
+  }, [drawerOpen, location.pathname]);
+
+  // Auto-refresh: silently re-pull data every 15 minutes on the data-heavy
+  // dashboards (Overview, Leads) without a page reload. Skipped while the tab
+  // is hidden so background tabs never hit the API.
+  React.useEffect(() => {
+    if (!ptrEnabled) return;
+    const id = setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        queryClient.invalidateQueries();
+      }
+    }, 15 * 60 * 1000);
+    return () => clearInterval(id);
+  }, [ptrEnabled, queryClient]);
+
   const { data: errorCount = 0 } = useQuery({
     queryKey: ['layout-error-count'],
     queryFn: async () => {

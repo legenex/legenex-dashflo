@@ -184,7 +184,7 @@ export default function Leads() {
   };
 
   const openLeadDetail = (lead, stage) => {
-    const tab = stage === 'hlr' ? 'hlr' : stage === 'leadbyte' ? 'leadbyte' : 'summary';
+    const tab = stage === 'hlr' ? 'hlr' : stage === 'leadbyte' ? 'delivery' : 'summary';
     setInitialTab(tab);
     setSelectedLead(lead);
   };
@@ -317,7 +317,7 @@ export default function Leads() {
                     <td className="px-4 py-3 text-foreground cursor-pointer" onClick={() => { setInitialTab('summary'); setSelectedLead(lead); }}>{lead.first_name} {lead.last_name}</td>
                     <td className="px-4 py-3 font-mono text-[12px] cursor-pointer" onClick={() => { setInitialTab('summary'); setSelectedLead(lead); }}>{lead.mobile}</td>
                     <td className="px-4 py-3 cursor-pointer" onClick={() => { setInitialTab('summary'); setSelectedLead(lead); }}>{lead.hlr_status || '-'}</td>
-                    <td className="px-4 py-3 cursor-pointer" onClick={() => { setInitialTab('leadbyte'); setSelectedLead(lead); }}>{lead.leadbyte_record_status || '-'}</td>
+                    <td className="px-4 py-3 cursor-pointer" onClick={() => { setInitialTab('delivery'); setSelectedLead(lead); }}>{lead.leadbyte_record_status || '-'}</td>
                     <td className="px-4 py-3 cursor-pointer" onClick={() => { setInitialTab('summary'); setSelectedLead(lead); }}>
                       <ErrorStatusPill
                         lead={lead}

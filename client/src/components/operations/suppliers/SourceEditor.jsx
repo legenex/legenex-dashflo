@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { api } from '@/api/client';
 import { toast } from 'sonner';
 import { Label } from '@/components/ui/label';
@@ -14,9 +15,11 @@ import { parseRules } from './tierRules';
 import TieredPricingEditor from './TieredPricingEditor';
 
 const PRICING_MODELS = [
-  { value: 'rev_share', label: 'rev_share' },
-  { value: 'flat_cpl', label: 'flat_cpl' },
-  { value: 'tiered', label: 'tiered' },
+  { value: 'none', label: 'None' },
+  { value: 'flat_cpl', label: 'Flat CPL' },
+  { value: 'profit_pct', label: 'Profit %' },
+  { value: 'revenue_pct', label: 'Revenue %' },
+  { value: 'tiered', label: 'Tiered (Rule/filter based)' },
 ];
 
 // Create / edit editor for one SupplierSource. Renders inline inside the Sources
@@ -26,6 +29,11 @@ const PRICING_MODELS = [
 export default function SourceEditor({ supplier, source, existingCodes, onBack, onSaved }) {
   const { fieldOptions, fieldValueOptions } = useFieldCatalog();
   const isNew = !source?.id;
+
+  const { data: brands = [] } = useQuery({
+    queryKey: ['brands'],
+    queryFn: () => api.entities.Brand.list(),
+  });
 
   const [form, setForm] = useState(() => initForm(source));
   const [rules, setRules] = useState(() => parseRules(source?.tier_rules));
@@ -52,10 +60,12 @@ export default function SourceEditor({ supplier, source, existingCodes, onBack, 
   })();
 
   const validate = () => {
-    if (!form.source_code.trim()) return 'Source code is required.';
-    if (codeClashes) return `Source code "${form.source_code.trim()}" is already used by this supplier.`;
+    // Source code (SSID) is optional. When blank, this source resolves by brand.
+    if (form.source_code.trim() && codeClashes) return `Source code "${form.source_code.trim()}" is already used by this supplier.`;
+    if (!form.source_code.trim() && !form.brand.trim()) return 'Set a source code (SSID) or a brand so leads can resolve this source.';
     if (!model) return 'Pricing model is required.';
-    if (model === 'rev_share' && (form.rev_share_pct === '' || form.rev_share_pct == null)) return 'Revenue share requires a percentage.';
+    if (model === 'profit_pct' && (form.profit_pct === '' || form.profit_pct == null)) return 'Profit % requires a percentage.';
+    if (model === 'revenue_pct' && (form.revenue_pct === '' || form.revenue_pct == null)) return 'Revenue % requires a percentage.';
     if (model === 'flat_cpl' && (form.flat_cpl === '' || form.flat_cpl == null)) return 'Flat CPL requires a dollar amount.';
     if (model === 'tiered') {
       if (rules.length === 0) return 'Tiered pricing requires at least one rule.';
@@ -75,11 +85,12 @@ export default function SourceEditor({ supplier, source, existingCodes, onBack, 
     try {
       const payload = {
         supplier_id: supplier.id,
-        source_code: form.source_code.trim(),
-        utm_source: form.utm_source.trim() || null,
+        source_code: form.source_code.trim() || null,
+        brand: form.brand.trim() || null,
         pricing_model: model,
         active: !!form.active,
-        rev_share_pct: model === 'rev_share' ? clampPct(form.rev_share_pct) : null,
+        profit_pct: model === 'profit_pct' ? clampPct(form.profit_pct) : null,
+        revenue_pct: model === 'revenue_pct' ? clampPct(form.revenue_pct) : null,
         flat_cpl: model === 'flat_cpl' ? Number(form.flat_cpl) : null,
         tier_rules: model === 'tiered'
           ? rules.map((r) => ({ conditions: (r.conditions || []).filter((c) => c.field), price: Number(r.price) }))
@@ -103,9 +114,6 @@ export default function SourceEditor({ supplier, source, existingCodes, onBack, 
     }
   };
 
-  const revPct = Number(form.rev_share_pct);
-  const revValid = Number.isFinite(revPct);
-
   return (
     <div className="space-y-5">
       <button onClick={onBack} className="inline-flex items-center gap-1.5 text-[12px] text-muted-foreground hover:text-foreground">
@@ -114,23 +122,30 @@ export default function SourceEditor({ supplier, source, existingCodes, onBack, 
 
       <h3 className="text-[15px] font-semibold text-foreground">{isNew ? 'Add source' : 'Edit source'}</h3>
 
-      <Field label="Source code">
+      <Field label="Source code (SSID) — optional">
         <Input
           value={form.source_code}
           onChange={(e) => { set('source_code', e.target.value); setCodeError(''); }}
-          placeholder="INBNDS-SURVEY or INBNDS-PVL"
+          placeholder="LGNX-DS"
           className={`bg-background font-mono text-[12px] ${codeError ? 'border-primary' : ''}`}
         />
         {codeError && <p className="text-[11px] text-primary mt-1">{codeError}</p>}
+        <p className="text-[11px] text-muted-foreground mt-1">When a lead carries an ssid it matches here first. A supplier with one source can leave this blank.</p>
       </Field>
 
-      <Field label="UTM source">
-        <Input value={form.utm_source} onChange={(e) => set('utm_source', e.target.value)} placeholder="optional" className="bg-background font-mono text-[12px]" />
-        <p className="text-[11px] text-muted-foreground mt-1">How this source identifies itself on the inbound lead.</p>
+      <Field label="Brand — fallback match">
+        <Select value={form.brand || '__none__'} onValueChange={(v) => set('brand', v === '__none__' ? '' : v)}>
+          <SelectTrigger className="bg-background text-[12px]"><SelectValue placeholder="None" /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="__none__">None</SelectItem>
+            {brands.map((b) => <SelectItem key={b.id} value={b.brand_name}>{b.brand_name}</SelectItem>)}
+          </SelectContent>
+        </Select>
+        <p className="text-[11px] text-muted-foreground mt-1">Used when the lead has no ssid: the source whose brand equals the lead supplier_brand is selected.</p>
       </Field>
 
       <div className="grid grid-cols-2 gap-4">
-        <Field label="Pricing model">
+        <Field label="Payout model">
           <Select value={model} onValueChange={(v) => set('pricing_model', v)}>
             <SelectTrigger className="bg-background"><SelectValue placeholder="Select model" /></SelectTrigger>
             <SelectContent>
@@ -147,22 +162,33 @@ export default function SourceEditor({ supplier, source, existingCodes, onBack, 
       </div>
 
       {/* Exactly one pricing control, driven by the model. */}
-      {model === 'rev_share' && (
-        <Field label="Revenue share paid to this supplier">
+      {model === 'profit_pct' && (
+        <Field label="Profit %">
           <div className="relative w-40">
             <Input
               type="number" step="1" min={0} max={100}
-              value={form.rev_share_pct}
-              onChange={(e) => set('rev_share_pct', e.target.value)}
+              value={form.profit_pct}
+              onChange={(e) => set('profit_pct', e.target.value)}
               className="bg-background font-mono tabular-nums pr-7"
             />
             <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[12px] text-muted-foreground">%</span>
           </div>
-          {revValid && (
-            <p className="text-[11px] text-muted-foreground mt-2">
-              On a 300 dollar sold lead this supplier is paid {(300 * clampPct(revPct) / 100).toFixed(0)} and Legenex keeps {(300 - 300 * clampPct(revPct) / 100).toFixed(0)}.
-            </p>
-          )}
+          <p className="text-[11px] text-muted-foreground mt-1">Percentage of profit, where profit is revenue minus cost.</p>
+        </Field>
+      )}
+
+      {model === 'revenue_pct' && (
+        <Field label="Revenue %">
+          <div className="relative w-40">
+            <Input
+              type="number" step="1" min={0} max={100}
+              value={form.revenue_pct}
+              onChange={(e) => set('revenue_pct', e.target.value)}
+              className="bg-background font-mono tabular-nums pr-7"
+            />
+            <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[12px] text-muted-foreground">%</span>
+          </div>
+          <p className="text-[11px] text-muted-foreground mt-1">Percentage of revenue.</p>
         </Field>
       )}
 
@@ -218,10 +244,11 @@ function Field({ label, children }) {
 function initForm(source) {
   return {
     source_code: source?.source_code || '',
-    utm_source: source?.utm_source || '',
+    brand: source?.brand || '',
     pricing_model: source?.pricing_model || '',
     active: source?.active !== false,
-    rev_share_pct: source?.rev_share_pct ?? '',
+    profit_pct: source?.profit_pct ?? '',
+    revenue_pct: source?.revenue_pct ?? '',
     flat_cpl: source?.flat_cpl ?? '',
   };
 }

@@ -54,6 +54,7 @@ export default function SupplierPayoutTab({ supplier }) {
         payout_type: form.payout_type || 'None',
         payout_value: payoutValue,
         is_call_source: !!form.is_call_source,
+        contact_name: form.contact_name,
         email: form.email,
         phone: form.phone,
         landing_page_url: form.landing_page_url,
@@ -160,6 +161,9 @@ export default function SupplierPayoutTab({ supplier }) {
       <div className="pt-1">
         <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-3">Contact</p>
         <div className="grid grid-cols-2 gap-4">
+          <Field label="Contact Name">
+            <Input value={form.contact_name} onChange={(e) => set('contact_name', e.target.value)} placeholder="Primary contact person" className="bg-background" />
+          </Field>
           <Field label="Email">
             <Input value={form.email} onChange={(e) => set('email', e.target.value)} className="bg-background" />
           </Field>
@@ -223,6 +227,7 @@ function initForm(supplier) {
     payout_type: supplier.payout_type || 'None',
     payout_value: supplier.payout_value ?? '',
     is_call_source: !!supplier.is_call_source,
+    contact_name: supplier.contact_name || '',
     email: supplier.email || '',
     phone: supplier.phone || '',
     landing_page_url: supplier.landing_page_url || '',

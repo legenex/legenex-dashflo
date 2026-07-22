@@ -136,8 +136,31 @@ async function buildPayloadFromTemplate(template, data) {
 
 // ── Handler ───────────────────────────────────────────────────────────────
 
+// Caller model: operator-only. Fires an outbound POST to an operator-configured
+// LeadByte destination using operator credentials, so it is gated to operators
+// BEFORE any service-role read. Portal accounts and unauthenticated callers are
+// rejected.
+const OPERATOR_PERMISSION_KEYS = ['leads', 'reports', 'overview', 'finances', 'distribution', 'operations'];
+
+async function assertOperator(db, user) {
+  const record = await db.entities.User.get(user.id).catch(() => null);
+  const caller = record || user;
+  if (caller.base_role === 'supplier' || caller.base_role === 'buyer') return false;
+  if (caller.linked_buyer_id || caller.linked_supplier_id) return false;
+  let permissions = {};
+  try {
+    permissions = typeof caller.permissions === 'string'
+      ? JSON.parse(caller.permissions || '{}')
+      : (caller.permissions || {});
+  } catch { permissions = {}; }
+  return caller.role === 'admin' || OPERATOR_PERMISSION_KEYS.some((k) => permissions[k] === true);
+}
+
 export default async function testLeadByteConnector(ctx) {
-  requireUser(ctx);
+  const user = requireUser(ctx);
+  const db = ctx.db;
+
+  if (!(await assertOperator(db, user))) return ctx.json({ error: 'Forbidden' }, 403);
 
   const body = ctx.body || {};
   const { connector_id, test_payload } = body;
@@ -147,7 +170,6 @@ export default async function testLeadByteConnector(ctx) {
   }
 
   // Load connector
-  const db = ctx.db;
   const connectors = await db.entities.LeadByteConnector.filter({ id: connector_id });
   const connector = connectors[0];
   if (!connector) return ctx.json({ error: 'Connector not found' }, 404);
@@ -195,11 +217,11 @@ export default async function testLeadByteConnector(ctx) {
     lbResponse = { error: err.message };
   }
 
-  return {
+  return ctx.json({
     request_body: outboundPayload,
     lb_response: lbResponse,
     http_status: httpStatus,
     forwarding_mode: mode,
     target_url: connector.target_url,
-  };
+  });
 }

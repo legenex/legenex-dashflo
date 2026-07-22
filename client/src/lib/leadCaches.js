@@ -14,6 +14,7 @@
 // - 'leads-metrics' in CampaignSuppliers.jsx
 export const LEAD_QUERY_KEYS = [
   'leads-all-non-archived',
+  'leads-nav-counts',
   'leads',
   'report-leads',
   'leads-rejections',

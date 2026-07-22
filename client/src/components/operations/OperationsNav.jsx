@@ -1,10 +1,11 @@
 import React from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { Users, Factory, MapPin, ReceiptText, UserPlus, LayoutDashboard } from 'lucide-react';
+import { Users, Factory, MapPin, ReceiptText, UserPlus, LayoutDashboard, Layers } from 'lucide-react';
 import SubNavShell from '@/components/layout/SubNavShell';
 
 const ITEMS = [
   { label: 'Dashboard', path: '/operations', icon: LayoutDashboard },
+  { label: 'Verticals', path: '/operations/verticals', icon: Layers },
   { label: 'Buyers', path: '/operations/buyers', icon: Users },
   { label: 'Suppliers', path: '/operations/suppliers', icon: Factory },
   { label: 'Active States', path: '/operations/active-states', icon: MapPin },
@@ -16,11 +17,10 @@ const ITEMS = [
 export default function OperationsNav() {
   const location = useLocation();
 
-  const railItems = ITEMS.map(item => ({ label: item.label, to: item.path, active: location.pathname === item.path }));
+  const railItems = ITEMS.map(item => ({ label: item.label, icon: item.icon, to: item.path, active: location.pathname === item.path }));
 
   return (
-    <SubNavShell items={railItems}>
-      <div className="text-[9.5px] font-semibold tracking-[0.14em] uppercase text-muted-foreground/70 px-3 pb-2">Operations</div>
+    <SubNavShell items={railItems} title="Operations">
       <div className="space-y-0.5">
         {ITEMS.map(item => {
           const isActive = location.pathname === item.path;

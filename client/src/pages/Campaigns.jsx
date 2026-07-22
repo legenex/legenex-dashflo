@@ -1,45 +1,30 @@
-import React from 'react';
-import { useSearchParams } from 'react-router-dom';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Button } from '@/components/ui/button';
-import { Plus } from 'lucide-react';
-import { useState } from 'react';
+import React, { useMemo, useState } from 'react';
+import { api } from '@/api/client';
+import { useQuery } from '@tanstack/react-query';
 import SectionHeader from '@/components/shared/SectionHeader';
-import SettingsVerticals from '@/components/settings/SettingsVerticals';
-import CampaignBuyers from '@/components/campaigns/CampaignBuyers';
-import CampaignSuppliers from '@/components/campaigns/CampaignSuppliers';
-import CampaignBrands from '@/components/campaigns/CampaignBrands';
 import CampaignCreateModal from '@/components/campaigns/CampaignCreateModal';
-
-const TABS = ['verticals', 'buyers', 'suppliers', 'brands'];
+import CampaignsList from '@/components/campaigns/CampaignsList';
+import CampaignDetailPage from '@/components/campaigns/CampaignDetailPage';
 
 export default function Campaigns() {
-  const [params, setParams] = useSearchParams();
-  const raw = params.get('tab') || 'verticals';
-  const tab = TABS.includes(raw) ? raw : 'verticals';
   const [createOpen, setCreateOpen] = useState(false);
+  const [selectedId, setSelectedId] = useState(null);
 
-  const onTabChange = (v) => setParams({ tab: v }, { replace: true });
+  const { data: campaigns = [] } = useQuery({ queryKey: ['campaigns'], queryFn: () => api.entities.Campaign.list('-created_date', 500) });
+  const selected = useMemo(() => campaigns.find((c) => c.id === selectedId) || null, [campaigns, selectedId]);
+
+  // Full-page detail swap: when a campaign is selected, render its detail in
+  // place of the list.
+  if (selected) {
+    return <CampaignDetailPage key={selected.id} campaign={selected} onBack={() => setSelectedId(null)} />;
+  }
 
   return (
     <div>
-      <SectionHeader title="Campaigns" subtitle="Verticals, buyers, suppliers, and brands for lead distribution">
-        <Button size="sm" onClick={() => setCreateOpen(true)} className="gap-1.5"><Plus className="w-4 h-4" /> Create Campaign</Button>
-      </SectionHeader>
-
-      <Tabs value={tab} onValueChange={onTabChange}>
-        <TabsList>
-          <TabsTrigger value="verticals">Verticals</TabsTrigger>
-          <TabsTrigger value="buyers">Buyers</TabsTrigger>
-          <TabsTrigger value="suppliers">Suppliers</TabsTrigger>
-          <TabsTrigger value="brands">Brands</TabsTrigger>
-        </TabsList>
-        <TabsContent value="verticals" className="mt-4"><SettingsVerticals /></TabsContent>
-        <TabsContent value="buyers" className="mt-4"><CampaignBuyers /></TabsContent>
-        <TabsContent value="suppliers" className="mt-4"><CampaignSuppliers /></TabsContent>
-        <TabsContent value="brands" className="mt-4"><CampaignBrands /></TabsContent>
-      </Tabs>
-
+      <SectionHeader title="Campaigns" subtitle="Each campaign is a vertical. Routing, buyers, suppliers, and brands." />
+      <div className="mt-4">
+        <CampaignsList onCreate={() => setCreateOpen(true)} onOpen={(c) => setSelectedId(c.id)} />
+      </div>
       <CampaignCreateModal open={createOpen} onOpenChange={setCreateOpen} />
     </div>
   );

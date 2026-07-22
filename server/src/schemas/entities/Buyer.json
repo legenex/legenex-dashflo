@@ -15,6 +15,10 @@
     "location": {
       "type": "string"
     },
+    "contact_name": {
+      "type": "string",
+      "description": "Primary contact person name. Required (with email) before the partner portal can be enabled and an invite sent."
+    },
     "buyer_type": {
       "type": "string",
       "enum": [
@@ -42,7 +46,15 @@
     },
     "vertical": {
       "type": "string",
-      "description": "Primary vertical code"
+      "description": "Primary vertical code. This single value drives coverage, pricing and routing logic. The verticals array is additive display/assignment metadata and does not replace this."
+    },
+    "verticals": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "description": "All vertical codes this buyer is connected to. Additive to the primary vertical field, which remains the driver of coverage/pricing/routing logic. Used for display and multi-campaign assignment."
     },
     "portal_enabled": {
       "type": "boolean",
@@ -62,12 +74,12 @@
       "type": "string",
       "enum": [
         "prepay",
-        "invoiced_daily",
-        "invoiced_weekly",
-        "invoiced_monthly"
+        "net_7",
+        "net_15",
+        "net_30"
       ],
       "default": "prepay",
-      "description": "Operator billing arrangement for this buyer"
+      "description": "Operator billing arrangement for this buyer: Prepay, Net 7, Net 15, or Net 30."
     },
     "verify_required": {
       "type": "boolean",

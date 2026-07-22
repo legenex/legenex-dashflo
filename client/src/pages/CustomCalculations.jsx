@@ -37,6 +37,7 @@ const BLANK_FORM = {
   output_token: '',
   output_label: '',
   transform_type: 'date_age_bucket',
+  vertical: '',
   input_field: '',
   enabled: true,
   sort_order: 0,
@@ -114,6 +115,7 @@ function formToRecord(form) {
     output_token: form.output_token,
     output_label: form.output_label || form.output_token,
     transform_type: form.transform_type,
+    vertical: form.vertical || '',
     input_field: form.transform_type === 'conditional' ? '' : form.input_field,
     enabled: form.enabled,
     sort_order: form.sort_order,
@@ -128,6 +130,7 @@ function recordToForm(rec) {
     output_token: rec.output_token || '',
     output_label: rec.output_label || '',
     transform_type: rec.transform_type || 'date_age_bucket',
+    vertical: rec.vertical || '',
     input_field: rec.input_field || '',
     enabled: rec.enabled !== false,
     sort_order: rec.sort_order || 0,
@@ -160,6 +163,12 @@ export default function CustomCalculations() {
     queryKey: ['custom-fields'],
     queryFn: () => api.entities.CustomField.list(),
   });
+
+  const { data: verticals = [] } = useQuery({
+    queryKey: ['verticals'],
+    queryFn: () => api.entities.Vertical.filter({ active: true }, 'sort_order', 100),
+  });
+  const verticalName = (code) => verticals.find(v => v.code === code)?.name || code;
 
   const inboundFields = customFields.filter(f => f.source === 'inbound' || !f.source);
 
@@ -375,7 +384,12 @@ export default function CustomCalculations() {
                                       <GripVertical className="w-3.5 h-3.5" />
                                     </span>
                                     <div className="min-w-0">
-                                      <div className="font-mono text-foreground truncate">{`{{${rec.output_token}}}`}</div>
+                                      <div className="flex items-center gap-1.5">
+                                        <span className="font-mono text-foreground truncate">{`{{${rec.output_token}}}`}</span>
+                                        {rec.vertical && (
+                                          <Badge variant="outline" className="text-[9px] px-1.5 py-0 h-4 shrink-0">{verticalName(rec.vertical)}</Badge>
+                                        )}
+                                      </div>
                                       <div className="text-[11px] text-muted-foreground truncate">{rec.output_label}</div>
                                     </div>
                                   </div>
@@ -466,6 +480,20 @@ export default function CustomCalculations() {
                   { value: 'script', label: 'Script' },
                 ]}
               />
+            </div>
+
+            <div className="space-y-1.5">
+              <Label>Vertical</Label>
+              <SearchableSelect
+                value={form.vertical || '__all__'}
+                onValueChange={v => setF('vertical', v === '__all__' ? '' : v)}
+                options={[
+                  { value: '__all__', label: 'All Verticals' },
+                  ...verticals.map(v => ({ value: v.code, label: v.name })),
+                ]}
+                placeholder="All Verticals"
+              />
+              <p className="text-xs text-muted-foreground">Empty applies this calculation to all verticals.</p>
             </div>
 
             {['date_age_bucket', 'value_map', 'clone', 'script'].includes(form.transform_type) && (

@@ -1,12 +1,10 @@
-import { HttpError } from './_runtime.js';
-
 // Caller model: public with key.
 //
-// This endpoint is unauthenticated at the user layer and must be invocable
+// This endpoint is unauthenticated at the app layer and must be invocable
 // without a logged-in user. It authenticates ONLY by a route token, read from
 // the query param `token` or the `X-Webhook-Token` header, SHA-256 hashed and
-// matched against an enabled leadbyte InboundWebhookRoute. It uses the service
-// role to look up the route and to read and write Lead.
+// matched against an enabled leadbyte InboundWebhookRoute. It looks up the
+// route and reads and writes Lead directly (no RLS at the function layer).
 //
 // This function only RECORDS LeadByte sold/unsold/return/conversion outcome
 // data onto the matching Lead. It never calls processLead or any routing,
@@ -159,9 +157,11 @@ export default async function leadbyteWebhook(ctx) {
 
   // ── Auth gate: route token only, before any Lead access ─────────────────
   const headerToken =
-    (ctx.req.headers && (ctx.req.headers['x-webhook-token'] || ctx.req.headers['X-Webhook-Token'])) ||
-    (typeof ctx.req.get === 'function' ? ctx.req.get('X-Webhook-Token') : null);
-  const token = String((ctx.req.query && ctx.req.query.token) || headerToken || '').trim();
+    (ctx.req && typeof ctx.req.get === 'function' && ctx.req.get('X-Webhook-Token')) ||
+    (ctx.req && ctx.req.headers && ctx.req.headers['x-webhook-token']) ||
+    '';
+  const queryToken = (ctx.req && ctx.req.query && ctx.req.query.token) || '';
+  const token = String(queryToken || headerToken || '').trim();
   if (!token) return ctx.json({ error: 'Unauthorized' }, 401);
 
   let route = null;
@@ -179,10 +179,8 @@ export default async function leadbyteWebhook(ctx) {
   if (!route) return ctx.json({ error: 'Unauthorized' }, 401);
 
   // ── Parse the outcome payload ───────────────────────────────────────────
-  // The request body is already parsed upstream; preserve the raw JSON text
-  // for leadbyte_outcome_payload and reject anything that is not an object.
   const body = ctx.body;
-  if (body === null || body === undefined || typeof body !== 'object' || Array.isArray(body)) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
     return ctx.json({ error: 'Invalid JSON' }, 400);
   }
   const rawBody = JSON.stringify(body);
@@ -220,8 +218,20 @@ export default async function leadbyteWebhook(ctx) {
     let resultStatus = finalStatus;
 
     let existing = null;
+    // 1. Primary match: the LeadByte lead id.
     if (leadbyteId !== null) {
       const found = await svc.entities.Lead.filter({ leadbyte_lead_id: leadbyteId });
+      existing = (Array.isArray(found) ? found : [])[0] || null;
+    }
+    // 2. Fallback match: email, then phone. Outcome webhooks for direct-route
+    //    leads carry no leadbyte_lead_id (those leads never went to LeadByte),
+    //    so match them on contact identity instead of creating a phantom lead.
+    if (!existing && contactEmail) {
+      const found = await svc.entities.Lead.filter({ email: contactEmail });
+      existing = (Array.isArray(found) ? found : [])[0] || null;
+    }
+    if (!existing && contactPhone) {
+      const found = await svc.entities.Lead.filter({ mobile: contactPhone });
       existing = (Array.isArray(found) ? found : [])[0] || null;
     }
 
@@ -229,6 +239,17 @@ export default async function leadbyteWebhook(ctx) {
       matched = true;
       leadId = existing.id;
       const patch = { ...outcome };
+      // Guard: an outcome postback must never downgrade a lead that already
+      // sold at intake. If the lead is already Sold, keep it Sold and never
+      // zero out its captured revenue.
+      const alreadySold = String(existing.final_status || '').toLowerCase() === 'sold';
+      if (alreadySold && patch.final_status && patch.final_status !== 'Sold' && !toBool(body.buyer_returned)) {
+        delete patch.final_status;
+      }
+      // Never overwrite an existing non-zero revenue with a null/zero outcome value.
+      if (patch.revenue == null || Number(patch.revenue) === 0) {
+        if (Number(existing.revenue) > 0) delete patch.revenue;
+      }
       // Fill contact fields only when currently empty.
       if (!clean(existing.first_name) && contactFirst) patch.first_name = contactFirst;
       if (!clean(existing.last_name) && contactLast) patch.last_name = contactLast;
@@ -244,33 +265,21 @@ export default async function leadbyteWebhook(ctx) {
       await svc.entities.Lead.update(existing.id, patch);
       resultStatus = patch.final_status || existing.final_status || null;
     } else {
-      // Derive supplier_name from the real supplier identified by supplier_sid,
-      // not the ad platform (supplier_source) or brand.
-      let supplierName = 'LeadByte';
-      const sid = clean(body.supplier_sid);
-      if (sid) {
-        supplierName = sid;
-        const suppliers = await svc.entities.Supplier.filter({ sid });
-        const supplier = (Array.isArray(suppliers) ? suppliers : [])[0] || null;
-        const resolvedName = supplier ? clean(supplier.name) : null;
-        if (resolvedName) supplierName = resolvedName;
-      }
-      const createData = {
-        ...outcome,
-        supplier_name: supplierName,
-        // A create must always have a final_status; default to Processing when
-        // the payload lead_status did not map.
-        final_status: finalStatus || 'Processing',
-        mapped_fields: JSON.stringify(canonical),
-      };
-      if (leadbyteId !== null) createData.leadbyte_lead_id = leadbyteId;
-      if (contactFirst) createData.first_name = contactFirst;
-      if (contactLast) createData.last_name = contactLast;
-      if (contactEmail) createData.email = contactEmail;
-      if (contactPhone) createData.mobile = contactPhone;
-      const created = await svc.entities.Lead.create(createData);
-      leadId = created.id;
-      resultStatus = createData.final_status;
+      // No matching lead. This is an outcome/postback webhook: it records the
+      // buyer outcome onto a lead that already exists in our system. It must
+      // NEVER create a new lead — doing so produced phantom "Processing"
+      // duplicates for direct-route leads. Acknowledge and skip.
+      await svc.entities.InboundWebhookRoute.update(route.id, {
+        receipt_count: (Number(route.receipt_count) || 0) + 1,
+        last_received_at: new Date().toISOString(),
+      });
+      return ctx.json({
+        ok: true,
+        matched: false,
+        lead_id: null,
+        final_status: null,
+        message: 'No matching lead found; outcome ignored (no lead created).',
+      }, 200);
     }
 
     // On success, bump receipt telemetry on the route.

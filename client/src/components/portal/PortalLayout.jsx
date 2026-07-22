@@ -8,11 +8,12 @@ import { usePortalData } from '@/hooks/usePortalData';
 // Buyer portal shell. Own minimal sidebar, scoped data, never exposes operator sections.
 // Access: buyer-role users scoped to their buyer, or operators previewing via ?buyer_id=.
 export default function PortalLayout() {
-  const { buyerId, isOperator } = usePortalScope();
+  const { buyerId, isOperator, rolePreview } = usePortalScope();
   const { data, isLoading, error } = usePortalData();
 
-  // No buyer scope at all → not allowed here.
-  if (!buyerId && !isLoading) {
+  // No buyer scope at all → not allowed here. During "View as → Buyer" role
+  // preview the buyer is resolved server-side, so don't bounce on a null id.
+  if (!buyerId && !rolePreview && !isLoading) {
     return <Navigate to="/" replace />;
   }
 

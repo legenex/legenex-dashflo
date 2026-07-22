@@ -1,5 +1,6 @@
 import React from 'react';
 import { ArrowUp, ArrowDown } from 'lucide-react';
+import { Checkbox } from '@/components/ui/checkbox';
 import SupplierStatusPill from './SupplierStatusPill';
 import SupplierRowActions from './SupplierRowActions';
 import SupplierSourcesCell from './SupplierSourcesCell';
@@ -10,11 +11,15 @@ import { getSupplierColumnDef } from './supplierColumns';
 // config. The Actions column is always appended and is not part of the config.
 export default function SupplierTable({
   suppliers, sources, config, ctx, sortKey, sortDir, onSort,
-  onTransition, onPause, onTerminate, onDelete, onRowClick, onFixChannel,
+  onTransition, onDelete, onClone, onRowClick, onFixChannel,
+  selectedIds, onToggleSelect, onToggleSelectAll,
 }) {
   const cols = config.columns
     .map((c) => getSupplierColumnDef(c.key))
     .filter(Boolean);
+
+  const allSelected = suppliers.length > 0 && suppliers.every((s) => selectedIds.has(s.id));
+  const someSelected = suppliers.some((s) => selectedIds.has(s.id));
 
   const renderCell = (col, s) => {
     if (col.special === 'status') return <SupplierStatusPill status={s.status} />;
@@ -28,6 +33,13 @@ export default function SupplierTable({
       <table className="w-full text-[13px]">
         <thead>
           <tr className="border-b border-border bg-muted/50">
+            <th className="w-10 px-4 py-3">
+              <Checkbox
+                checked={allSelected ? true : someSelected ? 'indeterminate' : false}
+                onCheckedChange={(v) => onToggleSelectAll(!!v)}
+                aria-label="Select all suppliers"
+              />
+            </th>
             {cols.map((col) => {
               const isSorted = sortKey === col.key;
               return (
@@ -53,8 +65,15 @@ export default function SupplierTable({
             <tr
               key={s.id}
               onClick={() => onRowClick && onRowClick(s)}
-              className="hover:bg-accent/40 transition-colors cursor-pointer"
+              className={`hover:bg-accent/40 transition-colors cursor-pointer ${selectedIds.has(s.id) ? 'bg-primary/5' : ''}`}
             >
+              <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+                <Checkbox
+                  checked={selectedIds.has(s.id)}
+                  onCheckedChange={() => onToggleSelect(s.id)}
+                  aria-label={`Select ${s.name || 'supplier'}`}
+                />
+              </td>
               {cols.map((col) => (
                 <td key={col.key} className={`px-4 py-3 ${col.className || ''}`}>
                   {renderCell(col, s)}
@@ -64,16 +83,16 @@ export default function SupplierTable({
                 <SupplierRowActions
                   supplier={s}
                   onTransition={onTransition}
-                  onPause={onPause}
-                  onTerminate={onTerminate}
                   onDelete={onDelete}
+                  onEdit={onRowClick}
+                  onClone={onClone}
                 />
               </td>
             </tr>
           ))}
           {suppliers.length === 0 && (
             <tr>
-              <td colSpan={cols.length + 1} className="px-4 py-8 text-center text-muted-foreground">
+              <td colSpan={cols.length + 2} className="px-4 py-8 text-center text-muted-foreground">
                 No suppliers match this filter
               </td>
             </tr>

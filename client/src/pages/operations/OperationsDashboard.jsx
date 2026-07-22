@@ -12,6 +12,7 @@ import {
   RefreshCw, ArrowUp, ArrowDown, AlertTriangle, ArrowRight,
 } from 'lucide-react';
 import { formatDistanceToNowStrict } from 'date-fns';
+import { SectionHeaderSlot } from '@/components/layout/SectionShell';
 
 const num = (n) => Number(n).toLocaleString();
 
@@ -84,6 +85,7 @@ export default function OperationsDashboard() {
   const gotoState = (state) => navigate(`/operations/active-states?state=${encodeURIComponent(state)}`);
 
   const Header = (
+    <SectionHeaderSlot>
     <div className="flex items-start justify-between gap-4 mb-5">
       <div>
         <div className="flex items-center gap-2.5">
@@ -98,6 +100,7 @@ export default function OperationsDashboard() {
         <RefreshCw className={`w-4 h-4 ${isFetching ? 'animate-spin' : ''}`} /> Refresh
       </Button>
     </div>
+    </SectionHeaderSlot>
   );
 
   if (isLoading) {

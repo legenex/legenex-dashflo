@@ -416,7 +416,7 @@ export default function SettingsLeadByte() {
             </div>
           </div>
 
-          <div className="flex gap-1 border-b border-border">
+          <div className="sticky top-[57px] z-20 flex gap-1 border-b border-border bg-background/95 backdrop-blur-sm">
             {[{ k: 'connector', l: 'Destination Config' }, { k: 'responses', l: 'Response Builder' }].map(({ k, l }) => (
               <button key={k} onClick={() => setConnectorSubTab(k)}
                 className={`px-4 py-2 text-[13px] font-medium transition-colors border-b-2 -mb-px

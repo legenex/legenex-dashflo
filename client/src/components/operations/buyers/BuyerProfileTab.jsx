@@ -9,19 +9,15 @@ import { Switch } from '@/components/ui/switch';
 import {
   Select, SelectTrigger, SelectValue, SelectContent, SelectItem,
 } from '@/components/ui/select';
+import { MultiSelect } from '@/components/ui/multi-select';
 import BuyerStatusPill from './BuyerStatusPill';
 import { AlertTriangle } from 'lucide-react';
 import { useRecomputeCoverage } from './useRecomputeCoverage';
 import RecomputingIndicator from './RecomputingIndicator';
 import BuyerOnboardingLink from './BuyerOnboardingLink';
+import { BILLING_TYPE_OPTIONS as BILLING_TYPES } from '@/lib/billingTypes';
 
 const CLIENT_TYPES = ['Law Firm', 'Aggregator', 'Reseller', 'Network'];
-const BILLING_TYPES = [
-  { value: 'prepay', label: 'Prepay' },
-  { value: 'invoiced_daily', label: 'Invoiced daily' },
-  { value: 'invoiced_weekly', label: 'Invoiced weekly' },
-  { value: 'invoiced_monthly', label: 'Invoiced monthly' },
-];
 
 // Editable form over a single Buyer record. buyer_code and status are shown
 // read only. Save writes only the fields on this form.
@@ -43,10 +39,16 @@ export default function BuyerProfileTab({ buyer, verticals }) {
     const nextClientType = form.client_type || null;
     const clientTypeChanged = prevClientType !== nextClientType;
     try {
+      // Keep the primary vertical inside the additive verticals list so the
+      // multi-select always reflects it, but the single `vertical` field stays
+      // the driver of coverage/pricing/routing logic.
+      const mergedVerticals = Array.from(new Set([form.vertical, ...(form.verticals || [])].filter(Boolean)));
       await api.entities.Buyer.update(buyer.id, {
         company_name: form.company_name,
+        contact_name: form.contact_name,
         client_type: form.client_type || null,
         vertical: form.vertical,
+        verticals: mergedVerticals,
         billing_type: form.billing_type,
         verify_required: form.verify_required,
         ipl_fee_pct: Number(form.ipl_fee_pct) || 0,
@@ -105,6 +107,10 @@ export default function BuyerProfileTab({ buyer, verticals }) {
         <Input value={form.company_name} onChange={(e) => set('company_name', e.target.value)} className="bg-background" />
       </Field>
 
+      <Field label="Contact Name">
+        <Input value={form.contact_name} onChange={(e) => set('contact_name', e.target.value)} placeholder="Primary contact person" className="bg-background" />
+      </Field>
+
       <div className="grid grid-cols-2 gap-4">
         <Field label="Client Type">
           <Select value={form.client_type || 'none'} onValueChange={(v) => set('client_type', v === 'none' ? '' : v)}>
@@ -115,7 +121,7 @@ export default function BuyerProfileTab({ buyer, verticals }) {
             </SelectContent>
           </Select>
         </Field>
-        <Field label="Vertical">
+        <Field label="Primary Vertical">
           <Select value={form.vertical || 'none'} onValueChange={(v) => set('vertical', v === 'none' ? '' : v)}>
             <SelectTrigger className="bg-background"><SelectValue placeholder="Select vertical" /></SelectTrigger>
             <SelectContent>
@@ -125,6 +131,18 @@ export default function BuyerProfileTab({ buyer, verticals }) {
           </Select>
         </Field>
       </div>
+
+      <Field label="Connected Verticals / Campaigns">
+        <MultiSelect
+          value={form.verticals || []}
+          onValueChange={(vals) => set('verticals', vals)}
+          options={verticals.map((vt) => ({ value: vt.code, label: vt.name }))}
+          placeholder="Select verticals"
+        />
+        <p className="text-[11px] text-muted-foreground mt-1">
+          The primary vertical drives coverage &amp; pricing; these are additional verticals this buyer receives.
+        </p>
+      </Field>
 
       <div className="grid grid-cols-2 gap-4">
         <Field label="Billing Type">
@@ -202,8 +220,10 @@ function Field({ label, children }) {
 function initForm(buyer) {
   return {
     company_name: buyer.company_name || '',
+    contact_name: buyer.contact_name || '',
     client_type: buyer.client_type || '',
     vertical: buyer.vertical || '',
+    verticals: Array.isArray(buyer.verticals) ? buyer.verticals : (buyer.vertical ? [buyer.vertical] : []),
     billing_type: buyer.billing_type || 'prepay',
     verify_required: !!buyer.verify_required,
     ipl_fee_pct: buyer.ipl_fee_pct ?? 1,

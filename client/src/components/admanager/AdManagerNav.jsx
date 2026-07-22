@@ -27,11 +27,10 @@ export default function AdManagerNav() {
   const platforms = platformsFrom(mappings, []);
   const connectedCount = platforms.filter((p) => p.connected).length;
 
-  const railItems = ITEMS.map(item => ({ label: item.label, to: item.path, active: location.pathname === item.path }));
+  const railItems = ITEMS.map(item => ({ label: item.label, icon: item.icon, to: item.path, active: location.pathname === item.path }));
 
   return (
-    <SubNavShell items={railItems}>
-      <div className="text-[9.5px] font-semibold tracking-[0.14em] uppercase text-muted-foreground/70 px-3 pb-2">Ad Manager</div>
+    <SubNavShell items={railItems} title="Ad Manager">
       <div className="space-y-0.5">
         {ITEMS.map((item) => {
           const isActive = location.pathname === item.path;
@@ -57,7 +56,7 @@ export default function AdManagerNav() {
       <div className="space-y-0.5">
         {platforms.map((p) => (
           <div key={p.id} className="w-full flex items-center gap-2.5 px-3 h-8 rounded-md text-[11.5px] text-muted-foreground">
-            <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${p.connected ? 'bg-[#3DD68C]' : 'bg-muted-foreground/40'}`} />
+            <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${p.connected ? 'bg-current status-sold' : 'bg-muted-foreground/40'}`} />
             <span className="flex-1 truncate">{p.label}</span>
             <span className="text-[9.5px] text-muted-foreground/60">{p.connected ? 'connected' : 'not connected'}</span>
           </div>
