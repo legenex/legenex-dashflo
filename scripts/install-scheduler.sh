@@ -79,11 +79,11 @@ cat > "$SYNC_PLIST" <<PLIST
 <plist version="1.0">
 <dict>
   <key>Label</key><string>$SYNC_LABEL</string>
+  <!-- Run node directly (no bash -l wrapper). -->
   <key>ProgramArguments</key>
   <array>
-    <string>/bin/bash</string>
-    <string>-lc</string>
-    <string>exec "$NODE_BIN" "$ROOT/sync/sync.mjs"</string>
+    <string>$NODE_BIN</string>
+    <string>$ROOT/sync/sync.mjs</string>
   </array>
   <key>EnvironmentVariables</key>
   <dict>
@@ -95,8 +95,8 @@ cat > "$SYNC_PLIST" <<PLIST
   <key>RunAtLoad</key><false/>
   <!-- Must differ from the file sync.mjs appends to (sync.log); launchd opening
        the same path the process also opens fails the job with EX_CONFIG. -->
-  <key>StandardOutPath</key><string>$ROOT/sync/state/sync-agent.log</string>
-  <key>StandardErrorPath</key><string>$ROOT/sync/state/sync-agent.log</string>
+  <key>StandardOutPath</key><string>$ROOT/sync/state/sync-run.log</string>
+  <key>StandardErrorPath</key><string>$ROOT/sync/state/sync-run.log</string>
 </dict>
 </plist>
 PLIST
