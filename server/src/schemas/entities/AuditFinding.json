@@ -1,0 +1,130 @@
+{
+  "name": "AuditFinding",
+  "type": "object",
+  "properties": {
+    "run_id": {
+      "type": "string",
+      "description": "AuditRun this finding belongs to"
+    },
+    "check_id": {
+      "type": "string",
+      "description": "Stable slug, e.g. design.tokens.raw_color or portal.scoping.buyer_isolation"
+    },
+    "layer": {
+      "type": "string",
+      "enum": [
+        "static",
+        "runtime",
+        "ui",
+        "benchmark"
+      ],
+      "description": "Which layer produced the finding"
+    },
+    "source": {
+      "type": "string",
+      "enum": [
+        "probe",
+        "script",
+        "walkthrough",
+        "benchmark",
+        "manual"
+      ],
+      "description": "Mechanism that produced it"
+    },
+    "verdict": {
+      "type": "string",
+      "enum": [
+        "pass",
+        "fail",
+        "warn",
+        "skip",
+        "needs_env"
+      ],
+      "description": "needs_env means unverifiable from here, never closed by assumption"
+    },
+    "severity": {
+      "type": "string",
+      "enum": [
+        "critical",
+        "high",
+        "medium",
+        "low",
+        "info"
+      ],
+      "description": "Impact if unaddressed. Passes carry info."
+    },
+    "category": {
+      "type": "string",
+      "enum": [
+        "correctness",
+        "security",
+        "data_integrity",
+        "design_system",
+        "usability",
+        "performance",
+        "observability",
+        "capability_gap",
+        "documentation"
+      ],
+      "description": "What kind of problem this is"
+    },
+    "surface": {
+      "type": "string",
+      "description": "Page route, function name, entity, or file path the check targeted"
+    },
+    "evidence_path": {
+      "type": "string",
+      "description": "File and line, request id, or record id backing the observation"
+    },
+    "expected": {
+      "type": "string",
+      "description": "What the check required"
+    },
+    "observed": {
+      "type": "string",
+      "description": "What the check actually saw"
+    },
+    "detail": {
+      "type": "string",
+      "description": "Longer explanation or reproduction steps"
+    },
+    "value_score": {
+      "type": "number",
+      "description": "1 to 5, benefit of addressing"
+    },
+    "effort_score": {
+      "type": "number",
+      "description": "1 to 5, cost of addressing"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "open",
+        "acknowledged",
+        "fixed",
+        "accepted",
+        "wont_fix",
+        "duplicate"
+      ],
+      "description": "Operator triage state, set in the UI, not by the harness"
+    },
+    "first_seen_run_id": {
+      "type": "string",
+      "description": "Earliest run in which this check_id and surface failed"
+    },
+    "duration_ms": {
+      "type": "number",
+      "description": "How long this check took"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "run_id",
+    "check_id",
+    "layer",
+    "verdict"
+  ]
+}
