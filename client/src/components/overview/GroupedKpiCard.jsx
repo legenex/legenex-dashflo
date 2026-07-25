@@ -7,10 +7,13 @@ import AnimatedPanel from '@/components/overview/AnimatedPanel';
 // Grouped KPI card. All four render with an identical structure so they look equal.
 export default function GroupedKpiCard({
   label, headline, subLabel, sub, gapLabel = 'gap', gap, icon: Icon,
-  delta = 0, note, format = 'money',
+  delta = 0, note, format = 'money', subFormat, hideGap = false,
 }) {
   const animated = useCountUp(headline);
   const f = (v) => format === 'money' ? fmtMoney(v) : v;
+  // A ratio card (CPL) has a money headline but a plain-count sub value, so the
+  // footer needs its own formatter rather than inheriting the headline's.
+  const fSub = (v) => (subFormat || format) === 'money' ? fmtMoney(v) : Number(v || 0).toLocaleString();
 
   return (
     <AnimatedPanel className="p-4 h-full overflow-hidden group" style={{ borderLeft: '2px solid #E5484D66' }}>
@@ -49,8 +52,8 @@ export default function GroupedKpiCard({
 
       {/* bottom row: sub value + gap chip */}
       <div className="flex items-center justify-between mt-2 pt-2 border-t border-border">
-        <div className="text-[12px] text-muted-foreground">{subLabel}: <span className="text-foreground font-medium tabular-nums">{f(sub)}</span></div>
-        <span className="text-[11px] font-medium px-2 py-0.5 rounded-md tabular-nums bg-muted text-muted-foreground">{gapLabel} {f(Math.abs(gap))}</span>
+        <div className="text-[12px] text-muted-foreground">{subLabel}: <span className="text-foreground font-medium tabular-nums">{fSub(sub)}</span></div>
+        {!hideGap && <span className="text-[11px] font-medium px-2 py-0.5 rounded-md tabular-nums bg-muted text-muted-foreground">{gapLabel} {f(Math.abs(gap))}</span>}
       </div>
 
       {/* sub-label note */}

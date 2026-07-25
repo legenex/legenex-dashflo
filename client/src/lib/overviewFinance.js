@@ -36,11 +36,20 @@ export function financialTruth({ leads, buyers, suppliers, invoices, payments, p
   const reportedProfit = bookedRevenue - accruedCost - trackedSpend;
   const cashProfit = verifiedRevenue - paidPayouts - paidSpend;
 
+  // Cost is the true acquisition cost: supplier lead cost plus attributed ad
+  // spend. A supplier is one or the other, never both, so nothing double
+  // counts. CPL is that cost over leads in the same window, which is the only
+  // basis that rolls up correctly to any period.
+  const totalCost = accruedCost + trackedSpend;
+  const blendedCpl = wLeads.length > 0 ? totalCost / wLeads.length : 0;
+
   const kpis = {
     revenue: { headline: bookedRevenue, sub: verifiedRevenue, gap: bookedRevenue - verifiedRevenue },
     profit: { headline: reportedProfit, sub: cashProfit, gap: reportedProfit - cashProfit },
     adSpend: { headline: trackedSpend, sub: paidSpend, gap: trackedSpend - paidSpend },
-    supplierCost: { headline: accruedCost + trackedSpend, sub: paidPayouts, gap: (accruedCost + trackedSpend) - paidPayouts },
+    supplierCost: { headline: totalCost, sub: paidPayouts, gap: totalCost - paidPayouts },
+    cost: { headline: totalCost, sub: paidPayouts + paidSpend, gap: totalCost - (paidPayouts + paidSpend) },
+    cpl: { headline: blendedCpl, sub: wLeads.length, gap: 0 },
   };
 
   // Small stat cards.
@@ -48,7 +57,10 @@ export function financialTruth({ leads, buyers, suppliers, invoices, payments, p
   const in7 = invoices.filter(i => i.status !== 'paid' && i.status !== 'void' && i.period_end &&
     isWithinInterval(new Date(i.period_end), { start: now, end: subDays(now, -7) })).reduce((a, i) => a + num(i.amount), 0);
   const shortPaid = reconRows.filter(r => r.short > 0.01).reduce((a, r) => a + r.short, 0);
-  const trueCpl = wLeads.length > 0 ? (paidSpend / wLeads.length) : 0;
+  // True CPL previously divided by paidSpend, which is bank money-out tagged as
+  // media. That is cash flow, not cost, so it reported a near-zero CPL whenever
+  // the media invoice had not cleared yet. Cost over leads is the definition.
+  const trueCpl = blendedCpl;
   const cashMargin = verifiedRevenue > 0 ? Math.round((cashProfit / verifiedRevenue) * 100) : 0;
   const sourced = wLeads.filter(l => num(l.revenue) > 0).length;
   const dataQuality = wLeads.length > 0 ? Math.round((sourced / wLeads.length) * 100) : 100;

@@ -91,7 +91,7 @@ export function AccountsSummary({ accounts, platform }) {
           <div className="min-w-0">
             <div className="text-[12.5px] font-semibold truncate text-foreground">{r.name}</div>
             <div className="text-[10px] mt-0.5 text-muted-foreground/70 truncate">
-              {[r.brand, r.supplierName].filter(Boolean).join(' , ') || (r.mapped ? 'no attribution set' : 'unmapped ad account')}
+              {[r.brand, r.supplierName].filter(Boolean).join(', ') || (r.mapped ? 'no attribution set' : 'unmapped ad account')}
             </div>
           </div>
           <div className="flex justify-end"><SpendCell value={r.spend} ratio={r.spend / max} format={f0} /></div>
@@ -409,7 +409,7 @@ export function Breakouts({ scope, spendRows, creativeMeta }) {
               <span className="min-w-0">
                 <span className="text-[12px] font-semibold block truncate text-foreground">{s.key}</span>
                 <span className="text-[10px] text-muted-foreground/70">
-                  {s.tagged ? [s.concept, s.creator].filter(Boolean).join(' , ') || 'tagged' : 'not tagged, verified outcomes unavailable'}
+                  {s.tagged ? [s.concept, s.creator].filter(Boolean).join(', ') || 'tagged' : 'not tagged, verified outcomes unavailable'}
                 </span>
               </span>
               <span className="text-right text-[11.5px] font-mono tabular-nums text-muted-foreground">{f0(s.spend)}</span>

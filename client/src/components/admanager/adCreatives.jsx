@@ -142,9 +142,9 @@ export function CreativeLeaderboard({ creatives, onTag }) {
             </div>
             <div className="text-[10px] mt-0.5 truncate text-muted-foreground/70">
               {c.tagged
-                ? [c.hook && `"${c.hook}"`, c.concept, c.creator].filter(Boolean).join(' , ')
+                ? [c.hook && `"${c.hook}"`, c.concept, c.creator].filter(Boolean).join(', ')
                 : 'untagged, hook and concept unknown'}
-              {c.campaignName ? ` , ${c.campaignName}` : ''}
+              {c.campaignName ? `, ${c.campaignName}` : ''}
             </div>
           </div>
           <span className="text-right text-[11.5px] font-mono tabular-nums" style={{ color: c.thumbstop == null ? undefined : c.thumbstop >= 30 ? TONE.good : c.thumbstop >= 20 ? TONE.warn : TONE.bad }}>

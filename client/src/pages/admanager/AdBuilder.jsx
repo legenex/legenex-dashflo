@@ -67,7 +67,7 @@ function MetaAdBuilder({ accounts, brief }) {
                   </div>
                 ))}
               </div>
-              {brief.hook && <div className="text-[10.5px] mt-2 text-muted-foreground">Hook: "{brief.hook}" , Creator: {brief.creator || 'untagged'}</div>}
+              {brief.hook && <div className="text-[10.5px] mt-2 text-muted-foreground">Hook: "{brief.hook}", Creator: {brief.creator || 'untagged'}</div>}
             </div>
           ) : (
             <div className="rounded-lg border border-border bg-background/50 p-3.5 text-[11.5px] text-muted-foreground">
@@ -108,7 +108,7 @@ function MetaAdBuilder({ accounts, brief }) {
                   <span className="text-[11.5px] text-muted-foreground">{aud}</span>
                   <span className="ml-auto text-[10.5px] font-mono text-muted-foreground/70">${budget}/day</span>
                 </div>
-                {(brief ? [`${brief.name} , 9:16`, `${brief.name} , hook variant`] : ['Creative slot 1', 'Creative slot 2']).map((ad) => (
+                {(brief ? [`${brief.name}, 9:16`, `${brief.name}, hook variant`] : ['Creative slot 1', 'Creative slot 2']).map((ad) => (
                   <div key={ad} className="flex items-center gap-2 px-3 py-2 border-t border-border/60">
                     <Play className="w-2.5 h-2.5 text-muted-foreground/60" fill="currentColor" />
                     <span className="text-[11px] text-muted-foreground/70 truncate">{ad}</span>
