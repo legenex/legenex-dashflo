@@ -34,7 +34,7 @@ export default function LeadSourcesPanel() {
       const res = await api.functions.invoke('syncGoogleSheets', { source_id: s.id });
       const r = res.data?.results?.[0];
       if (r?.error) toast.error(`Sync failed: ${r.error}`);
-      else toast.success(`Synced — ingested ${r?.ingested ?? 0} of ${r?.rows ?? 0} rows`);
+      else toast.success(`Synced, ingested ${r?.ingested ?? 0} of ${r?.rows ?? 0} rows`);
       refresh();
     } catch (err) {
       toast.error('Sync failed');
@@ -75,7 +75,7 @@ export default function LeadSourcesPanel() {
         </div>
       </div>
       <div className="text-[13px] text-muted-foreground mb-4 max-w-2xl">
-        Connected ingestion paths that flow through the same processing pipeline as your API and LeadByte — validation, dedup, conversion events and revenue all run. LeadByte and the generic webhook are unaffected.
+        Connected ingestion paths that flow through the same processing pipeline as your API and LeadByte, validation, dedup, conversion events and revenue all run. LeadByte and the generic webhook are unaffected.
       </div>
 
       {sources.length === 0 && (

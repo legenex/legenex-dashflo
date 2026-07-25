@@ -1,5 +1,5 @@
 // Supplier-portal-scoped metrics over a supplier's own leads within a period.
-// Every number here is the supplier's own — never buyer identities or other
+// Every number here is the supplier's own, never buyer identities or other
 // suppliers' data.
 import { resolvePeriod } from '@/lib/periodRange';
 

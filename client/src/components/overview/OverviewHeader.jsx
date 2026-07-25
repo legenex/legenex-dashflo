@@ -6,7 +6,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 
-// Top-of-page header for the Performance OS Overview. Presentational — parent
+// Top-of-page header for the Performance OS Overview. Presentational, parent
 // owns all state (period, custom range, compare, refresh).
 export default function OverviewHeader({
   period, onPeriodChange, custom, onCustomChange, compare, onToggleCompare, onRefresh,

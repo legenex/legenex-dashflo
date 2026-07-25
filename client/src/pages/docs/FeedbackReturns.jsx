@@ -39,7 +39,7 @@ export default function FeedbackReturns() {
 
       <Section title="Request a return">
         <p>Returns are submitted from the buyer portal or via the portal action endpoint. A return moves through <InlineCode>requested → approved / rejected</InlineCode>.</p>
-        <Placeholder>Programmatic returns API — endpoint reference coming soon.</Placeholder>
+        <Placeholder>Programmatic returns API, endpoint reference coming soon.</Placeholder>
       </Section>
     </DocPage>
   );

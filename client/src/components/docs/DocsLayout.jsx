@@ -4,7 +4,7 @@ import { DOCS_SECTIONS } from './docsConfig';
 import { BookOpen, ArrowUpRight } from 'lucide-react';
 
 // Public docs shell: its own left sidebar + content area, Legenex dark theme.
-// Not wrapped by the operator AppLayout — renders for anonymous visitors.
+// Not wrapped by the operator AppLayout, renders for anonymous visitors.
 export default function DocsLayout() {
   const { pathname } = useLocation();
   const current = pathname.replace(/^\/docs\/?/, '').replace(/\/$/, '');

@@ -280,7 +280,7 @@ export default function CsvImporter() {
   const [templateName, setTemplateName] = useState('');
   const [dupChecking, setDupChecking] = useState(false);
   const [dupResult, setDupResult] = useState(null); // { newCount, dupCount }
-  const [dateOrder, setDateOrder] = useState('day'); // 'day' | 'month' — user-overridable
+  const [dateOrder, setDateOrder] = useState('day'); // 'day' | 'month', user-overridable
   const [detectedOrder, setDetectedOrder] = useState('ambiguous'); // 'day' | 'month' | 'ambiguous'
 
   const { data: customFields = [] } = useQuery({ queryKey: ['custom-fields'], queryFn: () => api.entities.CustomField.list('sort_order') });
@@ -540,7 +540,7 @@ export default function CsvImporter() {
       setMapping(finalMap);
       setStep('review');
     } catch (err) {
-      toast.error('Could not read the file — check the format');
+      toast.error('Could not read the file, check the format');
     }
     setBusy(false);
   };
@@ -702,7 +702,7 @@ export default function CsvImporter() {
         <div className="text-[15px] font-semibold text-foreground">CSV Importer</div>
       </div>
       <div className="text-[13px] text-muted-foreground mb-4 max-w-2xl">
-        Upload a CSV or Excel file of leads or bank transactions. Columns are auto-mapped with AI — review and confirm before importing. Save a mapping template to reuse per source.
+        Upload a CSV or Excel file of leads or bank transactions. Columns are auto-mapped with AI, review and confirm before importing. Save a mapping template to reuse per source.
       </div>
 
       {step === 'upload' && (

@@ -21,7 +21,7 @@ import ConnectorFilterPanel from '@/components/settings/ConnectorFilterPanel';
 import { buildTriggerOptions, statusLabelFor } from '@/lib/leadStatus';
 import { verticalColor, triggerTagClass, TAG_NEUTRAL, statusTextClass } from '@/lib/tagColors';
 import { countConditions, normalizeConditionTree } from '@/lib/conditionGroups';
-import { Plus, Save, Play, Loader2, Trash2, Copy, ChevronDown, ChevronRight, ArrowDownUp } from 'lucide-react';
+import { Plus, Save, Play, Loader2, Trash2, ChevronDown, ChevronRight, ArrowDownUp } from 'lucide-react';
 import { toast } from 'sonner';
 import ImportExportDialog from '@/components/shared/ImportExportDialog';
 import { motion } from 'framer-motion';
@@ -106,7 +106,7 @@ const TOKEN_STATIC_DEFAULTS = {
   lead_id: '999', event_time: String(Math.floor(Date.now() / 1000)),
 };
 
-// Build a static test payload from the destination's payload template:
+// Build a static test payload from the delivery's payload template:
 // every {{token}} is replaced with a sensible static value so the user
 // can edit real values. Falls back to DEFAULT_TEST_PAYLOAD when no template.
 function buildTestPayloadFromTemplate(templateStr) {
@@ -334,7 +334,7 @@ export default function SettingsLeadByte() {
 
   const deleteConnector = async (id) => {
     await api.entities.LeadByteConnector.delete(id);
-    toast.success('Destination deleted');
+    toast.success('Delivery deleted');
     qc.invalidateQueries({ queryKey: ['lb-connectors-all'] });
   };
 
@@ -352,7 +352,7 @@ export default function SettingsLeadByte() {
       enabled: false,
       is_default: false,
     });
-    toast.success('Destination duplicated (disabled)');
+    toast.success('Delivery duplicated (disabled)');
     qc.invalidateQueries({ queryKey: ['lb-connectors-all'] });
   };
 
@@ -409,7 +409,7 @@ export default function SettingsLeadByte() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 space-y-4">
           <div className="sticky top-0 z-30 flex items-center justify-between bg-background/95 backdrop-blur-sm border-b border-border py-3">
-            <h3 className="text-[15px] font-semibold text-foreground">{editing.id ? 'Edit Destination' : 'New Destination'}</h3>
+            <h3 className="text-[15px] font-semibold text-foreground">{editing.id ? 'Edit Delivery' : 'New Delivery'}</h3>
             <div className="flex gap-2">
               <Button variant="ghost" onClick={() => setEditing(null)}>Cancel</Button>
               <Button onClick={saveConnector} className="gap-1.5"><Save className="w-4 h-4" /> Save</Button>
@@ -417,7 +417,7 @@ export default function SettingsLeadByte() {
           </div>
 
           <div className="sticky top-[57px] z-20 flex gap-1 border-b border-border bg-background/95 backdrop-blur-sm">
-            {[{ k: 'connector', l: 'Destination Config' }, { k: 'responses', l: 'Response Builder' }].map(({ k, l }) => (
+            {[{ k: 'connector', l: 'Delivery Config' }, { k: 'responses', l: 'Response Builder' }].map(({ k, l }) => (
               <button key={k} onClick={() => setConnectorSubTab(k)}
                 className={`px-4 py-2 text-[13px] font-medium transition-colors border-b-2 -mb-px
                   ${connectorSubTab === k ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground'}`}>
@@ -482,7 +482,7 @@ export default function SettingsLeadByte() {
               <Card className="bg-card border-border">
                 <CardContent className="p-4 space-y-3">
                   <div className="text-[13px] font-semibold text-foreground">Triggers</div>
-                  <p className="text-[11px] text-muted-foreground">When should this destination fire? Default destinations always forward on Qualified. Trigger options come from the Lead Status system field.</p>
+                  <p className="text-[11px] text-muted-foreground">When should this delivery fire? Default deliveries always forward on Qualified. Trigger options come from the Lead Status system field.</p>
                   <div className="flex flex-wrap gap-2">
                     {triggerOptions.map(t => {
                       const active = parseJsonArray(editing.triggers).includes(t.value);
@@ -603,7 +603,7 @@ export default function SettingsLeadByte() {
                         {testResult.error && <Badge className="bg-status-error text-red-400">Error</Badge>}
                       </div>
                       <div className="grid gap-3">
-                        {testResult.request_body && <JsonViewer data={testResult.request_body} title={`Request Sent to ${(() => { try { return new URL(editing.target_url).host; } catch { return 'Destination'; } })()}`} />}
+                        {testResult.request_body && <JsonViewer data={testResult.request_body} title={`Request Sent to ${(() => { try { return new URL(editing.target_url).host; } catch { return 'Delivery'; } })()}`} />}
                         {testResult.lb_response && <JsonViewer data={testResult.lb_response} title="Response" />}
                         {testResult.error && <JsonViewer data={{ error: testResult.error }} title="Error" />}
                       </div>
@@ -634,7 +634,7 @@ export default function SettingsLeadByte() {
   return (
     <div>
       <div className="sticky top-0 z-30 flex gap-1 border-b border-border bg-background/95 backdrop-blur-sm py-2">
-        {[{ k: 'connectors', l: 'Destinations' }, { k: 'responses', l: 'Response Builder' }, { k: 'logs', l: 'Delivery Logs' }].map(({ k, l }) => (
+        {[{ k: 'connectors', l: 'Deliveries' }, { k: 'responses', l: 'Response Builder' }, { k: 'logs', l: 'Delivery Logs' }].map(({ k, l }) => (
           <button key={k} onClick={() => setActiveTab(k)}
             className={`px-4 py-2 text-[13px] font-medium transition-colors border-b-2 -mb-px
               ${activeTab === k ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground'}`}>
@@ -657,7 +657,7 @@ export default function SettingsLeadByte() {
             </div>
             <div className="flex items-center gap-2">
               <Button size="sm" variant="outline" onClick={() => setIoOpen(true)} className="gap-1.5"><ArrowDownUp className="w-4 h-4" /> Import / Export</Button>
-              <Button size="sm" onClick={openCreate} className="gap-1.5"><Plus className="w-4 h-4" /> Add Destination</Button>
+              <Button size="sm" onClick={openCreate} className="gap-1.5"><Plus className="w-4 h-4" /> Add Delivery</Button>
             </div>
           </div>
 
@@ -668,9 +668,9 @@ export default function SettingsLeadByte() {
             records={connectors}
             matchKey="api_name"
             labelKey="api_name"
-            exportPrefix="destinations"
+            exportPrefix="deliveries"
             queryKeys={[['lb-connectors-all']]}
-            title="Import / Export Destinations"
+            title="Import / Export Deliveries"
           />
           <div className="space-y-3">
             {[...connectors].filter(conn => {
@@ -755,7 +755,7 @@ export default function SettingsLeadByte() {
       <AlertDialog open={!!deleteTarget} onOpenChange={(v) => { if (!v) setDeleteTarget(null); }}>
         <AlertDialogContent className="bg-popover border-border">
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete destination?</AlertDialogTitle>
+            <AlertDialogTitle>Delete delivery?</AlertDialogTitle>
             <AlertDialogDescription>
               This will permanently delete "{deleteTarget?.api_name}". This action cannot be undone.
             </AlertDialogDescription>

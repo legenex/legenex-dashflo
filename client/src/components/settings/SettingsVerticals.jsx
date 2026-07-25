@@ -95,7 +95,7 @@ export default function SettingsVerticals() {
           <AlertDialogHeader>
             <AlertDialogTitle>Delete vertical?</AlertDialogTitle>
             <AlertDialogDescription>
-              This will permanently delete "{deleteTarget?.name}". Delivery destinations filtered by this vertical will no longer match it.
+              This will permanently delete "{deleteTarget?.name}". Deliveries filtered by this vertical will no longer match it.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -114,7 +114,7 @@ export default function SettingsVerticals() {
             <div className="flex items-start gap-2 rounded-md border border-primary/30 bg-primary/5 p-3 text-[11px] text-muted-foreground leading-relaxed">
               <Info className="w-3.5 h-3.5 text-primary mt-0.5 shrink-0" />
               <span>
-                Verticals segment leads into delivery buckets. The inbound payload's <code className="bg-muted px-1 rounded text-primary font-mono">vertical</code> field is matched against Delivery destinations configured with this vertical - only leads whose <code className="bg-muted px-1 rounded text-primary font-mono">vertical</code> matches will be sent to those destinations. Use the <strong>Code</strong> to match the exact value suppliers send (e.g. <code className="font-mono">MVA</code>, <code className="font-mono">WC</code>, <code className="font-mono">DEBT</code>).
+                Verticals segment leads into delivery buckets. The inbound payload's <code className="bg-muted px-1 rounded text-primary font-mono">vertical</code> field is matched against Deliveries configured with this vertical - only leads whose <code className="bg-muted px-1 rounded text-primary font-mono">vertical</code> matches will be sent to those deliveries. Use the <strong>Code</strong> to match the exact value suppliers send (e.g. <code className="font-mono">MVA</code>, <code className="font-mono">WC</code>, <code className="font-mono">DEBT</code>).
               </span>
             </div>
             <div className="grid grid-cols-2 gap-3">

@@ -62,7 +62,7 @@ export default function SupplierPortalLeads() {
       <div className="flex items-start justify-between mb-6 flex-wrap gap-3">
         <div>
           <h1 className="text-[22px] font-bold text-foreground tracking-tight">My Leads</h1>
-          <p className="text-[13px] text-muted-foreground mt-1">Everything you sent us and what happened to it — spot delivery gaps at a glance.</p>
+          <p className="text-[13px] text-muted-foreground mt-1">Everything you sent us and what happened to it, spot delivery gaps at a glance.</p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           <Input value={q} onChange={e => setQ(e.target.value)} placeholder="Search name, phone, email, ID…" className="w-56 bg-background text-[13px]" />

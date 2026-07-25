@@ -36,7 +36,7 @@ export default function Overview() {
         </Callout>
       </Section>
 
-      <Section title="Quickstart — post your first lead">
+      <Section title="Quickstart: post your first lead">
         <p>Send a single lead with your supplier API key in the <InlineCode>X-API-KEY</InlineCode> header:</p>
         <Endpoint method="POST" path="https://api.legenex.com/functions/leads" />
         <CodeBlock

@@ -157,10 +157,10 @@ const AuthenticatedApp = () => {
     );
   }
 
-  // /docs and /apply are public on the main host too — render them without redirecting to login.
+  // /docs and /apply are public on the main host too, render them without redirecting to login.
   const onDocsPath = typeof window !== 'undefined' &&
     (window.location.pathname.startsWith('/docs') || window.location.pathname.startsWith('/apply'));
-  // The app's own auth pages must render normally — never bounce them to the
+  // The app's own auth pages must render normally, never bounce them to the
   // hosted login, or an unauthenticated visitor on /login loops forever.
   const AUTH_PATHS = ['/login', '/register', '/forgot-password', '/reset-password'];
   const onAuthPath = typeof window !== 'undefined' && AUTH_PATHS.some((p) => window.location.pathname.startsWith(p));
@@ -181,10 +181,10 @@ const AuthenticatedApp = () => {
       <Route path="/forgot-password" element={<ForgotPassword />} />
       <Route path="/reset-password" element={<ResetPassword />} />
 
-      {/* Public documentation — no auth, outside ProtectedRoute and AppLayout */}
+      {/* Public documentation, no auth, outside ProtectedRoute and AppLayout */}
       {DocsRoutes()}
 
-      {/* Public buyer onboarding — no auth, outside ProtectedRoute and AppLayout */}
+      {/* Public buyer onboarding, no auth, outside ProtectedRoute and AppLayout */}
       <Route path="/apply" element={<Apply />} />
 
       <Route element={<ProtectedRoute unauthenticatedElement={<Navigate to="/login" replace />} />}>

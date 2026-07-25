@@ -8,7 +8,7 @@ export default function Authentication() {
       subtitle="Every request is authenticated with a supplier API key passed in the X-API-KEY request header."
     >
       <Section title="The X-API-KEY header">
-        <p>Pass your key on every request. There is no OAuth flow for lead posting — the key alone identifies the supplier.</p>
+        <p>Pass your key on every request. There is no OAuth flow for lead posting, the key alone identifies the supplier.</p>
         <CodeBlock language="bash" code={`X-API-KEY: lgnx_int_xxxxxxxxxxxx`} />
         <Callout tone="warn">
           Keys are secret. Never expose a key in client-side code or a public repository. Rotate immediately if leaked.
@@ -18,7 +18,7 @@ export default function Authentication() {
       <Section title="One key per supplier">
         <p>
           Each supplier (source) is issued its own key. The key both authenticates the request and attributes the
-          lead to that supplier, so you never send a supplier identifier separately — it is derived from the key. Keys
+          lead to that supplier, so you never send a supplier identifier separately, it is derived from the key. Keys
           are prefixed by type, for example <InlineCode>lgnx_int_</InlineCode> for an internal ingest key.
         </p>
       </Section>

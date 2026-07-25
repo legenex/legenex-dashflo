@@ -6,7 +6,7 @@ export const DISPOSITIONS = [
   { value: 'Attorney Rejected', description: 'An attorney reviewed and rejected the case.' },
   { value: 'Already Settled', description: 'The claim was already settled.' },
   { value: 'Chase', description: 'Still working the lead / follow-up in progress.' },
-  { value: 'Converted', description: 'Attorney signed the client — a win.' },
+  { value: 'Converted', description: 'Attorney signed the client, a win.' },
   { value: 'Denied', description: 'The claim or case was denied.' },
   { value: 'Do Not Call', description: 'Lead asked not to be contacted.' },
   { value: 'Duplicate', description: 'Duplicate of a lead already received.' },

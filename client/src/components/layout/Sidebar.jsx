@@ -300,7 +300,7 @@ export default function Sidebar() {
               <div className="flex items-center">
                 <button
                   onClick={() => {
-                    // Group label only navigates — never auto-expands. The dropdown
+                    // Group label only navigates, never auto-expands. The dropdown
                     // opens exclusively via the chevron button beside it.
                     if (group.path) navigate(group.path);
                     else toggleGroup(group.label);
@@ -374,7 +374,7 @@ export default function Sidebar() {
         </div>
       </div>
 
-      {/* Resize handle — grip fixed at the bottom of the sidebar edge */}
+      {/* Resize handle, grip fixed at the bottom of the sidebar edge */}
       <ResizeHandle onMouseDown={startResize} title="Drag to resize sidebar" />
     </aside>
   );

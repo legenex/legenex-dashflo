@@ -46,7 +46,7 @@ export default function DeliveryLogsTab() {
         <table className="w-full text-[12px]">
           <thead>
             <tr className="border-b border-border bg-muted/40">
-              {['Lead', 'Supplier', 'Destination', 'Trigger', 'HTTP', 'Status', 'Error', 'Time'].map(h => (
+              {['Lead', 'Supplier', 'Delivery', 'Trigger', 'HTTP', 'Status', 'Error', 'Time'].map(h => (
                 <th key={h} className="text-left px-3 py-2 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider whitespace-nowrap">{h}</th>
               ))}
             </tr>

@@ -86,9 +86,9 @@ export function actionQueue({ reconRows, wb }, txns) {
       note: `${g.name}: expected ${fmt(g.expected)}, settled ${fmt(g.paid)}`,
       why: isBuyer
         ? (short
-          ? `${g.name} owes ${fmt(Math.abs(g.short))} against invoiced work — chase payment or issue a reminder.`
-          : `${g.name} was overpaid by ${fmt(Math.abs(g.short))} — verify the deposit and apply a credit.`)
-        : `Owed ${fmt(Math.abs(g.short))} to ${g.name} not yet cleared — schedule the payout to keep the source live.`,
+          ? `${g.name} owes ${fmt(Math.abs(g.short))} against invoiced work, chase payment or issue a reminder.`
+          : `${g.name} was overpaid by ${fmt(Math.abs(g.short))}, verify the deposit and apply a credit.`)
+        : `Owed ${fmt(Math.abs(g.short))} to ${g.name} not yet cleared, schedule the payout to keep the source live.`,
     });
   });
   const unmatchedIn = unmatched(txns).filter(t => t.amount > 0);
@@ -96,12 +96,12 @@ export function actionQueue({ reconRows, wb }, txns) {
     key: `unmatched-${t.id}`, label: 'Unmatched income', name: t.description || 'Bank deposit',
     amount: Math.abs(num(t.amount)),
     note: `${t.description || 'Bank deposit'} not matched to a buyer`,
-    why: `${fmt(Math.abs(num(t.amount)))} landed in the bank but isn't tied to a buyer — match it so revenue is proven.`,
+    why: `${fmt(Math.abs(num(t.amount)))} landed in the bank but isn't tied to a buyer, match it so revenue is proven.`,
   }));
   reconRows.filter(r => r.type === 'buyer' && r.revenue > 0 && r.invoiced === 0).forEach(r => items.push({
     key: `missing-src-${r.name}`, label: 'Missing source', name: r.name, amount: r.revenue,
     note: `${r.name}: ${fmt(r.revenue)} booked with no invoice raised`,
-    why: `${fmt(r.revenue)} booked from ${r.name} with no invoice behind it — raise one to make the revenue collectable.`,
+    why: `${fmt(r.revenue)} booked from ${r.name} with no invoice behind it, raise one to make the revenue collectable.`,
   }));
 
   const totalAtRisk = items.reduce((a, i) => a + i.amount, 0);

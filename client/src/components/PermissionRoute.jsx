@@ -27,7 +27,7 @@ export default function PermissionRoute() {
     if (dest && dest !== location.pathname + location.search) {
       return <Navigate to={dest} replace />;
     }
-    // No accessible page at all — show a minimal notice rather than a blank redirect loop.
+    // No accessible page at all, show a minimal notice rather than a blank redirect loop.
     if (!dest) {
       return (
         <div className="flex-1 flex items-center justify-center py-24">

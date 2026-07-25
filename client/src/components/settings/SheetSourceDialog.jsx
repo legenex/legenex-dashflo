@@ -85,7 +85,7 @@ export default function SheetSourceDialog({ open, onOpenChange, source, onSaved 
       setMapping(finalMap);
       setStep('review');
     } catch (err) {
-      toast.error('Could not read the sheet — check sharing & tab name');
+      toast.error('Could not read the sheet, check sharing & tab name');
     }
     setBusy(false);
   };

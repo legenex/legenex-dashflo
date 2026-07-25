@@ -36,7 +36,7 @@ export default function ActionQueueCard({ queue, onResolve, onDone }) {
       <div className="divide-y divide-border">
         {items.length === 0 && (
           <div className="flex items-center gap-2 text-[13px] status-sold px-5 py-8 justify-center">
-            <CheckCircle2 className="w-4 h-4" /> Everything reconciles — no open variances.
+            <CheckCircle2 className="w-4 h-4" /> Everything reconciles, no open variances.
           </div>
         )}
         <AnimatePresence initial={false}>

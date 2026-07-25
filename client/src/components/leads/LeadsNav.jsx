@@ -96,7 +96,7 @@ export default function LeadsNav() {
           })}
         </div>
 
-        {/* Queued alert card — only when leads are queued 5h+ */}
+        {/* Queued alert card, only when leads are queued 5h+ */}
         {queuedOld > 0 && (
           <div className="mt-auto rounded-xl border border-[hsl(38_80%_57%)]/40 bg-status-unsold p-3">
             <div className="flex items-center gap-1.5 mb-1">

@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Check, Copy } from 'lucide-react';
 
-// Shared presentational primitives for the docs pages — all Legenex dark theme.
+// Shared presentational primitives for the docs pages, all Legenex dark theme.
 
 export function DocPage({ title, subtitle, children }) {
   return (

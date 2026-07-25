@@ -13,7 +13,7 @@ const BLANK = { name: '', brand: '', send_mode: 'direct_post' };
 
 // A campaign IS a vertical: creating a campaign also creates the matching
 // Vertical record (by code) if one doesn't already exist. Method supports
-// Direct Post, Ping Post, or Both — not a forced either/or.
+// Direct Post, Ping Post, or Both, not a forced either/or.
 const METHOD_OPTS = [
   { value: 'direct_post', label: 'Direct Post', icon: Send, desc: 'Suppliers post the full lead in one request.' },
   { value: 'ping_post', label: 'Ping Post', icon: Zap, desc: 'Suppliers ping first, then post accepted leads.' },
@@ -40,7 +40,7 @@ export default function CampaignCreateModal({ open, onOpenChange }) {
     setSaving(true);
     try {
       const code = toVerticalCode(form.name);
-      // A campaign is a vertical — ensure the Vertical record exists.
+      // A campaign is a vertical, ensure the Vertical record exists.
       const exists = verticals.some((v) => (v.code || '').toLowerCase() === code);
       if (code && !exists) {
         await api.entities.Vertical.create({ code, name: form.name });

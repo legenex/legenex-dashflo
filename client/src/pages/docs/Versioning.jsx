@@ -22,7 +22,7 @@ export default function Versioning() {
       <Section title="Changelog">
         <div className="space-y-4">
           <div className="border-l-2 border-primary/40 pl-4">
-            <div className="text-foreground font-medium text-[14px]">v1.0 — Layered response envelope</div>
+            <div className="text-foreground font-medium text-[14px]">v1.0, Layered response envelope</div>
             <p className="text-[13px]">
               Introduced the structured envelope (<InlineCode>ok</InlineCode>, <InlineCode>trace_id</InlineCode>,{' '}
               <InlineCode>acceptance</InlineCode>, <InlineCode>lead_status</InlineCode>, revenue, code, reason) across
@@ -30,7 +30,7 @@ export default function Versioning() {
             </p>
           </div>
           <div className="border-l-2 border-border pl-4">
-            <div className="text-foreground font-medium text-[14px]">v1.0 — Supplier Posting Specs</div>
+            <div className="text-foreground font-medium text-[14px]">v1.0, Supplier Posting Specs</div>
             <p className="text-[13px]">Self-service integration guide and public spec endpoint per supplier.</p>
           </div>
         </div>

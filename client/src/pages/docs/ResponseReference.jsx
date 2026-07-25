@@ -27,7 +27,7 @@ export default function ResponseReference() {
   return (
     <DocPage
       title="Response Reference"
-      subtitle="Every response is the same layered envelope. Key your automation off acceptance and lead_status — the legacy Response field is preserved as a mirror."
+      subtitle="Every response is the same layered envelope. Key your automation off acceptance and lead_status: the legacy Response field is preserved as a mirror."
     >
       <Section title="The envelope">
         <FieldTable columns={envCols} rows={ENVELOPE} />
@@ -46,7 +46,7 @@ export default function ResponseReference() {
         </p>
       </Section>
 
-      <Section title="Example — accepted & sold">
+      <Section title="Example: accepted & sold">
         <CodeBlock
           code={`{
   "ok": true,
@@ -66,7 +66,7 @@ export default function ResponseReference() {
         />
       </Section>
 
-      <Section title="Example — accepted & unsold">
+      <Section title="Example: accepted & unsold">
         <CodeBlock
           code={`{
   "ok": true,
@@ -84,8 +84,8 @@ export default function ResponseReference() {
         />
       </Section>
 
-      <Section title="Example — queued">
-        <p>Held for manual handling — for example a missing TrustedForm cert or a required field.</p>
+      <Section title="Example: queued">
+        <p>Held for manual handling, for example a missing TrustedForm cert or a required field.</p>
         <CodeBlock
           code={`{
   "ok": true,
@@ -103,7 +103,7 @@ export default function ResponseReference() {
         />
       </Section>
 
-      <Section title="Example — duplicate">
+      <Section title="Example: duplicate">
         <CodeBlock
           code={`{
   "ok": true,
@@ -121,7 +121,7 @@ export default function ResponseReference() {
         />
       </Section>
 
-      <Section title="Example — error">
+      <Section title="Example: error">
         <p>The lead was created but the pipeline failed (e.g. no connector, downstream error).</p>
         <CodeBlock
           code={`{
@@ -140,7 +140,7 @@ export default function ResponseReference() {
         />
       </Section>
 
-      <Section title="Example — bad key">
+      <Section title="Example: bad key">
         <p>Returned with HTTP <InlineCode>401</InlineCode>. No lead is created, so <InlineCode>lead_id</InlineCode> is null.</p>
         <CodeBlock
           code={`{

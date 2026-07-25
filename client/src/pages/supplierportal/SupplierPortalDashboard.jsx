@@ -37,7 +37,7 @@ export default function SupplierPortalDashboard() {
       <div className="flex items-start justify-between mb-6 flex-wrap gap-3">
         <div>
           <h1 className="text-[22px] font-bold text-foreground tracking-tight">{supplier?.name || 'Dashboard'}</h1>
-          <p className="text-[13px] text-muted-foreground mt-1">Your own performance — leads sent, acceptance and revenue.</p>
+          <p className="text-[13px] text-muted-foreground mt-1">Your own performance, leads sent, acceptance and revenue.</p>
         </div>
         <PeriodTabs value={period} onChange={setPeriod} custom={custom} onCustomChange={setCustom} />
       </div>
@@ -63,7 +63,7 @@ export default function SupplierPortalDashboard() {
         <Stat label="Rejected" value={m.rejected.toLocaleString()} icon={XCircle} />
       </div>
 
-      {/* Ad reporting — internal Facebook-connected suppliers only */}
+      {/* Ad reporting, internal Facebook-connected suppliers only */}
       {ad && (
         <div className="bg-card border border-border rounded-[10px] p-5">
           <div className="flex items-center gap-2 mb-4">

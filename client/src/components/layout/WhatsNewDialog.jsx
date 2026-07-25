@@ -10,7 +10,7 @@ const FALLBACK = {
     'Lead Distribution sub-sidebar for quick moves between Dashboard, Campaigns, Deliveries and Conversion Events.',
     'Profile menu at the sidebar bottom with theme switcher, settings and help.',
     'AI-guided Walk Through to help you set up the platform step by step.',
-    'New Profile settings page — edit your name, email, timezone and Gmail connection.',
+    'New Profile settings page, edit your name, email, timezone and Gmail connection.',
   ],
 };
 

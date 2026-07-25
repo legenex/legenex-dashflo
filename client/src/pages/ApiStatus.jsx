@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { api } from '@/api/client';
 
 // Public status page rendered when the app is served on the API host
-// (api.legenex.com). No auth — this domain exists only to serve backend
+// (api.legenex.com). No auth, this domain exists only to serve backend
 // functions, so we just surface a simple health readout.
 export default function ApiStatus() {
   const [state, setState] = useState({ loading: true, ok: false, error: null });

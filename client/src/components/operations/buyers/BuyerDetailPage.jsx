@@ -8,6 +8,7 @@ import BuyerProfileTab from './BuyerProfileTab';
 import BuyerCoverageTab from './BuyerCoverageTab';
 import PortalEnablementCard from '@/components/shared/PortalEnablementCard';
 import BuyerDeliveriesCard from '@/components/shared/BuyerDeliveriesCard';
+import BuyerBillingCard from '@/components/operations/buyers/BuyerBillingCard';
 import { billingTypeLabel } from '@/lib/billingTypes';
 
 const TABS = [
@@ -162,6 +163,11 @@ export default function BuyerDetailPage({ buyer, verticals, onBack, initialTab }
               </div>
             )}
           </div>
+
+          {/* Invoices + Auto Recharge. Ported from the old standalone
+              /buyers/:id page, which now redirects here, so that the redirect
+              does not drop features the operator still uses. */}
+          <BuyerBillingCard buyer={buyer} />
         </div>
       )}
 

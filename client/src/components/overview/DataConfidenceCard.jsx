@@ -40,7 +40,7 @@ export default function DataConfidenceCard({ sources }) {
     <div className="overflow-hidden">
       <PanelSectionHeader
         icon={ShieldCheck}
-        title="Data Confidence — Source Health"
+        title="Data Confidence: Source Health"
         meta={
           <span className="flex items-center gap-2">
             {staleCount > 0 && <span className="text-[10px] font-semibold px-2 py-0.5 rounded status-error-bg status-error">{staleCount} stale</span>}

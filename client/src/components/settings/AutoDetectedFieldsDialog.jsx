@@ -11,7 +11,7 @@ import { toast } from 'sonner';
 // Review dialog for fields that were auto-detected from inbound leads.
 // Lets the operator multi-select which detected fields to keep (confirm as
 // permanent custom fields) or delete. Auto-detection no longer happens on
-// intake — this only manages fields already flagged auto_created.
+// intake, this only manages fields already flagged auto_created.
 export default function AutoDetectedFieldsDialog({ open, onOpenChange, autoFields }) {
   const qc = useQueryClient();
   const [selected, setSelected] = useState(new Set());

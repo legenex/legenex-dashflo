@@ -1,5 +1,5 @@
 // Central registry of documentation sections.
-// Each entry: { slug, title, group, Component } — the DocsLayout sidebar and
+// Each entry: { slug, title, group, Component }, the DocsLayout sidebar and
 // the router both read from this single source of truth.
 import Overview from '@/pages/docs/Overview';
 import Authentication from '@/pages/docs/Authentication';

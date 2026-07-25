@@ -14,12 +14,12 @@ export default function ReportingApi() {
         </p>
         <Callout>
           Today, reporting is available through the Legenex dashboard and the supplier / buyer portals. A public reporting
-          API is on the roadmap — the endpoint contract below is a placeholder.
+          API is on the roadmap, the endpoint contract below is a placeholder.
         </Callout>
       </Section>
 
       <Section title="Endpoints">
-        <Placeholder>List leads, delivery logs, and daily performance summaries — coming soon.</Placeholder>
+        <Placeholder>List leads, delivery logs, and daily performance summaries, coming soon.</Placeholder>
       </Section>
     </DocPage>
   );

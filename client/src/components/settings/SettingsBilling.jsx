@@ -36,7 +36,7 @@ export default function SettingsBilling() {
 
   return (
     <div className="space-y-6">
-      {/* Billing summary — real values, honest zeros */}
+      {/* Billing summary, real values, honest zeros */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         <StatChip label="Leads This Month" value={leadsThisMonth.toLocaleString()} tone="good" i={0} sub="Current billing period" />
         <StatChip label="Team Members" value={users.length} i={1} sub="Active seats" />

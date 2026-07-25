@@ -10,7 +10,7 @@ import { Switch } from '@/components/ui/switch';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { Badge } from '@/components/ui/badge';
-import { Plus, Bell, BellOff, AlertTriangle, Clock, TrendingDown, Layers, Mail, Slack, Webhook, CheckCircle2 } from 'lucide-react';
+import { Plus, BellOff, AlertTriangle, Clock, TrendingDown, Layers, Mail, Slack, Webhook, CheckCircle2 } from 'lucide-react';
 import { toast } from 'sonner';
 
 const conditionLabels = {
@@ -28,7 +28,7 @@ const conditionLabels = {
 const SUGGESTIONS = [
   {
     key: 'delivery_failure', name: 'Delivery failure', icon: AlertTriangle,
-    description: 'Any destination POST returns a non-200 response.',
+    description: 'Any delivery POST returns a non-200 response.',
     channel: 'Slack', channelKey: 'slack',
     rule: { name: 'Delivery failure', condition_type: 'leadbyte_non_success', threshold_count: 1, window_minutes: 5, channels: '["slack"]', recipients: '[]' },
   },

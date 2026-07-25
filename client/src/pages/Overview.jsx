@@ -55,7 +55,7 @@ export default function Overview() {
   const [custom, setCustom] = useState({ from: '', to: '' });
   const [compare, setCompare] = useState(false);
 
-  // "refreshed Xs ago" telemetry clock — resets whenever the user refreshes.
+  // "refreshed Xs ago" telemetry clock, resets whenever the user refreshes.
   const [refreshedAt, setRefreshedAt] = useState(() => Date.now());
   const [nowTick, setNowTick] = useState(() => Date.now());
   useEffect(() => {
@@ -210,12 +210,12 @@ export default function Overview() {
   const activityEvents = useMemo(() => {
     const ev = [];
     const lastPay = payments[0];
-    if (lastPay) ev.push({ id: 'pay', tone: 'green', text: `Payment matched — ${lastPay.buyer_name || 'buyer'} ${fmtMoney(lastPay.amount)}` });
-    if (queue.items[0]) ev.push({ id: 'gap', tone: 'amber', text: `Action item open — ${queue.items[0].label} · ${queue.items[0].name}` });
+    if (lastPay) ev.push({ id: 'pay', tone: 'green', text: `Payment matched, ${lastPay.buyer_name || 'buyer'} ${fmtMoney(lastPay.amount)}` });
+    if (queue.items[0]) ev.push({ id: 'gap', tone: 'amber', text: `Action item open, ${queue.items[0].label} · ${queue.items[0].name}` });
     const lastLead = leads[0];
-    if (lastLead) ev.push({ id: 'lead', tone: 'blue', text: `New lead in — ${lastLead.supplier_name || 'source'} · ${lastLead.final_status || 'processing'}` });
-    if (errors[0]) ev.push({ id: 'err', tone: 'red', text: `Error logged — ${errors[0].stage}: ${errors[0].message}` });
-    if (ev.length === 0) ev.push({ id: 'idle', tone: 'green', text: 'All systems nominal — no new events' });
+    if (lastLead) ev.push({ id: 'lead', tone: 'blue', text: `New lead in, ${lastLead.supplier_name || 'source'} · ${lastLead.final_status || 'processing'}` });
+    if (errors[0]) ev.push({ id: 'err', tone: 'red', text: `Error logged, ${errors[0].stage}: ${errors[0].message}` });
+    if (ev.length === 0) ev.push({ id: 'idle', tone: 'green', text: 'All systems nominal, no new events' });
     return ev;
   }, [payments, queue, leads, errors]);
 
@@ -245,7 +245,7 @@ export default function Overview() {
   const riskLevel = totalAtRisk > 5000 ? 'Elevated' : totalAtRisk > 0 ? 'Watch' : verifiedFeeds < feedCount / 2 ? 'Watch' : 'Clear';
   const riskNote = totalAtRisk > 0 ? `${fmtMoney(totalAtRisk)} at risk` : 'stale ingestion';
   const topRecommendation = queue.items[0]
-    ? `Resolve ${queue.items[0].label} — ${queue.items[0].name} (${fmtMoney(queue.items[0].amount)}) before it ages further.`
+    ? `Resolve ${queue.items[0].label}, ${queue.items[0].name} (${fmtMoney(queue.items[0].amount)}) before it ages further.`
     : 'Verify booked revenue against cash before scaling any campaign.';
 
   // Per-KPI sparkline series pulled from the daily finance series.

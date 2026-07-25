@@ -21,12 +21,12 @@ export default function PostLead() {
           ]}
           rows={[
             { header: <InlineCode>X-API-KEY</InlineCode>, value: 'Your supplier ingest key. Required.' },
-            { header: <InlineCode>Content-Type</InlineCode>, value: <><InlineCode>application/json</InlineCode> — the body is a flat JSON object.</> },
+            { header: <InlineCode>Content-Type</InlineCode>, value: <><InlineCode>application/json</InlineCode>, the body is a flat JSON object.</> },
           ]}
         />
         <Callout>
           The API key also accepts the aliases <InlineCode>X_KEY</InlineCode> and HTTP Basic (key as username). The supplier is
-          derived from the key — you never send a supplier id.
+          derived from the key, you never send a supplier id.
         </Callout>
       </Section>
 
@@ -71,7 +71,7 @@ export default function PostLead() {
         <p>
           Campaigns can be configured for either <InlineCode>direct_post</InlineCode> or <InlineCode>ping_post</InlineCode>.
           In direct-post the single call above both submits and sells the lead. In ping-post you first "ping" to obtain a
-          bid/eligibility decision and then "post" to confirm the sale. Ping-post is enabled per campaign — contact your
+          bid/eligibility decision and then "post" to confirm the sale. Ping-post is enabled per campaign, contact your
           account manager to turn it on, and see the <a href="/docs/response-reference" className="text-primary hover:underline">Response Reference</a> for
           how bids are surfaced in the envelope.
         </p>

@@ -51,7 +51,7 @@ function CollapsedIcon({ item }) {
 // Below lg: renders no column and no ResizeHandle. Instead, when the nav passes
 // an `items` array, it renders a horizontal scrolling rail (SubNavRail).
 export default function SubNavShell({ children, items, title }) {
-  // One shared width for every section's sub-nav — like the main sidebar,
+  // One shared width for every section's sub-nav, like the main sidebar,
   // it stays constant across all pages (ignores any per-section key).
   const { width, startResize } = useResizableWidth({
     storageKey: 'legenex_subnav_width',
@@ -94,7 +94,7 @@ export default function SubNavShell({ children, items, title }) {
           className="hidden lg:flex flex-col relative shrink-0 border-r border-border pr-2 h-full"
           style={{ width: `${width}px` }}
         >
-          {/* Canonical section title — identical markup for every section. */}
+          {/* Canonical section title, identical markup for every section. */}
           {title && (
             <div className="shrink-0 text-[9.5px] font-semibold tracking-[0.14em] uppercase text-muted-foreground/70 px-3 pt-2 pb-2">
               {title}

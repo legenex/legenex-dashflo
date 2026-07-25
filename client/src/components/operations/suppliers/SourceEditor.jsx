@@ -122,7 +122,7 @@ export default function SourceEditor({ supplier, source, existingCodes, onBack, 
 
       <h3 className="text-[15px] font-semibold text-foreground">{isNew ? 'Add source' : 'Edit source'}</h3>
 
-      <Field label="Source code (SSID) — optional">
+      <Field label="Source code (SSID), optional">
         <Input
           value={form.source_code}
           onChange={(e) => { set('source_code', e.target.value); setCodeError(''); }}
@@ -133,7 +133,7 @@ export default function SourceEditor({ supplier, source, existingCodes, onBack, 
         <p className="text-[11px] text-muted-foreground mt-1">When a lead carries an ssid it matches here first. A supplier with one source can leave this blank.</p>
       </Field>
 
-      <Field label="Brand — fallback match">
+      <Field label="Brand, fallback match">
         <Select value={form.brand || '__none__'} onValueChange={(v) => set('brand', v === '__none__' ? '' : v)}>
           <SelectTrigger className="bg-background text-[12px]"><SelectValue placeholder="None" /></SelectTrigger>
           <SelectContent>

@@ -329,7 +329,7 @@ export default function CampaignSuppliers() {
                   </div>
                 )}
 
-                {/* Payment terms — drives Money Due */}
+                {/* Payment terms, drives Money Due */}
                 <div className="pt-2 border-t border-border">
                   <div className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider mb-2">Payment Terms</div>
                   <div className="grid grid-cols-2 gap-3">

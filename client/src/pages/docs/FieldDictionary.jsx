@@ -55,8 +55,8 @@ export default function FieldDictionary() {
       subtitle="Every field the ingestion endpoint accepts. Unknown fields are captured automatically and stored on the lead."
     >
       <Callout>
-        Required fields are configurable per account. The lists below reflect the standard MVA intake configuration —
-        your integration guide on the Posting Specs tab shows the exact required set for your supplier.
+        Required fields are configurable per account. The lists below reflect the standard MVA intake configuration.
+        Your integration guide on the Posting Specs tab shows the exact required set for your supplier.
       </Callout>
 
       <Section title="Identity"><FieldTable columns={cols} rows={IDENTITY} /></Section>

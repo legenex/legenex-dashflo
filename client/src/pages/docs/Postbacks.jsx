@@ -34,7 +34,7 @@ export default function Postbacks() {
 }`}
         />
         <Callout>
-          Custom headers you configure on the webhook are sent with each request — use them for your own signature or bearer token.
+          Custom headers you configure on the webhook are sent with each request, use them for your own signature or bearer token.
         </Callout>
       </Section>
 
@@ -43,7 +43,7 @@ export default function Postbacks() {
           The <InlineCode>s1</InlineCode> click id you pass on ingestion is carried through so you can attribute
           downstream sold / conversion events back to the original click.
         </p>
-        <Placeholder>Configurable outbound conversion postback URLs — reference coming soon.</Placeholder>
+        <Placeholder>Configurable outbound conversion postback URLs, reference coming soon.</Placeholder>
       </Section>
     </DocPage>
   );

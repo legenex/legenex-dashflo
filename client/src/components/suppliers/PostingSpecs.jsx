@@ -122,7 +122,7 @@ export default function PostingSpecs({ supplier, apiKey, customFields, campaigns
       {/* Shareable spec URL */}
       <div className="bg-card border border-border rounded-[10px] p-5 space-y-2">
         <div className="text-[12px] font-semibold text-muted-foreground uppercase tracking-wider">Shareable Posting Spec URL</div>
-        <p className="text-[12px] text-muted-foreground">Send this to the supplier. It opens the full posting spec — endpoint, headers, fields and examples — without operator login.</p>
+        <p className="text-[12px] text-muted-foreground">Send this to the supplier. It opens the full posting spec, endpoint, headers, fields and examples, without operator login.</p>
         <div className="flex items-center gap-2 bg-muted/50 border border-border rounded-[8px] px-3 py-2">
           <span className="font-mono text-[12px] text-foreground truncate min-w-0">{spec.spec_url || 'Generating…'}</span>
           {spec.spec_url && <CopyBtn text={spec.spec_url} label="Spec URL copied" />}

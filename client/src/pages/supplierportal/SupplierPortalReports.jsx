@@ -90,7 +90,7 @@ export default function SupplierPortalReports() {
         )}
       </div>
 
-      {/* Ad Performance — internal media-buying sources only */}
+      {/* Ad Performance, internal media-buying sources only */}
       {isInternal && (
         <>
           <div className="text-[12px] font-semibold text-muted-foreground uppercase tracking-wider mb-3 flex items-center gap-2">

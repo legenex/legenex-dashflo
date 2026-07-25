@@ -31,7 +31,7 @@ export default function SectionShell({ nav, children }) {
   return (
     <SectionHeaderContext.Provider value={headerNode}>
       <div className="h-full flex flex-col min-h-0">
-        {/* Full-width header region — pages portal their header here. */}
+        {/* Full-width header region, pages portal their header here. */}
         <div ref={headerRef} className="shrink-0" />
         <div className="flex-1 min-h-0 flex flex-col lg:flex-row lg:gap-3 lg:items-stretch">
           {nav}

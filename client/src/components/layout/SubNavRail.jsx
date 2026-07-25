@@ -1,7 +1,7 @@
 import React, { useRef, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 
-// A single rail entry — a Link when it has a `to`, otherwise a callback button.
+// A single rail entry, a Link when it has a `to`, otherwise a callback button.
 function RailItem({ item, activeRef }) {
   const cls = "relative flex items-center whitespace-nowrap text-[12px] px-2.5 font-medium transition-colors focus:outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary";
   const inner = (

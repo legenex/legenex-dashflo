@@ -268,7 +268,7 @@ export default function SettingsIntegrations() {
           ) : (
             <div className="text-[13px] text-muted-foreground leading-relaxed">
               Connecting <span className="text-foreground font-medium">{pending?.name}</span> opens an OAuth grant so you can link your account and pick resources.
-              This needs a one-time connector setup — tell me in chat to enable the {pending?.name} connect flow and I'll wire it up.
+              This needs a one-time connector setup, tell me in chat to enable the {pending?.name} connect flow and I'll wire it up.
             </div>
           )}
           <DialogFooter>

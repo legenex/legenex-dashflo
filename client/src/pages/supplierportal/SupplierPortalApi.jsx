@@ -63,7 +63,7 @@ export default function SupplierPortalApi() {
     <div>
       <div className="mb-6">
         <h1 className="text-[22px] font-bold text-foreground tracking-tight">API Specs</h1>
-        <p className="text-[13px] text-muted-foreground mt-1">How to post leads to us — your endpoint, key and payload format.</p>
+        <p className="text-[13px] text-muted-foreground mt-1">How to post leads to us, your endpoint, key and payload format.</p>
       </div>
 
       <div className="bg-card border border-border rounded-[10px] p-5 mb-6">

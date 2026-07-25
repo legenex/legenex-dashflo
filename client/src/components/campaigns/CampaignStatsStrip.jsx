@@ -5,7 +5,7 @@ const money = (v) => `$${Number(v || 0).toLocaleString(undefined, { minimumFract
 const pct = (v) => `${Number(v || 0).toFixed(1)}%`;
 
 // Stats strip for the campaign detail. Charts live only on the Overview page.
-// Pure UI aggregation over records already loaded — no routing/billing logic.
+// Pure UI aggregation over records already loaded, no routing/billing logic.
 export default function CampaignStatsStrip({ campaign, leads }) {
   const m = useMemo(() => campaignMetrics(campaign, leads), [campaign, leads]);
 
