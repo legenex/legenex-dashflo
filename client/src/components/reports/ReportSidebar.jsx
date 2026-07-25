@@ -1,12 +1,11 @@
 import React from 'react';
-import { Plus, Gauge, CalendarDays, Megaphone, Scale, Target, CreditCard, Database } from 'lucide-react';
+import { Plus, Gauge, CalendarDays, Scale, Target, CreditCard, Database } from 'lucide-react';
 import SubNavShell from '@/components/layout/SubNavShell';
 
 const STANDARD = [
   { key: 'performance_overview', label: 'Performance Overview', icon: Gauge },
   { key: 'daily', label: 'Daily Performance', icon: CalendarDays },
-  { key: 'campaign', label: 'Campaign Performance', icon: Megaphone },
-  { key: 'pnl', label: 'P&L', icon: Scale },
+  { key: 'pnl', label: 'Profit & Loss', icon: Scale },
   { key: 'ad', label: 'Ad Performance', icon: Target },
   { key: 'buyer', label: 'Buyer Performance', icon: CreditCard },
   { key: 'supplier', label: 'Supplier Performance', icon: Database },

@@ -1,7 +1,6 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { api } from '@/api/client';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -10,14 +9,16 @@ import { Badge } from '@/components/ui/badge';
 import { SearchableSelect } from '@/components/ui/searchable-select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
-import { Plus, ArrowDownUp } from 'lucide-react';
+import { Plus, ArrowDownUp, ChevronRight, ChevronDown } from 'lucide-react';
 import { toast } from 'sonner';
 import { money } from '@/lib/partnerMetrics';
 import ImportExportDialog from '@/components/shared/ImportExportDialog';
 import { TableShell, Row, Tag, EmptyRow } from '@/components/campaigns/campaignTable';
 import RowActionsMenu from '@/components/campaigns/RowActionsMenu';
+import BuyerDeliveryRows from '@/components/campaigns/BuyerDeliveryRows';
+import DeliveryEditorDialog from '@/components/campaigns/DeliveryEditorDialog';
 
-const BUYER_TEMPLATE = '1.6fr 0.8fr 0.9fr 1fr 0.9fr 0.9fr 0.9fr 0.9fr 1fr 0.9fr 0.9fr 0.9fr 0.8fr';
+const BUYER_TEMPLATE = '32px 1.5fr 0.7fr 0.8fr 0.9fr 1fr 0.9fr 0.9fr 0.9fr 0.9fr 1fr 0.9fr 0.9fr 0.9fr 0.8fr';
 
 const BLANK = {
   company_name: '', email: '', phone: '', location: '',
@@ -27,12 +28,19 @@ const BLANK = {
 
 export default function CampaignBuyers() {
   const qc = useQueryClient();
-  const navigate = useNavigate();
   const [modal, setModal] = useState(false);
   const [form, setForm] = useState(BLANK);
   const [editId, setEditId] = useState(null);
   const [ioOpen, setIoOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState(null);
+  const [expanded, setExpanded] = useState(() => new Set());
+  const [deliveryDialog, setDeliveryDialog] = useState(null);
+
+  const toggleExpand = (id) => setExpanded((prev) => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
 
   const { data: buyers = [] } = useQuery({
     queryKey: ['buyers'],
@@ -42,6 +50,28 @@ export default function CampaignBuyers() {
     queryKey: ['verticals'],
     queryFn: () => api.entities.Vertical.list(),
   });
+  const { data: deliveries = [] } = useQuery({
+    queryKey: ['deliveries'],
+    queryFn: () => api.entities.Delivery.list('-created_date', 2000),
+  });
+  const { data: subs = [] } = useQuery({
+    queryKey: ['subdeliveries'],
+    queryFn: () => api.entities.SubDelivery.list('-created_date', 5000),
+  });
+
+  // Deliveries grouped by buyer, and endpoints grouped by delivery, so an
+  // expanded row can render without another round trip.
+  const deliveriesByBuyer = useMemo(() => {
+    const map = {};
+    (deliveries || []).forEach((d) => { (map[d.buyer_id] ||= []).push(d); });
+    return map;
+  }, [deliveries]);
+  const subsByDelivery = useMemo(() => {
+    const map = {};
+    (subs || []).forEach((s) => { (map[s.delivery_id] ||= []).push(s); });
+    Object.values(map).forEach((list) => list.sort((a, b) => (a.order_index || 0) - (b.order_index || 0)));
+    return map;
+  }, [subs]);
   const verticalOptions = verticalList.map(v => ({ value: v.code, label: v.name }));
 
   const openCreate = () => { setForm(BLANK); setEditId(null); setModal(true); };
@@ -110,7 +140,7 @@ export default function CampaignBuyers() {
     qc.invalidateQueries({ queryKey: ['buyers'] });
   };
 
-  const COLS = ['Buyer Name', 'Portal', 'Type', 'Vertical', 'Balance', 'Min Balance', 'Card', 'Auto Recharge', 'Billing', 'Revenue', 'Cost', 'Profit', 'Actions'];
+  const COLS = ['', 'Buyer Name', 'Deliveries', 'Portal', 'Type', 'Vertical', 'Balance', 'Min Balance', 'Card', 'Auto Recharge', 'Billing', 'Revenue', 'Cost', 'Profit', 'Actions'];
 
   return (
     <div>
@@ -133,11 +163,21 @@ export default function CampaignBuyers() {
 
       <TableShell head={COLS} template={BUYER_TEMPLATE} minWidth="1000px">
         {buyers.length === 0 && <EmptyRow>No buyers yet. Buyers can be created manually or are auto-created from LeadByte sold responses.</EmptyRow>}
-        {buyers.map((b, i) => (
-          <Row key={b.id} template={BUYER_TEMPLATE} i={i} onClick={() => navigate(`/buyers/${b.id}`)}>
+        {buyers.map((b, i) => {
+          const bDeliveries = deliveriesByBuyer[b.id] || [];
+          const isOpen = expanded.has(b.id);
+          return (
+          <div key={b.id}>
+          <Row template={BUYER_TEMPLATE} i={i} onClick={() => toggleExpand(b.id)}>
+            <span className="flex items-center justify-center text-muted-foreground">
+              {isOpen ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+            </span>
             <span className="min-w-0">
               <span className="block font-medium text-foreground truncate">{b.company_name}</span>
               {b.auto_created && <Badge variant="outline" className="text-[9px] mt-0.5 text-muted-foreground">Auto</Badge>}
+            </span>
+            <span className="text-[12px] text-muted-foreground">
+              {bDeliveries.length === 0 ? <span className="text-muted-foreground">None</span> : `${bDeliveries.length}`}
             </span>
             <span onClick={e => e.stopPropagation()}>
               <Switch checked={!!b.portal_enabled} onClick={(e) => togglePortal(b, e)} onCheckedChange={() => {}} />
@@ -160,8 +200,27 @@ export default function CampaignBuyers() {
               />
             </span>
           </Row>
-        ))}
+          {isOpen && (
+            <BuyerDeliveryRows
+              deliveries={bDeliveries}
+              subsByDelivery={subsByDelivery}
+              onCreate={() => setDeliveryDialog({ buyer: b, delivery: null })}
+              onOpen={(d) => setDeliveryDialog({ buyer: b, delivery: d })}
+            />
+          )}
+          </div>
+          );
+        })}
       </TableShell>
+
+      <DeliveryEditorDialog
+        open={!!deliveryDialog}
+        onOpenChange={(v) => { if (!v) setDeliveryDialog(null); }}
+        buyerId={deliveryDialog?.buyer?.id}
+        buyerName={deliveryDialog?.buyer?.company_name}
+        delivery={deliveryDialog?.delivery || null}
+        primarySub={(subsByDelivery[deliveryDialog?.delivery?.id] || [])[0] || null}
+      />
 
       <Dialog open={modal} onOpenChange={setModal}>
         <DialogContent className="bg-popover border-border max-w-[520px]">

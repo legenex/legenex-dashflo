@@ -1,15 +1,20 @@
 import React from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { LayoutDashboard, Megaphone, Webhook, Zap } from 'lucide-react';
+import { LayoutDashboard, Megaphone, Users, Webhook, Zap } from 'lucide-react';
 import SubNavShell from '@/components/layout/SubNavShell';
 
-// Lead Distribution IA: exactly four top-level sections. Buyers, Suppliers, and
-// Brands now live INSIDE the campaign detail as routing tabs; Verticals is the
-// campaign itself. Route Groups and Simulator remain routable tools reached from
-// Campaigns/Dashboard. Their routes still exist and keep their permission keys.
+// Lead Distribution IA: five top-level sections. Buyers is a first-class
+// section again: the /distribution/buyers route, its page, and its Deliveries
+// panel already existed but nothing linked to them, so the page was orphaned
+// and DistributionNav.test.jsx had been failing against the documented IA.
+// Suppliers and Brands stay INSIDE the campaign detail as tabs; Verticals is
+// the campaign itself. Route Groups and Simulator remain routable tools reached
+// from Campaigns/Dashboard. Their routes still exist and keep their permission
+// keys.
 const ITEMS = [
   { label: 'Dashboard', path: '/distribution', icon: LayoutDashboard },
   { label: 'Campaigns', path: '/campaigns', icon: Megaphone },
+  { label: 'Buyers', path: '/distribution/buyers', icon: Users },
   // Webhooks is Nick's live rename of the former Deliveries page; it stays at
   // /deliveries (the live route) and is NOT moved to a new path.
   { label: 'Webhooks', path: '/deliveries', icon: Webhook },

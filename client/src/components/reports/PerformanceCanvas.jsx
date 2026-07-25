@@ -4,7 +4,7 @@ import MetricCard from './MetricCard';
 import MetricPicker from './MetricPicker';
 import ReportWidget from './ReportWidget';
 import AddWidgetPicker from './AddWidgetPicker';
-import { computeMetrics, dailySeries, applyFilters, METRIC_CATALOG, leadField, seriesWindow } from '@/lib/reportMetrics';
+import { computeMetrics, dailySeries, applyFilters, METRIC_CATALOG, leadField, seriesWindow, spendInWindow } from '@/lib/reportMetrics';
 import { reorder } from '@/lib/reorder';
 
 let idc = 0;
@@ -19,12 +19,15 @@ const GROUPS = [
 ];
 const CATEGORY = {
   revenue: 'revenue', net_revenue: 'revenue', profit: 'revenue', net_profit: 'revenue', qp_margin: 'revenue', roas: 'revenue', booked_revenue: 'revenue',
-  verified_income: 'cash', revenue_gap: 'cash', outstanding: 'cash', overdue: 'cash', short_paid: 'cash', cost: 'cash', ad_spend: 'cash', cpl: 'cash', blended_cpl: 'cash', cost_per_sold: 'cash',
+  verified_income: 'cash', revenue_gap: 'cash', outstanding: 'cash', overdue: 'cash', short_paid: 'cash', cost: 'cash', total_cost: 'cash', ad_spend: 'cash', cpl: 'cash', blended_cpl: 'cash', cost_per_sold: 'cash',
   sold: 'risk', unsold: 'risk', returns: 'risk', dqs: 'risk', duplicates: 'risk', conv_rate: 'risk',
   total_leads: 'data', fakes: 'data', phone_verified: 'data',
 };
-const PINNED = ['revenue', 'profit', 'total_leads', 'conv_rate'];
-const RISK = ['returns', 'fakes', 'dqs', 'duplicates', 'revenue_gap', 'overdue', 'short_paid', 'outstanding'];
+// Cost and CPL are pinned on every report view, not buried in the Cash group.
+// They are the two numbers that decide whether a campaign is worth running, so
+// they sit next to revenue rather than a click away.
+const PINNED = ['revenue', 'total_cost', 'blended_cpl', 'profit', 'total_leads', 'conv_rate'];
+const RISK = ['returns', 'fakes', 'dqs', 'duplicates', 'revenue_gap', 'overdue', 'short_paid', 'outstanding', 'total_cost', 'blended_cpl'];
 const groupOf = (metric) => CATEGORY[metric] || 'data';
 
 // The Performance Overview canvas: pinned + grouped metric board, then widgets.
@@ -36,9 +39,11 @@ export default function PerformanceCanvas({
   const [activeGroup, setActiveGroup] = useState('revenue');
 
   const filtered = applyFilters(leads, filters);
-  const metrics = computeMetrics(filtered, adSpend);
+  // Spend has to be windowed separately: applyFilters only touches leads.
+  const spend = spendInWindow(adSpend, filters);
+  const metrics = computeMetrics(filtered, spend);
   // Sparklines follow the selected date range, not a fixed trailing 14 days.
-  const series = dailySeries(filtered, adSpend, 14, seriesWindow(filters));
+  const series = dailySeries(filtered, spend, 14, seriesWindow(filters));
   const revSeries = series.map(s => s.revenue);
 
   const cardValue = (card) => {
@@ -51,7 +56,7 @@ export default function PerformanceCanvas({
   };
   const cardSeries = (card) => {
     if (['revenue', 'net_revenue', 'booked_revenue'].includes(card.metric)) return revSeries;
-    if (['cost', 'ad_spend', 'cpl', 'blended_cpl'].includes(card.metric)) return series.map(s => s.cost + s.spend);
+    if (['cost', 'total_cost', 'ad_spend', 'cpl', 'blended_cpl'].includes(card.metric)) return series.map(s => s.cost + s.spend);
     if (['profit', 'net_profit'].includes(card.metric)) return series.map(s => s.profit);
     return series.map(s => s.leads);
   };
@@ -109,7 +114,7 @@ export default function PerformanceCanvas({
         </div>
 
         {pinnedCards.length > 0 && (
-          <div className="grid grid-cols-2 xl:grid-cols-4 gap-3 px-5 pt-3 pb-4">
+          <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3 px-5 pt-3 pb-4">
             {pinnedCards.map(renderCard)}
           </div>
         )}
@@ -156,7 +161,7 @@ export default function PerformanceCanvas({
               onMoveRight: () => moveWidget(w.id, 1),
             }}
             leads={filtered}
-            adSpend={adSpend}
+            adSpend={spend}
             filters={filters}
             onChange={(next) => updateWidget(w.id, next)}
           />

@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { ArrowLeft, Loader2, Save, Plug, FlaskConical } from 'lucide-react';
 import CampaignRoutingTab from '@/components/campaigns/CampaignRoutingTab';
 import CampaignStatsStrip from '@/components/campaigns/CampaignStatsStrip';
+import CampaignBuyers from '@/components/campaigns/CampaignBuyers';
 import CampaignSuppliers from '@/components/campaigns/CampaignSuppliers';
 import CampaignBrands from '@/components/campaigns/CampaignBrands';
 import CampaignOverviewTab from '@/components/campaigns/CampaignOverviewTab';
@@ -18,10 +19,17 @@ function parseIds(raw) {
 }
 
 // Full-page campaign detail. Header (back, name + vertical, status pill,
-// Save/API/Test), stats strip + charts, then OVERVIEW / ROUTING / SUPPLIERS /
-// BRANDS / SETTINGS tabs. The Routing tab (CampaignRoutingTab) owns the routing
-// method selector, groups, and the member picker. All writes hit existing
-// RouteMember/Campaign/RouteGroup fields, no schema/engine/billing changes.
+// Save/API/Test), stats strip + charts, then OVERVIEW / BUYERS / ROUTING /
+// SUPPLIERS / BRANDS / SETTINGS tabs.
+//
+// BUYERS and ROUTING are deliberately separate. Buyers is the roster: who the
+// buyers are and what deliveries each one owns. Routing is the arrangement:
+// which method the campaign uses and how each delivery is grouped and ordered.
+// One delivery can therefore sit in a different group from its sibling.
+//
+// The Routing tab (CampaignRoutingTab) owns the routing method selector,
+// groups, and the member picker. All writes hit existing
+// RouteMember/Campaign/RouteGroup fields, no engine or billing changes.
 export default function CampaignDetailPage({ campaign, onBack }) {
   const qc = useQueryClient();
   const [tab, setTab] = useState('overview');
@@ -67,6 +75,7 @@ export default function CampaignDetailPage({ campaign, onBack }) {
 
   const TABS = [
     { key: 'overview', label: 'Overview' },
+    { key: 'buyers', label: 'Buyers' },
     { key: 'routing', label: 'Routing', count: memberCount },
     { key: 'suppliers', label: 'Suppliers' },
     { key: 'brands', label: 'Brands' },
@@ -121,6 +130,7 @@ export default function CampaignDetailPage({ campaign, onBack }) {
           {tab === 'overview' && (
             <CampaignOverviewTab campaign={campaign} leads={leads} members={campaignMembers} buyerName={buyerName} supplierCount={supplierCount} />
           )}
+          {tab === 'buyers' && <CampaignBuyers />}
           {tab === 'routing' && <CampaignRoutingTab campaign={campaign} method={method} />}
           {tab === 'suppliers' && <CampaignSuppliers />}
           {tab === 'brands' && <CampaignBrands />}

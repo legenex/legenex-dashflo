@@ -127,9 +127,9 @@ export default function RouteMemberEditor({ open, onOpenChange, group, member })
         </DialogHeader>
 
         <div className="space-y-5">
-          {/* Destination */}
+          {/* Delivery */}
           <div className="rounded-[10px] border border-border bg-card p-5 space-y-4">
-            <div className="text-[12px] font-semibold uppercase tracking-wider text-muted-foreground">Buyer and destination</div>
+            <div className="text-[12px] font-semibold uppercase tracking-wider text-muted-foreground">Buyer and delivery</div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <Label className="text-[12px] font-medium">Buyer</Label>
@@ -142,12 +142,12 @@ export default function RouteMemberEditor({ open, onOpenChange, group, member })
                 />
               </div>
               <div>
-                <Label className="text-[12px] font-medium">Destination</Label>
+                <Label className="text-[12px] font-medium">Delivery</Label>
                 <SearchableSelect
                   value={form.destination_id}
                   onValueChange={(v) => set({ destination_id: v })}
                   options={[{ value: '', label: 'None' }, ...destOptions]}
-                  placeholder="Select a destination"
+                  placeholder="Select a delivery"
                   className="mt-1 bg-background"
                 />
               </div>

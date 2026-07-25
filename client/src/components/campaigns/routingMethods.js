@@ -13,25 +13,25 @@ export const CAMPAIGN_METHODS = [
     label: 'All',
     disabled: true,
     tooltip:
-      'Delivers every lead to all eligible destinations simultaneously. Best when buyers accept shared leads.',
+      'Delivers every lead to all eligible deliveries simultaneously. Best when buyers accept shared leads.',
   },
   {
     value: 'waterfall',
     label: 'Waterfall',
     tooltip:
-      'Also called priority. Tries destinations in order, top to bottom. Each lead goes to the first destination that accepts. Best when one destination should always get first look.',
+      'Also called priority. Tries deliveries in order, top to bottom. Each lead goes to the first delivery that accepts. Best when one delivery should always get first look.',
   },
   {
     value: 'round_robin',
     label: 'Round Robin',
     tooltip:
-      'Rotates through eligible destinations. Each new lead starts with the next destination in line; if it rejects or fails, the lead falls through to the rest of the rotation. Weights let one destination take a larger share. Best for splitting volume fairly.',
+      'Rotates through eligible deliveries. Each new lead starts with the next delivery in line; if it rejects or fails, the lead falls through to the rest of the rotation. Weights let one delivery take a larger share. Best for splitting volume fairly.',
   },
   {
     value: 'hybrid',
     label: 'Hybrid',
     tooltip:
-      'Groups destinations into ordered tiers. Each group runs its own method (priority, weighted, or round robin). If a lead remains unsold after a group, it falls through to the next group.',
+      'Groups deliveries into ordered tiers. Each group runs its own method (priority, weighted, or round robin). If a lead remains unsold after a group, it falls through to the next group.',
   },
 ];
 
@@ -42,19 +42,19 @@ export const GROUP_METHODS = [
     value: 'priority',
     label: 'Priority',
     tooltip:
-      'Also called waterfall. Tries destinations in order, top to bottom. Each lead goes to the first destination that accepts. Best when one destination should always get first look.',
+      'Also called waterfall. Tries deliveries in order, top to bottom. Each lead goes to the first delivery that accepts. Best when one delivery should always get first look.',
   },
   {
     value: 'weighted',
     label: 'Weighted',
     tooltip:
-      'Splits volume by weight. Each destination takes a share proportional to its weight. Best for splitting volume by a fixed ratio.',
+      'Splits volume by weight. Each delivery takes a share proportional to its weight. Best for splitting volume by a fixed ratio.',
   },
   {
     value: 'round_robin',
     label: 'Round Robin',
     tooltip:
-      'Rotates through eligible destinations. Each new lead starts with the next destination in line; if it rejects or fails, the lead falls through to the rest of the rotation. Best for splitting volume fairly.',
+      'Rotates through eligible deliveries. Each new lead starts with the next delivery in line; if it rejects or fails, the lead falls through to the rest of the rotation. Best for splitting volume fairly.',
   },
 ];
 

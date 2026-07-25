@@ -257,7 +257,7 @@ export default function RouteGroupEditor({ group, campaignName }) {
           <div className="px-4 py-10 text-center">
             <Users className="w-7 h-7 text-muted-foreground/40 mx-auto mb-2" />
             <div className="text-[13px] font-medium text-foreground">No members yet</div>
-            <div className="text-[12px] text-muted-foreground mt-1">Add a buyer destination to start routing leads through this group.</div>
+            <div className="text-[12px] text-muted-foreground mt-1">Add a buyer delivery to start routing leads through this group.</div>
           </div>
         ) : (
           <div className="overflow-x-auto">

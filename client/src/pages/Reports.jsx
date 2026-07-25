@@ -15,6 +15,8 @@ import { leadField } from '@/lib/reportMetrics';
 import DailyReport from '@/components/reports/views/DailyReport';
 import PnlReport from '@/components/reports/views/PnlReport';
 import AdReport from '@/components/reports/views/AdReport';
+import SupplierReport from '@/components/reports/views/SupplierReport';
+import BuyerReport from '@/components/reports/views/BuyerReport';
 import SectionShell from '@/components/layout/SectionShell';
 import SectionHeader from '@/components/shared/SectionHeader';
 
@@ -99,6 +101,16 @@ export default function Reports() {
   const isCustom = active.startsWith('custom:');
   const activeReport = isCustom ? reports.find(r => r.id === active.slice(7)) : null;
 
+  // Which filter dropdowns a standard view is allowed to show. A supplier report
+  // filtered by buyer, or a buyer report filtered by supplier, produces numbers
+  // that look like CPL and margin but are not, because the dimension being
+  // filtered does not change the money on the other side of the trade.
+  const HIDDEN_FILTERS = {
+    'std:supplier': ['buyer'],
+    'std:buyer': ['supplier_name'],
+  };
+  const hiddenFilters = HIDDEN_FILTERS[active] || [];
+
   // Resolve cards/widgets/filters for the currently active view.
   const view = useMemo(() => {
     if (activeReport) {
@@ -112,6 +124,8 @@ export default function Reports() {
   }, [activeReport, stdCards, stdWidgets]);
 
   const effectiveFilters = { ...view.pinned, ...filters };
+  // Never let a hidden dimension keep filtering from a previously active view.
+  for (const key of hiddenFilters) delete effectiveFilters[key];
 
   const persistReport = async (id, patch) => {
     await api.entities.Report.update(id, patch);
@@ -188,6 +202,7 @@ export default function Reports() {
       <ReportFilterBar
         value={effectiveFilters}
         onChange={(v) => setFilters(v)}
+        hide={hiddenFilters}
         options={{ campaigns: campaignOptions, verticals, suppliers, buyers, brands }}
       />
 
@@ -197,6 +212,10 @@ export default function Reports() {
         <PnlReport leads={leads} adSpend={adSpend} bankTx={bankTx} filters={effectiveFilters} />
       ) : active === 'std:ad' ? (
         <AdReport adSpend={adSpend} adMappings={adMappings} integrations={integrations} leads={leads} filters={effectiveFilters} />
+      ) : active === 'std:supplier' ? (
+        <SupplierReport leads={leads} adSpend={adSpend} suppliers={suppliers} filters={effectiveFilters} />
+      ) : active === 'std:buyer' ? (
+        <BuyerReport leads={leads} adSpend={adSpend} buyers={buyers} filters={effectiveFilters} />
       ) : (
         <PerformanceCanvas
           leads={leads}

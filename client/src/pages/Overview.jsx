@@ -75,6 +75,27 @@ export default function Overview() {
     }
   };
 
+  // Manual refresh. Re-reading cached queries alone left stale Meta spend on
+  // screen, which is why the number here could sit hours behind Ads Manager, so
+  // pull a fresh incremental sync first and only then invalidate. Incremental
+  // keeps this to a trailing few days across every ad account so the button
+  // stays responsive; the whole-month deep pass lives on Sync All and the daily
+  // scheduled job.
+  const [refreshing, setRefreshing] = useState(false);
+  const refreshAll = async () => {
+    if (refreshing) return;
+    setRefreshing(true);
+    try {
+      await api.functions.invoke('syncMetaSpend', { mode: 'incremental' });
+    } catch {
+      toast.error('Meta spend refresh failed, showing last synced figures');
+    } finally {
+      qc.invalidateQueries();
+      setRefreshedAt(Date.now());
+      setRefreshing(false);
+    }
+  };
+
   const win = useMemo(() => resolvePeriod(period, custom), [period, custom]);
 
   const { data: leads = [] } = useQuery({ queryKey: ['ov-leads'], queryFn: () => api.entities.Lead.list('-created_date', 2000) });
@@ -277,7 +298,7 @@ export default function Overview() {
         onCustomChange={setCustom}
         compare={compare}
         onToggleCompare={() => setCompare(c => !c)}
-        onRefresh={() => { qc.invalidateQueries(); setRefreshedAt(Date.now()); }}
+        onRefresh={refreshAll}
       />
 
       {/* AI Analyst summary band */}

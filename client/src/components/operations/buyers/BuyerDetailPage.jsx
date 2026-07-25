@@ -75,9 +75,9 @@ export default function BuyerDetailPage({ buyer, verticals, onBack }) {
       {tab === 'overview' && (
         <div className="space-y-5">
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 items-start">
-            {/* Destination Profile — reuses the existing editable buyer form */}
+            {/* Buyer Profile: reuses the existing editable buyer form */}
             <div className="rounded-lg border border-border bg-card p-5">
-              <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-4">Destination Profile</p>
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-4">Buyer Profile</p>
               <BuyerProfileTab buyer={buyer} verticals={verticals} />
             </div>
 

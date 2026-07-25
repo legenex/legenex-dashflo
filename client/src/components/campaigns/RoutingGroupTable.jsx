@@ -42,7 +42,7 @@ export default function RoutingGroupTable({
         <thead>
           <tr className="border-b border-border text-muted-foreground text-left">
             <th className="px-3 py-2.5 font-medium w-28">Order</th>
-            <th className="px-3 py-2.5 font-medium min-w-[220px]">Destination</th>
+            <th className="px-3 py-2.5 font-medium min-w-[220px]">Delivery</th>
             {showWeight && <th className="px-3 py-2.5 font-medium w-28 text-right">Weight</th>}
             <th className="px-3 py-2.5 font-medium text-right whitespace-nowrap">Payout</th>
             <th className="px-3 py-2.5 font-medium text-right">Status</th>
@@ -51,7 +51,7 @@ export default function RoutingGroupTable({
         </thead>
         <tbody className="divide-y divide-border">
           {rows.length === 0 && (
-            <tr><td colSpan={showWeight ? 6 : 5} className="px-3 py-8 text-center text-muted-foreground">No destinations in this group yet. Use Add destination.</td></tr>
+            <tr><td colSpan={showWeight ? 6 : 5} className="px-3 py-8 text-center text-muted-foreground">No deliveries in this group yet. Use Add delivery.</td></tr>
           )}
           {rows.map((m, i) => {
             const active = m.active !== false;
@@ -113,7 +113,7 @@ export default function RoutingGroupTable({
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="end">
                       <DropdownMenuItem onSelect={() => onEdit(m)} className="gap-2"><Pencil className="w-3.5 h-3.5" />Edit configuration</DropdownMenuItem>
-                      {legacy && <DropdownMenuItem onSelect={() => onConvert(m)} className="gap-2"><Wand2 className="w-3.5 h-3.5" />Convert to destination</DropdownMenuItem>}
+                      {legacy && <DropdownMenuItem onSelect={() => onConvert(m)} className="gap-2"><Wand2 className="w-3.5 h-3.5" />Convert to delivery</DropdownMenuItem>}
                       <DropdownMenuItem onSelect={() => onToggle(m)} className="gap-2">
                         {active ? <><Pause className="w-3.5 h-3.5" />Pause</> : <><Play className="w-3.5 h-3.5" />Enable</>}
                       </DropdownMenuItem>

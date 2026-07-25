@@ -82,9 +82,13 @@ export default function CampaignRoutingTab({ campaign, method: sendMode = 'direc
           await api.entities.RouteGroup.create({ campaign_id: campaign.id, name: 'Group 1', method: engineMethod, order_index: 0, lifecycle: 'draft', active: false });
         }
       } else if (next === 'hybrid') {
-        // Keep existing groups; if only one, leave it (operator adds more).
-        if (groups.length === 0) {
-          await api.entities.RouteGroup.create({ campaign_id: campaign.id, name: 'Group 1', method: 'priority', order_index: 0, lifecycle: 'draft', active: false });
+        // Hybrid is a STRUCTURAL shape: deriveCampaignMethod only reports hybrid
+        // when more than one active group exists. Selecting Hybrid must therefore
+        // create the groups that make that shape real. Leaving a single group in
+        // place made the selection recompute straight back to Waterfall, so the
+        // Hybrid button never stuck.
+        for (let i = groups.length; i < 2; i++) {
+          await api.entities.RouteGroup.create({ campaign_id: campaign.id, name: `Group ${i + 1}`, method: 'priority', order_index: i, lifecycle: 'draft', active: false });
         }
       }
       await qc.invalidateQueries({ queryKey: ['routeGroups'] });
@@ -161,12 +165,12 @@ export default function CampaignRoutingTab({ campaign, method: sendMode = 'direc
     catch (e) { toast.error('Weight update failed: ' + (e?.message || 'error')); }
   }
   async function removeMember(m) {
-    try { await api.entities.RouteMember.delete(m.id); await qc.invalidateQueries({ queryKey: ['routeMembers'] }); toast.success('Destination removed'); }
+    try { await api.entities.RouteMember.delete(m.id); await qc.invalidateQueries({ queryKey: ['routeMembers'] }); toast.success('Delivery removed'); }
     catch (e) { toast.error('Delete failed: ' + (e?.message || 'error')); }
     setDeleteTarget(null);
   }
   async function convert(m) {
-    try { await convertLegacyMember(m, buyerName[m.buyer_id]); await qc.invalidateQueries({ queryKey: ['routeMembers'] }); await qc.invalidateQueries({ queryKey: ['deliveries'] }); await qc.invalidateQueries({ queryKey: ['subdeliveries'] }); toast.success('Converted to a reusable destination'); }
+    try { await convertLegacyMember(m, buyerName[m.buyer_id]); await qc.invalidateQueries({ queryKey: ['routeMembers'] }); await qc.invalidateQueries({ queryKey: ['deliveries'] }); await qc.invalidateQueries({ queryKey: ['subdeliveries'] }); toast.success('Converted to a reusable delivery'); }
     catch (e) { toast.error('Convert failed: ' + (e?.message || 'error')); }
   }
 
@@ -183,7 +187,7 @@ export default function CampaignRoutingTab({ campaign, method: sendMode = 'direc
         <div className="flex items-center justify-between gap-3 flex-wrap">
           <div>
             <div className="text-[12px] font-semibold uppercase tracking-wider text-muted-foreground">Routing method</div>
-            <p className="text-[11px] text-muted-foreground mt-0.5">How this campaign distributes leads across its destinations.</p>
+            <p className="text-[11px] text-muted-foreground mt-0.5">How this campaign distributes leads across its deliveries.</p>
           </div>
           <div className="flex items-center gap-1.5 flex-wrap">
             {CAMPAIGN_METHODS.map((opt) => {
@@ -226,7 +230,7 @@ export default function CampaignRoutingTab({ campaign, method: sendMode = 'direc
                     className="h-8 w-48 bg-background font-medium"
                   />
                 ) : (
-                  <span className="text-[13px] font-semibold text-foreground">Destinations</span>
+                  <span className="text-[13px] font-semibold text-foreground">Deliveries</span>
                 )}
                 {isHybrid && (
                   <div className="flex items-center gap-1">
@@ -239,7 +243,7 @@ export default function CampaignRoutingTab({ campaign, method: sendMode = 'direc
                 )}
               </div>
               <div className="flex items-center gap-2">
-                <Button size="sm" variant="outline" className="gap-1.5" onClick={() => setPickerGroup(g)}><Plus className="w-4 h-4" />Add destination</Button>
+                <Button size="sm" variant="outline" className="gap-1.5" onClick={() => setPickerGroup(g)}><Plus className="w-4 h-4" />Add delivery</Button>
                 {isHybrid && groups.length > 1 && (
                   <Button size="sm" variant="ghost" className="gap-1.5 text-muted-foreground hover:text-destructive" onClick={() => setDeleteGroup(g)}><Trash2 className="w-4 h-4" />Delete group</Button>
                 )}
@@ -265,7 +269,7 @@ export default function CampaignRoutingTab({ campaign, method: sendMode = 'direc
             {isHybrid && gi < groups.length - 1 && (
               <div className="flex items-center gap-2 rounded-md border border-border bg-card px-3 py-2 text-[12px] text-muted-foreground">
                 <CornerDownRight className="w-4 h-4 shrink-0" />
-                If a lead remains unsold from group {gi + 1} after each destination has fired, it falls through to group {gi + 2}.
+                If a lead remains unsold from group {gi + 1} after each delivery has fired, it falls through to group {gi + 2}.
               </div>
             )}
           </div>
@@ -295,8 +299,8 @@ export default function CampaignRoutingTab({ campaign, method: sendMode = 'direc
       <AlertDialog open={!!deleteTarget} onOpenChange={(o) => !o && setDeleteTarget(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Remove this destination from routing?</AlertDialogTitle>
-            <AlertDialogDescription>This removes the destination from this campaign&apos;s routing. The buyer and its delivery configuration are not deleted.</AlertDialogDescription>
+            <AlertDialogTitle>Remove this delivery from routing?</AlertDialogTitle>
+            <AlertDialogDescription>This removes the delivery from this campaign&apos;s routing. The buyer and its delivery configuration are not deleted.</AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
@@ -309,7 +313,7 @@ export default function CampaignRoutingTab({ campaign, method: sendMode = 'direc
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Delete this group?</AlertDialogTitle>
-            <AlertDialogDescription>This removes the group and its destinations from this campaign&apos;s routing. Buyers and their deliveries are not deleted.</AlertDialogDescription>
+            <AlertDialogDescription>This removes the group and its deliveries from this campaign&apos;s routing. Buyers and their deliveries are not deleted.</AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
