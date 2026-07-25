@@ -1,6 +1,6 @@
 import React, { useMemo } from 'react';
 import { TrendingUp, ArrowDown, Scale } from 'lucide-react';
-import { applyFilters, computeMetrics, money } from '@/lib/reportMetrics';
+import { applyFilters, computeMetrics, money, spendInWindow } from '@/lib/reportMetrics';
 import { ReportKpi, AINote } from '@/components/reports/reportViewAtoms';
 
 const GREEN = '#3DD68C';
@@ -32,7 +32,9 @@ const PnlLine = ({ item }) => {
 export default function PnlReport({ leads, adSpend, bankTx, filters }) {
   const { m, lines, grossProfit, netProfit, verified, gap } = useMemo(() => {
     const f = applyFilters(leads, filters);
-    const m = computeMetrics(f, adSpend);
+    // Spend carries its own date, so it has to be windowed separately or the
+    // statement charges a month of revenue against the whole spend history.
+    const m = computeMetrics(f, spendInWindow(adSpend, filters));
 
     const techTotal = Math.abs(bankTx.filter(t => t.category === 'tech').reduce((a, t) => a + num(t.amount), 0));
     const otherTotal = Math.abs(bankTx.filter(t => ['other', 'media', 'personal'].includes(t.category)).reduce((a, t) => a + num(t.amount), 0));
@@ -48,6 +50,7 @@ export default function PnlReport({ leads, adSpend, bankTx, filters }) {
       { label: 'Net Revenue', value: m.net_revenue, kind: 'total' },
       { label: 'Supplier Lead Cost', value: -(m.cost), kind: 'out' },
       { label: 'Ad Spend', value: -(m.ad_spend), kind: 'out' },
+      { label: 'Total Lead Cost', value: -(m.total_cost), kind: 'total' },
       { label: 'Gross Profit', value: grossProfit, kind: 'total' },
       { label: 'Tech & Tools', value: -techTotal, kind: 'out' },
       { label: 'Other Operating', value: -otherTotal, kind: 'out' },
@@ -62,8 +65,10 @@ export default function PnlReport({ leads, adSpend, bankTx, filters }) {
 
   return (
     <div className="space-y-5">
-      <div className="grid grid-cols-2 xl:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
         <ReportKpi label="Net Revenue" value={money(m.net_revenue)} hint="after returns" />
+        <ReportKpi label="Cost" value={money(m.total_cost)} hint="lead cost + ad spend" />
+        <ReportKpi label="CPL" value={money(m.blended_cpl)} hint={m.total_leads > 0 ? `over ${m.total_leads} leads` : 'no leads'} />
         <ReportKpi label="Gross Margin" value={grossMargin} hint={m.net_revenue > 0 ? undefined : 'no revenue basis'} />
         <ReportKpi label="Net Profit" value={money(netProfit)} tone={netProfit > 0 ? 'good' : undefined} hint={`bank-verified: ${money(verified)}`} />
         <ReportKpi

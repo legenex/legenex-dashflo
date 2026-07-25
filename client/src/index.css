@@ -172,6 +172,14 @@
 .bg-status-duplicate { background-color: rgba(49, 130, 189, 0.15); }
 .bg-status-processing { background-color: rgba(49, 130, 189, 0.15); }
 
+/* Status border colors. These were referenced by components (e.g. DocsUI warn
+   panels, PortalEnablementCard) before they existed, which silently rendered no
+   border and pushed one component to hardcode a raw hsl value. Defined here so
+   the semantic token is real and DESIGN-SYSTEM.md can be followed. */
+.border-status-sold { border-color: rgba(61, 214, 140, 0.4); }
+.border-status-unsold { border-color: rgba(250, 204, 20, 0.4); }
+.border-status-error { border-color: rgba(229, 72, 77, 0.4); }
+
 /* Aliased status backgrounds used by finance KPI gap chips */
 .status-sold-bg { background-color: rgba(61, 214, 140, 0.12); }
 .status-error-bg { background-color: rgba(229, 72, 77, 0.12); }

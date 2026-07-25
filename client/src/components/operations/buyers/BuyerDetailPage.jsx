@@ -7,6 +7,7 @@ import BuyerStatusPill from './BuyerStatusPill';
 import BuyerProfileTab from './BuyerProfileTab';
 import BuyerCoverageTab from './BuyerCoverageTab';
 import PortalEnablementCard from '@/components/shared/PortalEnablementCard';
+import BuyerDeliveriesCard from '@/components/shared/BuyerDeliveriesCard';
 import { billingTypeLabel } from '@/lib/billingTypes';
 
 const TABS = [
@@ -20,8 +21,13 @@ const money = (n) => `$${Number(n || 0).toFixed(2)}`;
 // Full-page buyer detail. Swapped in-place over the list by the parent page.
 // The Overview tab lays the reused profile/coverage editors into a card grid;
 // Leads and Costs are stubs until their data sources are wired.
-export default function BuyerDetailPage({ buyer, verticals, onBack }) {
-  const [tab, setTab] = useState('overview');
+export default function BuyerDetailPage({ buyer, verticals, onBack, initialTab }) {
+  // initialTab lets a deep link (e.g. the redirect from the old /buyers/:id
+  // URL) open straight onto the right tab. Unknown values fall back to
+  // Overview rather than rendering nothing.
+  const [tab, setTab] = useState(
+    TABS.some((t) => t.key === initialTab) ? initialTab : 'overview',
+  );
   const verticalName = verticals.find((v) => v.code === buyer.vertical)?.name || buyer.vertical || 'No vertical';
 
   // Wallet transactions for this buyer (real data where present).
@@ -95,6 +101,11 @@ export default function BuyerDetailPage({ buyer, verticals, onBack }) {
               />
             </div>
           </div>
+
+          {/* Buyer Deliveries: sits above Wallet because routing cannot work
+              until the buyer has somewhere to send leads. Same card is used in
+              Lead Distribution. */}
+          <BuyerDeliveriesCard buyerId={buyer.id} buyerName={buyer.company_name || buyer.name} />
 
           {/* Wallet & Billing + Payment Methods */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 items-start">

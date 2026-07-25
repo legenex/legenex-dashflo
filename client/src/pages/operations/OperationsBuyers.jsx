@@ -1,6 +1,7 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { api } from '@/api/client';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useSearchParams } from 'react-router-dom';
 import { useTheme } from '@/lib/theme';
 import { toast } from 'sonner';
 import SectionHeader from '@/components/shared/SectionHeader';
@@ -59,6 +60,7 @@ export default function OperationsBuyers() {
   const [actionState, setActionState] = useState(null); // { action, buyer, closesStates }
   const [deleteState, setDeleteState] = useState(null); // { buyer }
   const [drawerBuyerId, setDrawerBuyerId] = useState(null);
+  const [drawerTab, setDrawerTab] = useState(undefined);
   const [createOpen, setCreateOpen] = useState(false);
   const [manualRecomputing, setManualRecomputing] = useState(false);
   const [selectedIds, setSelectedIds] = useState(() => new Set());
@@ -87,6 +89,32 @@ export default function OperationsBuyers() {
 
   // Resolve the drawer's buyer from the live list so edits reflect immediately.
   const drawerBuyer = buyers.find((b) => b.id === drawerBuyerId) || null;
+
+  // Deep link support: /operations/buyers?buyer=<id>[&tab=<tab>] opens that
+  // buyer's detail directly. Mirrors the supplier deep link so cross-links from
+  // Lead Distribution, and the redirect from the old standalone /buyers/:id
+  // page, both land on the Operations surface where buyers are managed.
+  const [searchParams, setSearchParams] = useSearchParams();
+  useEffect(() => {
+    const id = searchParams.get('buyer');
+    if (id && drawerBuyerId !== id) {
+      setDrawerBuyerId(id);
+      setDrawerTab(searchParams.get('tab') || undefined);
+    }
+  }, [searchParams]);
+
+  // Clearing the detail also clears the deep link so a back navigation does not
+  // immediately reopen it.
+  const closeDetail = () => {
+    setDrawerBuyerId(null);
+    setDrawerTab(undefined);
+    if (searchParams.get('buyer')) {
+      const next = new URLSearchParams(searchParams);
+      next.delete('buyer');
+      next.delete('tab');
+      setSearchParams(next, { replace: true });
+    }
+  };
 
   const ctx = { cplRows };
 
@@ -181,6 +209,7 @@ export default function OperationsBuyers() {
 
   const openBuyer = (buyer) => {
     setDrawerBuyerId(buyer.id);
+    setDrawerTab(undefined);
   };
 
   const toggleSelect = (id) => setSelectedIds((prev) => {
@@ -240,7 +269,8 @@ export default function OperationsBuyers() {
       <BuyerDetailPage
         buyer={drawerBuyer}
         verticals={verticals}
-        onBack={() => setDrawerBuyerId(null)}
+        initialTab={drawerTab}
+        onBack={closeDetail}
       />
     );
   }

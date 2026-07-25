@@ -1,5 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { api } from '@/api/client';
+import { fetchAll } from '@/lib/fetchAll';
+import { spendRows } from '@/lib/reportMetrics';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
@@ -51,7 +53,7 @@ export default function Finances() {
   const { data: invoices = [] } = useQuery({ queryKey: ['all-invoices'], queryFn: () => api.entities.Invoice.list('-created_date', 500) });
   const { data: payments = [] } = useQuery({ queryKey: ['buyer-payments'], queryFn: () => api.entities.BuyerPayment.list('-paid_date', 500) });
   const { data: payouts = [] } = useQuery({ queryKey: ['supplier-payouts'], queryFn: () => api.entities.SupplierPayout.list('-created_date', 500) });
-  const { data: adSpend = [] } = useQuery({ queryKey: ['adspend'], queryFn: () => api.entities.AdSpend.list('-date', 2000) });
+  const { data: adSpend = [] } = useQuery({ queryKey: ['adspend'], queryFn: () => fetchAll((limit, skip) => api.entities.AdSpend.list('-date', limit, skip)) });
   const { data: txns = [] } = useQuery({ queryKey: ['bank-txns'], queryFn: () => api.entities.BankTransaction.list('-date', 500) });
   const { data: financeSettings } = useQuery({ queryKey: ['finance-settings'], queryFn: async () => (await loadFinanceSettings()).settings });
   const { data: mercuryCfg } = useQuery({
@@ -73,7 +75,7 @@ export default function Finances() {
     invoices: invoices.filter(i => inWin(i.created_date)),
     payments: payments.filter(p => inWin(p.paid_date)),
     payouts: payouts.filter(p => inWin(p.created_date)),
-    adSpend: adSpend.filter(a => inWin(a.date)),
+    adSpend: spendRows(adSpend).filter(a => inWin(a.date)),
     txns: txns.filter(t => inWin(t.date)),
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }), [leads, buyers, suppliers, invoices, payments, payouts, adSpend, txns, unmatchedIn, resolved, win]);

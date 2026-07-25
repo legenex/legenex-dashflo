@@ -1,11 +1,17 @@
 import React, { useMemo } from 'react';
 import { Button } from '@/components/ui/button';
 import { Download } from 'lucide-react';
-import { dailySeries, applyFilters, money, seriesWindow } from '@/lib/reportMetrics';
+import { dailySeries, applyFilters, money, seriesWindow, spendInWindow } from '@/lib/reportMetrics';
 import { ReportKpi, THead, TRow, AINote } from '@/components/reports/reportViewAtoms';
 
-const TEMPLATE = '1.3fr repeat(6, 1fr)';
-const COLS = ['Date', 'Leads', 'Sold', 'Revenue', 'Cost', 'Spend', 'Profit'];
+const TEMPLATE = '1.3fr repeat(7, 1fr)';
+const COLS = ['Date', 'Leads', 'Sold', 'Revenue', 'Cost', 'Spend', 'CPL', 'Profit'];
+
+// A day's true cost is what the leads cost plus what the ads cost, and CPL is
+// that over the leads received. Cost alone hides the ad side entirely on a Meta
+// sourced day, where the per-lead posted cost is zero.
+const dayCost = (r) => r.cost + r.spend;
+const dayCpl = (r) => (r.leads > 0 ? dayCost(r) / r.leads : 0);
 
 function fmtDay(key) {
   const d = new Date(`${key}T00:00:00`);
@@ -16,7 +22,7 @@ export default function DailyReport({ leads, adSpend, filters }) {
   // The table covers the selected date range. Without this it always showed the
   // trailing 14 days from today and went blank for any other period.
   const rows = useMemo(
-    () => dailySeries(applyFilters(leads, filters), adSpend, 14, seriesWindow(filters)),
+    () => dailySeries(applyFilters(leads, filters), spendInWindow(adSpend, filters), 14, seriesWindow(filters)),
     [leads, adSpend, filters]
   );
 
@@ -28,8 +34,10 @@ export default function DailyReport({ leads, adSpend, filters }) {
     const activeCount = rows.filter(r => r.leads > 0).length;
     const silent = rows.length - activeCount;
     const best = rows.reduce((b, r) => (r.leads > (b?.leads ?? -1) ? r : b), null);
+    const totalCost = rows.reduce((a, r) => a + dayCost(r), 0);
     return {
-      totalLeads, totalSold, totalProfit, activeCount, silent,
+      totalLeads, totalSold, totalProfit, activeCount, silent, totalCost,
+      cpl: totalLeads > 0 ? totalCost / totalLeads : 0,
       avgLeads: totalLeads / n,
       avgProfit: totalProfit / n,
       best,
@@ -42,7 +50,7 @@ export default function DailyReport({ leads, adSpend, filters }) {
   const exportCsv = () => {
     const header = COLS.join(',');
     const lines = [...rows].reverse().map(r =>
-      [fmtDay(r.date), r.leads, r.sold, r.revenue.toFixed(2), r.cost.toFixed(2), r.spend.toFixed(2), r.profit.toFixed(2)].join(',')
+      [fmtDay(r.date), r.leads, r.sold, r.revenue.toFixed(2), r.cost.toFixed(2), r.spend.toFixed(2), dayCpl(r).toFixed(2), r.profit.toFixed(2)].join(',')
     );
     const blob = new Blob([[header, ...lines].join('\n')], { type: 'text/csv' });
     const url = URL.createObjectURL(blob);
@@ -53,7 +61,9 @@ export default function DailyReport({ leads, adSpend, filters }) {
 
   return (
     <div className="space-y-5">
-      <div className="grid grid-cols-2 xl:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
+        <ReportKpi label="Cost" value={money(stats.totalCost)} hint="lead cost + ad spend" />
+        <ReportKpi label="CPL" value={money(stats.cpl)} hint={stats.totalLeads > 0 ? `over ${stats.totalLeads} leads` : 'no leads'} />
         <ReportKpi
           label="Best Day"
           value={bestDate}
@@ -109,6 +119,7 @@ export default function DailyReport({ leads, adSpend, filters }) {
                 money(r.revenue),
                 money(r.cost),
                 money(r.spend),
+                money(dayCpl(r)),
                 money(r.profit),
               ]}
             />

@@ -1,7 +1,7 @@
 // Financial-truth aggregation for the main Overview dashboard.
 // Reuses reconcile() / workbench() from financeMetrics so numbers match the Finances section.
 import { reconcile, workbench, unmatched } from '@/lib/financeMetrics';
-import { leadField, leadEventInstant, leadEventDayKey } from '@/lib/reportMetrics';
+import { leadField, leadEventInstant, leadEventDayKey, spendRows } from '@/lib/reportMetrics';
 import { format, isWithinInterval, startOfDay, subDays } from 'date-fns';
 
 function num(v) { const n = Number(v); return isNaN(n) ? 0 : n; }
@@ -9,12 +9,15 @@ const inWin = (d, win) => d && isWithinInterval(new Date(d), { start: win.start,
 
 // The full financial picture for a period window.
 export function financialTruth({ leads, buyers, suppliers, invoices, payments, payouts, adSpend, txns }, win) {
+  // Account-level rows only. Campaign and ad rows are a drill-down of the same
+  // money, so summing all three levels counted Meta spend two or three times.
+  const acctSpend = spendRows(adSpend || []);
   const wLeads = leads.filter(l => {
     const t = leadEventInstant(l);
     return t instanceof Date && !isNaN(t.getTime()) && t >= win.start && t <= win.end;
   });
 
-  const reconRows = reconcile({ leads: wLeads, buyers, suppliers, invoices, payments, payouts, adSpend });
+  const reconRows = reconcile({ leads: wLeads, buyers, suppliers, invoices, payments, payouts, adSpend: acctSpend });
   const wb = workbench(reconRows, invoices);
 
   // Revenue: booked (from leads) vs verified (matched income / payments received).
@@ -23,7 +26,7 @@ export function financialTruth({ leads, buyers, suppliers, invoices, payments, p
 
   // Supplier cost: accrued (lead cost + tracked spend) vs paid (payout paid_amount).
   const accruedCost = wLeads.reduce((a, l) => a + num(l.cost), 0);
-  const trackedSpend = adSpend.filter(a => inWin(a.date, win)).reduce((a, r) => a + num(r.spend), 0);
+  const trackedSpend = acctSpend.filter(a => inWin(a.date, win)).reduce((a, r) => a + num(r.spend), 0);
   const paidPayouts = payouts.reduce((a, p) => a + num(p.paid_amount), 0);
 
   // Ad spend: tracked (synced) vs paid (bank money-out categorised media).
@@ -130,7 +133,7 @@ export function dailyFinance({ wLeads, payments, adSpend }, win) {
     const dayStr = format(day, 'MMM dd');
     const booked = wLeads.filter(l => { const d = leadEventInstant(l); return d >= day && d < next; }).reduce((a, l) => a + num(l.revenue), 0);
     const verified = (payments || []).filter(p => { const d = p.paid_date ? new Date(p.paid_date) : null; return d && d >= day && d < next; }).reduce((a, p) => a + num(p.amount), 0);
-    const spend = (adSpend || []).filter(a => { const d = a.date ? new Date(a.date) : null; return d && d >= day && d < next; }).reduce((a, r) => a + num(r.spend), 0);
+    const spend = spendRows(adSpend || []).filter(a => { const d = a.date ? new Date(a.date) : null; return d && d >= day && d < next; }).reduce((a, r) => a + num(r.spend), 0);
     days.push({ date: dayStr, Booked: Math.round(booked), Verified: Math.round(verified), Spend: Math.round(spend) });
   }
   return days;

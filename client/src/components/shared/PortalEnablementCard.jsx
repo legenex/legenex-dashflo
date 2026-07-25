@@ -64,7 +64,7 @@ export default function PortalEnablementCard({
   return (
     <div className="space-y-4">
       {!hasContact && (
-        <div className="flex gap-2.5 rounded-lg border border-[hsl(38_80%_57%)]/40 bg-status-unsold p-3">
+        <div className="flex gap-2.5 rounded-lg border border-status-unsold bg-status-unsold p-3">
           <AlertTriangle className="w-4 h-4 status-unsold shrink-0 mt-0.5" />
           <p className="text-[12px] text-foreground/90 leading-relaxed">
             Add a contact name and email above before enabling the {label} and sending an invite.

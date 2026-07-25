@@ -3,14 +3,22 @@ import { api } from '@/api/client';
 import { useQuery } from '@tanstack/react-query';
 import { ArrowLeft, Megaphone } from 'lucide-react';
 import SupplierStatusPill from './SupplierStatusPill';
-import SupplierChannelsCell from './SupplierChannelsCell';
 import SupplierPayoutTab from './SupplierPayoutTab';
 import SupplierNotificationsTab from './SupplierNotificationsTab';
 import SupplierSourcesTab from './SupplierSourcesTab';
 import PortalEnablementCard from '@/components/shared/PortalEnablementCard';
+import PostingSpecs from '@/components/suppliers/PostingSpecs';
+import SupplierMetaCosts from '@/components/suppliers/SupplierMetaCosts';
 
+// Operations owns the supplier surface. These are the tabs that previously only
+// existed on the standalone /suppliers/:id page, brought here so a supplier is
+// managed in one place rather than two.
 const TABS = [
   { key: 'overview', label: 'Overview' },
+  { key: 'sources', label: 'Sources' },
+  { key: 'adspend', label: 'Ad Spend' },
+  { key: 'specs', label: 'Posting Specs' },
+  { key: 'portal', label: 'Portal' },
   { key: 'leads', label: 'Leads' },
 ];
 
@@ -20,13 +28,30 @@ const money = (n) => `$${Number(n || 0).toFixed(2)}`;
 // parent page. Overview lays the reused payout + notifications editors into a
 // two-card grid, with the sources/campaigns list full-width below. Leads is a
 // stub until its data source is wired.
-export default function SupplierDetailPage({ supplier, onBack }) {
-  const [tab, setTab] = useState('overview');
+export default function SupplierDetailPage({ supplier, onBack, initialTab }) {
+  // initialTab lets a deep link (e.g. the redirect from the old
+  // /suppliers/:id?tab=sources URL) open straight onto the right tab. Unknown
+  // values fall back to Overview rather than rendering nothing.
+  const [tab, setTab] = useState(
+    TABS.some((t) => t.key === initialTab) ? initialTab : 'overview',
+  );
 
   const { data: sources = [] } = useQuery({
     queryKey: ['supplier-sources', supplier.id],
     queryFn: () => api.entities.SupplierSource.filter({ supplier_id: supplier.id }, 'source_code', 500),
   });
+
+  // Data the Posting Specs tab needs. Same query keys as elsewhere so these are
+  // served from cache when the operator has already loaded them.
+  const { data: apiKeys = [] } = useQuery({ queryKey: ['api-keys'], queryFn: () => api.entities.ApiKey.list() });
+  const { data: campaigns = [] } = useQuery({ queryKey: ['campaigns'], queryFn: () => api.entities.Campaign.list() });
+  const { data: customFields = [] } = useQuery({ queryKey: ['custom-fields'], queryFn: () => api.entities.CustomField.list('sort_order', 500) });
+  const { data: verticals = [] } = useQuery({ queryKey: ['verticals'], queryFn: () => api.entities.Vertical.list() });
+  const { data: buyers = [] } = useQuery({ queryKey: ['buyers'], queryFn: () => api.entities.Buyer.list() });
+  const { data: appSettingsArr = [] } = useQuery({ queryKey: ['app-settings'], queryFn: () => api.entities.AppSettings.list() });
+
+  const apiKey = apiKeys.find((k) => k.supplier_id === supplier.id || k.supplier_name === supplier.name);
+  const baseUrl = appSettingsArr[0]?.public_base_url || 'https://api.legenex.com';
 
   return (
     <div className="flex flex-col gap-4">
@@ -70,35 +95,54 @@ export default function SupplierDetailPage({ supplier, onBack }) {
       {tab === 'overview' && (
         <div className="space-y-5">
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 items-start">
-            {/* Source Profile — reuses the existing editable payout form */}
+            {/* Source Profile: reuses the existing editable payout form */}
             <div className="rounded-lg border border-border bg-card p-5">
               <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-4">Source Profile</p>
               <SupplierPayoutTab supplier={supplier} />
             </div>
 
-            {/* Source Portal — access + invite, then notifications editor */}
+            {/* Notifications: the alert routing editor for this source */}
             <div className="rounded-lg border border-border bg-card p-5">
-              <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-4">Source Portal</p>
-              <PortalEnablementCard
-                record={supplier}
-                entityName="Supplier"
-                contactName={supplier.contact_name}
-                contactEmail={supplier.email}
-                previewPath={`/supplier-portal?supplier_id=${encodeURIComponent(supplier.id)}`}
-                queryKey={['op-suppliers']}
-                label="source portal"
-              />
-              <div className="mt-5 pt-5 border-t border-border">
-                <SupplierNotificationsTab supplier={supplier} />
-              </div>
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-4">Notifications</p>
+              <SupplierNotificationsTab supplier={supplier} />
             </div>
           </div>
+        </div>
+      )}
 
-          {/* Campaigns / sources this supplier feeds, full width */}
-          <div className="rounded-lg border border-border bg-card p-5">
-            <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-4">Campaigns &amp; Sources</p>
-            <SupplierSourcesTab supplier={supplier} />
-          </div>
+      {tab === 'sources' && (
+        <div className="rounded-lg border border-border bg-card p-5">
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-4">Supplier Sources</p>
+          <SupplierSourcesTab supplier={supplier} />
+        </div>
+      )}
+
+      {tab === 'adspend' && <SupplierMetaCosts supplier={supplier} />}
+
+      {tab === 'specs' && (
+        <PostingSpecs
+          supplier={supplier}
+          apiKey={apiKey}
+          customFields={customFields}
+          campaigns={campaigns}
+          verticals={verticals}
+          buyers={buyers}
+          baseUrl={baseUrl}
+        />
+      )}
+
+      {tab === 'portal' && (
+        <div className="rounded-lg border border-border bg-card p-5">
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-4">Source Portal</p>
+          <PortalEnablementCard
+            record={supplier}
+            entityName="Supplier"
+            contactName={supplier.contact_name}
+            contactEmail={supplier.email}
+            previewPath={`/supplier-portal?supplier_id=${encodeURIComponent(supplier.id)}`}
+            queryKey={['op-suppliers']}
+            label="source portal"
+          />
         </div>
       )}
 

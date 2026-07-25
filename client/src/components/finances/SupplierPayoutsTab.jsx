@@ -4,14 +4,13 @@ import { isWithinInterval } from 'date-fns';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { motion } from 'framer-motion';
 import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { Plus, Download, Sparkles } from 'lucide-react';
 import { toast } from 'sonner';
-import { money } from '@/lib/reportMetrics';
+import { money, spendRows } from '@/lib/reportMetrics';
 import { downloadCsv } from '@/lib/csv';
 import { Panel, THead, rise } from '@/components/finances/financeAtoms';
 import { StatChip } from '@/components/finances/financeUi';
@@ -27,7 +26,7 @@ export default function SupplierPayoutsTab({ suppliers = [], leads = [], adSpend
   const inWin = (d) => !win || (d && isWithinInterval(new Date(d), { start: win.start, end: win.end }));
   const payouts = useMemo(() => allPayouts.filter(p => inWin(p.created_date)), [allPayouts, win]);
   const winLeads = useMemo(() => leads.filter(l => inWin(l.created_date)), [leads, win]);
-  const winSpend = useMemo(() => adSpend.filter(a => inWin(a.date)), [adSpend, win]);
+  const winSpend = useMemo(() => spendRows(adSpend).filter(a => inWin(a.date)), [adSpend, win]);
 
   // Per-supplier reconciliation: declared cost (lead cost), ad spend, true cost, payouts issued/paid/owing.
   const rows = useMemo(() => {

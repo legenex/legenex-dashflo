@@ -1,6 +1,7 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { api } from '@/api/client';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useSearchParams } from 'react-router-dom';
 import { useTheme } from '@/lib/theme';
 import { toast } from 'sonner';
 import { Plus } from 'lucide-react';
@@ -58,6 +59,30 @@ export default function OperationsSuppliers() {
   const [createOpen, setCreateOpen] = useState(false);
   const [selectedIds, setSelectedIds] = useState(() => new Set());
   const [bulkDeleting, setBulkDeleting] = useState(false);
+
+  // Deep link support: /operations/suppliers?supplier=<id>[&tab=<tab>] opens
+  // that supplier's detail directly. This is what cross-links from Lead
+  // Distribution point at, so Operations stays the one place suppliers are
+  // managed instead of the older standalone /suppliers/:id page.
+  const [searchParams, setSearchParams] = useSearchParams();
+  useEffect(() => {
+    const id = searchParams.get('supplier');
+    if (id && drawer?.supplierId !== id) {
+      setDrawer({ supplierId: id, tab: searchParams.get('tab') || undefined });
+    }
+  }, [searchParams]);
+
+  // Clearing the detail also clears the deep link so a back navigation does not
+  // immediately reopen it.
+  const closeDetail = () => {
+    setDrawer(null);
+    if (searchParams.get('supplier')) {
+      const next = new URLSearchParams(searchParams);
+      next.delete('supplier');
+      next.delete('tab');
+      setSearchParams(next, { replace: true });
+    }
+  };
 
   const { data: suppliers = [] } = useQuery({
     queryKey: ['op-suppliers'],
@@ -197,7 +222,8 @@ export default function OperationsSuppliers() {
     return (
       <SupplierDetailPage
         supplier={drawerSupplier}
-        onBack={() => setDrawer(null)}
+        initialTab={drawer?.tab}
+        onBack={closeDetail}
       />
     );
   }

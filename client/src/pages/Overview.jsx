@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { api } from '@/api/client';
+import { fetchAll } from '@/lib/fetchAll';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
@@ -104,7 +105,7 @@ export default function Overview() {
   const { data: invoices = [] } = useQuery({ queryKey: ['all-invoices'], queryFn: () => api.entities.Invoice.list('-created_date', 500) });
   const { data: payments = [] } = useQuery({ queryKey: ['buyer-payments'], queryFn: () => api.entities.BuyerPayment.list('-paid_date', 500) });
   const { data: payouts = [] } = useQuery({ queryKey: ['supplier-payouts'], queryFn: () => api.entities.SupplierPayout.list('-created_date', 500) });
-  const { data: adSpend = [] } = useQuery({ queryKey: ['adspend'], queryFn: () => api.entities.AdSpend.list('-date', 2000) });
+  const { data: adSpend = [] } = useQuery({ queryKey: ['adspend'], queryFn: () => fetchAll((limit, skip) => api.entities.AdSpend.list('-date', limit, skip)) });
   const { data: txns = [] } = useQuery({ queryKey: ['bank-txns'], queryFn: () => api.entities.BankTransaction.list('-date', 500) });
   const { data: errors = [] } = useQuery({ queryKey: ['ov-errors'], queryFn: () => api.entities.ErrorLog.list('-created_date', 500) });
   const { data: integrations = [] } = useQuery({ queryKey: ['integration-configs'], queryFn: () => api.entities.IntegrationConfig.list() });

@@ -1,6 +1,6 @@
 import React, { useMemo } from 'react';
 import { Link } from 'react-router-dom';
-import { applyFilters, computeMetrics, money } from '@/lib/reportMetrics';
+import { applyFilters, computeMetrics, money, spendInWindow } from '@/lib/reportMetrics';
 import { ReportKpi, THead, TRow, AINote } from '@/components/reports/reportViewAtoms';
 import { Button } from '@/components/ui/button';
 
@@ -55,15 +55,20 @@ const PlatformCard = ({ platform, connected, spend, leadCount, revenue }) => {
 export default function AdReport({ adSpend, adMappings, integrations, leads, filters }) {
   const data = useMemo(() => {
     const f = applyFilters(leads, filters);
-    const m = computeMetrics(f, adSpend);
-    const totalSpend = adSpend.reduce((a, r) => a + num(r.spend), 0);
+    // spendInWindow does two things this report was missing: it drops campaign
+    // and ad rows (which are a drill-down of the same money, so summing them
+    // alongside account rows double counted), and it honours the selected date
+    // range. Every figure below is an aggregate, so all of them use it.
+    const windowSpend = spendInWindow(adSpend, filters);
+    const m = computeMetrics(f, windowSpend);
+    const totalSpend = windowSpend.reduce((a, r) => a + num(r.spend), 0);
 
     const connectedSet = new Set(PLATFORMS.filter(p => integrations.find(c => c.name === p.key)).map(p => p.key));
     const syncedCount = connectedSet.size;
 
     const platformSpend = {};
     for (const p of PLATFORMS) platformSpend[p.key] = 0;
-    for (const r of adSpend) {
+    for (const r of windowSpend) {
       const key = r.platform || 'meta';
       if (platformSpend[key] != null) platformSpend[key] += num(r.spend);
     }
@@ -76,16 +81,16 @@ export default function AdReport({ adSpend, adMappings, integrations, leads, fil
       } catch { /* ignore */ }
     }
 
-    return { f, m, totalSpend, connectedSet, syncedCount, platformSpend, capiEvents };
+    return { f, m, totalSpend, connectedSet, syncedCount, platformSpend, capiEvents, windowSpend };
   }, [adSpend, adMappings, integrations, leads, filters]);
 
-  const { f, m, totalSpend, connectedSet, syncedCount, platformSpend, capiEvents } = data;
+  const { f, m, totalSpend, connectedSet, syncedCount, platformSpend, capiEvents, windowSpend } = data;
 
   const blendedCpl = totalSpend > 0 ? money(totalSpend / Math.max(f.length, 1)) : '-';
   const roas = totalSpend > 0 ? (m.revenue / totalSpend).toFixed(2) : '-';
 
   const mappingRows = adMappings.map((mp) => {
-    const rows = adSpend.filter(r => r.mapping_id === mp.id);
+    const rows = windowSpend.filter(r => r.mapping_id === mp.id);
     const spend = rows.reduce((a, r) => a + num(r.spend), 0);
     const leadCount = rows.reduce((a, r) => a + num(r.leads), 0);
     const trueCpl = leadCount > 0 ? money(spend / leadCount) : '-';

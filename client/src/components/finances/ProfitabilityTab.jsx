@@ -9,7 +9,7 @@ import {
 import { AlertTriangle, TrendingUp, BarChart3 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Panel } from '@/components/finances/financeAtoms';
-import { money } from '@/lib/reportMetrics';
+import { money, spendRows } from '@/lib/reportMetrics';
 import { buildProfitability, breakeven, breakevenCurve, monthlySeries } from '@/lib/profitability';
 
 const VIEWS = [
@@ -47,7 +47,7 @@ export default function ProfitabilityTab({ win, leads = [], adSpend = [], settin
 
   const txns = useMemo(() => allTxns.filter((t) => inWin(t.date)), [allTxns, win]);
   const winLeads = useMemo(() => leads.filter((l) => inWin(l.created_date)), [leads, win]);
-  const winAdSpend = useMemo(() => adSpend.filter((a) => inWin(a.date)), [adSpend, win]);
+  const winAdSpend = useMemo(() => spendRows(adSpend).filter((a) => inWin(a.date)), [adSpend, win]);
 
   const model = useMemo(
     () => buildProfitability({ txns, leads: winLeads, adSpend: winAdSpend, mappings, settings }),

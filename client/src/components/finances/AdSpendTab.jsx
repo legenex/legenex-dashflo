@@ -1,5 +1,6 @@
 import React, { useMemo } from 'react';
 import { api } from '@/api/client';
+import { fetchAll } from '@/lib/fetchAll';
 import { isWithinInterval } from 'date-fns';
 import { useQuery } from '@tanstack/react-query';
 import { motion } from 'framer-motion';
@@ -24,7 +25,7 @@ const uniq = (arr) => Array.from(new Set(arr.filter(Boolean)));
 // (have an AdSpendMapping) or have spend in the window are shown, each broken
 // down by supplier (true CPL) and by ad account / source.
 export default function AdSpendTab({ win }) {
-  const { data: allSpend = [] } = useQuery({ queryKey: ['adspend'], queryFn: () => api.entities.AdSpend.list('-date', 2000) });
+  const { data: allSpend = [] } = useQuery({ queryKey: ['adspend'], queryFn: () => fetchAll((limit, skip) => api.entities.AdSpend.list('-date', limit, skip)) });
   const { data: allLeads = [] } = useQuery({ queryKey: ['report-leads'], queryFn: () => api.entities.Lead.list('-created_date', 2000) });
   const { data: mappings = [] } = useQuery({ queryKey: ['adspend-mappings'], queryFn: () => api.entities.AdSpendMapping.list() });
 

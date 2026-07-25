@@ -28,7 +28,7 @@ export function reconcile({ leads, buyers, suppliers, invoices, payments, payout
   for (const s of suppliers) {
     const sLeads = leads.filter(l => l.supplier_name === s.name);
     const cost = sLeads.reduce((a, l) => a + num(l.cost), 0);
-    const spend = adSpend.filter(a => a.supplier_name === s.name).reduce((a, r) => a + num(r.spend), 0);
+    const spend = (adSpend || []).filter(a => (!a.level || a.level === 'account') && a.supplier_name === s.name).reduce((a, r) => a + num(r.spend), 0);
     const trueCost = cost + spend;
     const sPayouts = payouts.filter(p => p.supplier_name === s.name);
     const invoiced = sPayouts.reduce((a, p) => a + num(p.amount), 0);
