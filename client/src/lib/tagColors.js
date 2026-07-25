@@ -128,3 +128,39 @@ export const TRIGGER_TAG = {
 export function triggerTagClass(triggerKey) {
   return (TRIGGER_TAG[triggerKey] && TRIGGER_TAG[triggerKey].className) || TAG_NEUTRAL;
 }
+
+// Audit harness verdict pill classes. Centralised here (this module is exempt
+// from the design-token gate) so the Audits page carries no raw palette classes.
+const VERDICT_TAG = {
+  pass: 'bg-green-500/15 text-green-400 border border-green-500/40',
+  fail: 'bg-rose-500/15 text-rose-300 border border-rose-500/40',
+  warn: 'bg-amber-500/15 text-amber-300 border border-amber-500/40',
+  needs_env: 'bg-blue-500/15 text-blue-300 border border-blue-500/40',
+  skip: 'tag-neutral',
+};
+export function verdictTagClass(v) {
+  return VERDICT_TAG[String(v || '').toLowerCase()] || 'bg-muted text-muted-foreground';
+}
+
+// Audit finding severity pill classes.
+const SEVERITY_TAG = {
+  critical: 'bg-rose-500/15 text-rose-300 border border-rose-500/40',
+  high: 'bg-orange-500/15 text-orange-300 border border-orange-500/40',
+  medium: 'bg-amber-500/15 text-amber-300 border border-amber-500/40',
+  low: 'bg-blue-500/15 text-blue-300 border border-blue-500/40',
+  info: 'tag-neutral',
+};
+export function severityTagClass(s) {
+  return SEVERITY_TAG[String(s || '').toLowerCase()] || 'tag-neutral';
+}
+
+// Text-only colour for an audit verdict (used on the roll-up chip icons).
+const VERDICT_TEXT = {
+  pass: 'text-green-400',
+  fail: 'text-rose-300',
+  warn: 'text-amber-300',
+  needs_env: 'text-blue-300',
+};
+export function verdictTextClass(v) {
+  return VERDICT_TEXT[String(v || '').toLowerCase()] || 'text-muted-foreground';
+}

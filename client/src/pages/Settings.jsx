@@ -17,6 +17,7 @@ import SettingsKnowledgeBase from '@/components/settings/SettingsKnowledgeBase';
 import SettingsBilling from '@/components/settings/SettingsBilling';
 import SettingsIgnoreList from '@/components/settings/SettingsIgnoreList';
 import SettingsProfile from '@/components/settings/SettingsProfile';
+import SettingsAudits from '@/components/settings/SettingsAudits';
 import ErrorLogs from '@/pages/ErrorLogs';
 
 // NAV is built inside the component so the admin-only Inbound Webhooks item can
@@ -36,6 +37,7 @@ function buildNav(isAdmin) {
       { key: 'apikeys', label: 'API Keys' },
       ...(isAdmin ? [{ key: 'inbound-webhooks', label: 'Inbound Webhooks' }] : []),
       { key: 'errors', label: 'Error Logs' },
+      { key: 'audits', label: 'Audits' },
       { key: 'knowledge', label: 'Knowledge Base' },
       { key: 'billing', label: 'Billing and Plan' },
     ] },
@@ -54,6 +56,7 @@ const PANELS = {
   apikeys: { title: 'API Keys', subtitle: 'Gateway and supplier keys.', node: <SettingsApiKeys /> },
   'inbound-webhooks': { title: 'Inbound Webhooks', subtitle: 'LeadByte outcome webhook routes.', node: <SettingsInboundWebhooks />, adminOnly: true },
   errors: { title: 'Error Logs', subtitle: 'Pipeline failures and reasons.', node: <ErrorLogs embedded /> },
+  audits: { title: 'Audits', subtitle: 'Read-only evaluation harness: runtime probes and findings.', node: <SettingsAudits /> },
   knowledge: { title: 'Knowledge Base', subtitle: 'Docs the AI assistant reads.', node: <SettingsKnowledgeBase /> },
   billing: { title: 'Billing and Plan', subtitle: 'Plan and billing.', node: <SettingsBilling /> },
   adaptive: { title: 'Ignore List', subtitle: 'Fields excluded from cataloging.', node: <SettingsIgnoreList /> },
