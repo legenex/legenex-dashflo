@@ -1,3 +1,5 @@
+import { requireUser, HttpError } from './_runtime.js';
+
 // generateBillingRun
 //
 // Computes a billing run for one counterparty (a buyer or a supplier) over one
@@ -11,7 +13,7 @@
 // - commit=true: write the BillingRun and its BillingLineItem rows, respecting
 //   idempotency (see the double-billing guard below).
 //
-// Access rules are copied from operationsData exactly (operator only).
+// Access rules are operator only.
 
 const OPERATOR_PERMISSION_KEYS = ['leads', 'reports', 'overview', 'finances', 'distribution', 'operations'];
 
@@ -140,11 +142,9 @@ function lineDescription(vertical, unitPrice) {
 
 export default async function generateBillingRun(ctx) {
   try {
+    // ── AUTH GUARD (operator only) ───────────────────────────────────────
+    const user = requireUser(ctx);
     const db = ctx.db;
-
-    // ── AUTH GUARD (copied from operationsData exactly) ──────────────────
-    const user = ctx.user;
-    if (!user) return ctx.json({ error: 'Unauthorized' }, 401);
 
     const record = await db.entities.User.get(user.id).catch(() => null);
     const caller = record || user;
@@ -397,6 +397,10 @@ export default async function generateBillingRun(ctx) {
       const supPayoutType = supplierRecord.payout_type || 'None';
       const supPayoutValue = Number(supplierRecord.payout_value) || 0;
       let sourceFallbackUsed = 0;
+      // Profit share accumulators. Settled once after the per-lead loop.
+      let profitPctRate = 0;
+      let profitPctLeads = 0;
+      let profitPctRevenue = 0;
 
       for (const e of enriched) {
         if (e.returned) continue; // not billable
@@ -409,12 +413,27 @@ export default async function generateBillingRun(ctx) {
 
         if (source) {
           sourceCode = source.source_code || null;
-          if (source.pricing_model === 'rev_share') {
+          // These values must match the SupplierSource pricing_model enum
+          // exactly: none | flat_cpl | profit_pct | revenue_pct | tiered.
+          // This previously branched on 'rev_share' and read
+          // source.rev_share_pct, neither of which exists, so every Revenue %
+          // and Profit % source fell through unpriced and was billed on the
+          // supplier-level fallback instead of its own configured rate.
+          if (source.pricing_model === 'revenue_pct') {
             const rev = Number(e.lead.revenue) || 0;
-            unitPrice = rev * (Number(source.rev_share_pct) || 0) / 100;
+            unitPrice = rev * (Number(source.revenue_pct) || 0) / 100;
           } else if (source.pricing_model === 'flat_cpl') {
             unitPrice = Number(source.flat_cpl);
             if (isNaN(unitPrice)) unitPrice = null;
+          } else if (source.pricing_model === 'profit_pct') {
+            // Profit share is a PERIOD calculation, not a per-lead one: profit
+            // is the period's revenue minus the period's cost, and cost for a
+            // Meta sourced supplier is its attributed ad spend, which no single
+            // lead carries. Defer it and settle once after this loop.
+            profitPctRate = Number(source.profit_pct) || 0;
+            profitPctLeads += 1;
+            profitPctRevenue += Number(e.lead.revenue) || 0;
+            continue;
           } else if (source.pricing_model === 'tiered') {
             const rules = Array.isArray(source.tier_rules) ? source.tier_rules : parseJsonArray(source.tier_rules);
             for (const rule of rules) {
@@ -437,11 +456,13 @@ export default async function generateBillingRun(ctx) {
             const rev = Number(e.lead.revenue) || 0;
             unitPrice = rev * supPayoutValue / 100;
           } else if (supPayoutType === 'Profit %') {
-            // Profit is not resolvable here without cost data, so treat the
-            // supplier-level Profit % as applied to captured revenue as a
-            // best-effort payout. This mirrors Revenue % at this stage.
-            const rev = Number(e.lead.revenue) || 0;
-            unitPrice = rev * supPayoutValue / 100;
+            // Same deferral as the source-level case: settled once on period
+            // totals after the loop, against real ad spend, rather than being
+            // silently treated as Revenue % per lead.
+            profitPctRate = supPayoutValue;
+            profitPctLeads += 1;
+            profitPctRevenue += Number(e.lead.revenue) || 0;
+            continue;
           }
         }
 
@@ -471,6 +492,64 @@ export default async function generateBillingRun(ctx) {
         }
         g.lead_count += 1;
         g.amount = round2(g.amount + unitPrice);
+      }
+
+      // ── PROFIT SHARE SETTLEMENT ──────────────────────────────────────────
+      // Settled once on period totals: payout = rate% x (revenue - cost).
+      // Cost is the supplier's attributed ad spend for the period. Account rows
+      // are the per-account daily rollup; where a day has no account row its
+      // campaign rows are summed to reconstruct it, which is exact and avoids
+      // both double counting and losing days the sync has not rolled up yet.
+      if (profitPctLeads > 0) {
+        const spendRowsAll = await loadAll(svc.entities.AdSpend, {});
+        const supKey = String(supplierRecord.name || '').trim().toLowerCase();
+        const inPeriod = (d) => d >= periodStart && d <= periodEnd;
+        const matches = (r) => {
+          const k = String(r.supplier_key ?? r.supplier_name ?? '').trim().toLowerCase();
+          if (!k || !supKey) return false;
+          return k === supKey || k.includes(supKey) || supKey.includes(k);
+        };
+
+        const accountKeys = new Set();
+        let cost = 0;
+        for (const r of spendRowsAll) {
+          const d = String(r.date || '').slice(0, 10);
+          if (!inPeriod(d) || !matches(r)) continue;
+          if (!r.level || r.level === 'account') {
+            accountKeys.add(`${r.ad_account_id || ''}|${d}`);
+            cost += Number(r.spend) || 0;
+          }
+        }
+        for (const r of spendRowsAll) {
+          const d = String(r.date || '').slice(0, 10);
+          if (!inPeriod(d) || !matches(r)) continue;
+          if (r.level !== 'campaign') continue;
+          if (accountKeys.has(`${r.ad_account_id || ''}|${d}`)) continue;
+          cost += Number(r.spend) || 0;
+        }
+
+        const profit = round2(profitPctRevenue - cost);
+        const payout = round2(profit * profitPctRate / 100);
+
+        if (payout > 0) {
+          gross += payout;
+          groups.set('__profit_share__', {
+            vertical: null,
+            state: null,
+            campaign_id: null,
+            supplier_id: null,
+            source_code: 'PROFIT_SHARE',
+            unit_price: payout,
+            lead_count: profitPctLeads,
+            returns: 0,
+            amount: payout,
+          });
+          notes.push(`Profit share: ${profitPctRate}% of ${round2(profit)} profit (${round2(profitPctRevenue)} revenue less ${round2(cost)} ad spend) across ${profitPctLeads} leads.`);
+        } else {
+          // A loss-making period owes nothing. Recorded rather than billed, so
+          // the run does not look like it silently skipped the supplier.
+          notes.push(`Profit share not billed: period profit is ${round2(profit)} (${round2(profitPctRevenue)} revenue less ${round2(cost)} ad spend) across ${profitPctLeads} leads.`);
+        }
       }
 
       if (sourceFallbackUsed > 0) {
@@ -548,7 +627,7 @@ export default async function generateBillingRun(ctx) {
     };
 
     if (!commit) {
-      return summary;
+      return ctx.json(summary);
     }
 
     // ── COMMIT: idempotency / double-billing guard ─────────────────────────
@@ -612,8 +691,9 @@ export default async function generateBillingRun(ctx) {
     summary.committed = true;
     summary.billing_run_id = runId;
     summary.notes = notes;
-    return summary;
+    return ctx.json(summary);
   } catch (error) {
+    if (error instanceof HttpError) throw error;
     return ctx.json({ error: error.message }, 500);
   }
 }

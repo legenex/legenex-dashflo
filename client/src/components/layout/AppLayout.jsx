@@ -10,6 +10,7 @@ import DataBotWidget from '@/components/databot/DataBotWidget';
 import { Sheet, SheetContent } from '@/components/ui/sheet';
 import { navGroups } from './navConfig';
 import { usePullToRefresh } from '@/hooks/usePullToRefresh';
+import useMetaAutoSync from '@/hooks/useMetaAutoSync';
 
 // Resolve a human page title from the nav config for the current path.
 function usePageTitle() {
@@ -34,6 +35,10 @@ export default function AppLayout() {
   const location = useLocation();
   const queryClient = useQueryClient();
   const scrollRef = useRef(null);
+
+  // Meta spend keeps itself current on a 15 minute cadence. Mounted here rather
+  // than on Overview so it holds regardless of which page is open.
+  useMetaAutoSync();
 
   // Pull-to-refresh only on the data-heavy list dashboards.
   const ptrEnabled = location.pathname === '/' || location.pathname === '/leads';

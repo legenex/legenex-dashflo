@@ -5,9 +5,10 @@ import {
   applyFilters, computeMetrics, spendInWindow, leadField, money, pct, int,
 } from '@/lib/reportMetrics';
 import { ReportKpi, THead, TRow, AINote } from '@/components/reports/reportViewAtoms';
+import { resolveSource, supplierPayoutForWindow } from '@/lib/supplierCost';
 
-const TEMPLATE = '1.6fr repeat(7, 1fr)';
-const COLS = ['Supplier', 'Leads', 'Sold', 'Cost', 'CPL', 'Revenue', 'Profit', 'Margin'];
+const TEMPLATE = '1.6fr repeat(8, 1fr)';
+const COLS = ['Supplier', 'Leads', 'Sold', 'Cost', 'CPL', 'Revenue', 'Profit', 'Margin', 'Payout'];
 
 function norm(v) { return String(v ?? '').trim().toLowerCase(); }
 
@@ -20,10 +21,16 @@ function norm(v) { return String(v ?? '').trim().toLowerCase(); }
 // is that cost over the leads received, which is the only CPL that means
 // anything on a Meta sourced supplier.
 //
+// Cost and Payout are different numbers and both matter. Cost is what acquiring
+// the leads cost us. Payout is what the supplier is OWED under their payout
+// type: a flat-CPL source is owed what its leads cost, so the two match, but a
+// profit-share supplier like LeadFlow is owed a percentage of (revenue minus
+// cost) ON TOP of the ad spend, so they diverge entirely.
+//
 // Buyers are deliberately absent from this report. Who bought a lead does not
 // change what the lead cost to acquire, so a buyer filter here would silently
 // shrink the denominator of CPL and produce a number that is not a CPL.
-export default function SupplierReport({ leads, adSpend, suppliers = [], filters }) {
+export default function SupplierReport({ leads, adSpend, suppliers = [], supplierSources = [], filters }) {
   const { rows, totals, selected } = useMemo(() => {
     const scoped = applyFilters(leads, filters);
     const spend = spendInWindow(adSpend, filters);
@@ -46,6 +53,19 @@ export default function SupplierReport({ leads, adSpend, suppliers = [], filters
       const supSpend = spend.filter((r) => norm(r.supplier_key || r.supplier_name) === key);
       const m = computeMetrics(supLeads, supSpend);
       const record = suppliers.find((s) => norm(s.name) === key);
+      // Payout uses the supplier's own sources, since the payout rule lives on
+      // the source (falling back to the supplier-level payout_type). Profit
+      // share is computed on the window totals, never per lead, so it always
+      // reflects the date range on screen.
+      const sources = record ? supplierSources.filter((s) => s.supplier_id === record.id) : [];
+      const pricedLeads = supLeads.map((lead) => ({
+        lead,
+        cost: 0,
+        sourceId: resolveSource(lead, sources)?.id || null,
+      }));
+      const payout = record
+        ? supplierPayoutForWindow(record, sources, pricedLeads, m.revenue, m.total_cost)
+        : 0;
       return {
         key,
         label,
@@ -57,6 +77,7 @@ export default function SupplierReport({ leads, adSpend, suppliers = [], filters
         revenue: m.revenue,
         profit: m.revenue - m.total_cost,
         margin: m.revenue > 0 ? ((m.revenue - m.total_cost) / m.revenue) * 100 : 0,
+        payout,
       };
     }).sort((a, b) => b.cost - a.cost);
 
@@ -65,10 +86,11 @@ export default function SupplierReport({ leads, adSpend, suppliers = [], filters
       sold: a.sold + r.sold,
       cost: a.cost + r.cost,
       revenue: a.revenue + r.revenue,
-    }), { leads: 0, sold: 0, cost: 0, revenue: 0 });
+      payout: a.payout + r.payout,
+    }), { leads: 0, sold: 0, cost: 0, revenue: 0, payout: 0 });
 
     return { rows, totals, selected: filters?.supplier_name || '' };
-  }, [leads, adSpend, suppliers, filters]);
+  }, [leads, adSpend, suppliers, supplierSources, filters]);
 
   const blendedCpl = totals.leads > 0 ? totals.cost / totals.leads : 0;
   const profit = totals.revenue - totals.cost;
@@ -79,7 +101,7 @@ export default function SupplierReport({ leads, adSpend, suppliers = [], filters
     const header = COLS.join(',');
     const lines = rows.map((r) => [
       `"${r.label}"`, r.leads, r.sold, r.cost.toFixed(2), r.cpl.toFixed(2),
-      r.revenue.toFixed(2), r.profit.toFixed(2), r.margin.toFixed(1),
+      r.revenue.toFixed(2), r.profit.toFixed(2), r.margin.toFixed(1), r.payout.toFixed(2),
     ].join(','));
     const blob = new Blob([[header, ...lines].join('\n')], { type: 'text/csv' });
     const url = URL.createObjectURL(blob);
@@ -90,12 +112,13 @@ export default function SupplierReport({ leads, adSpend, suppliers = [], filters
 
   return (
     <div className="space-y-5">
-      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-7 gap-2 lg:gap-3">
         <ReportKpi label="Cost" value={money(totals.cost)} hint={selected || 'all suppliers'} />
         <ReportKpi label="CPL" value={money(blendedCpl)} hint={totals.leads > 0 ? `over ${int(totals.leads)} leads` : 'no leads'} />
         <ReportKpi label="Revenue" value={money(totals.revenue)} />
         <ReportKpi label="Profit" value={money(profit)} tone={profit > 0 ? 'good' : 'risk'} />
         <ReportKpi label="Margin" value={totals.revenue > 0 ? pct(margin) : '-'} />
+        <ReportKpi label="Payout" value={money(totals.payout)} hint="owed to suppliers" />
         <ReportKpi label="Suppliers" value={int(rows.length)} hint={`${int(totals.sold)} sold`} />
       </div>
 
@@ -107,13 +130,15 @@ export default function SupplierReport({ leads, adSpend, suppliers = [], filters
 
       <div className="rounded-xl border border-border bg-card shadow-[0_12px_32px_-16px_rgba(0,0,0,0.35)] overflow-hidden">
         <div className="flex items-center justify-between px-4 py-3 border-b border-border">
-          <h3 className="text-[13px] font-semibold text-foreground">Cost &amp; CPL by Supplier</h3>
+          <h3 className="text-[13px] font-semibold text-foreground">Cost, CPL &amp; Payout by Supplier</h3>
           <Button variant="outline" size="sm" onClick={exportCsv} className="gap-1.5 h-7 text-[11px]">
             <Download className="w-3 h-3" /> Export
           </Button>
         </div>
-        <THead cols={COLS} template={TEMPLATE} />
-        <div className="max-h-[560px] overflow-y-auto">
+        <div className="overflow-x-auto">
+          <div className="min-w-[900px]">
+            <THead cols={COLS} template={TEMPLATE} />
+            <div className="max-h-[560px] overflow-y-auto">
           {rows.length === 0 ? (
             <div className="py-10 text-center text-[12px] text-muted-foreground">
               No supplier activity in this period.
@@ -139,9 +164,12 @@ export default function SupplierReport({ leads, adSpend, suppliers = [], filters
                 money(r.revenue),
                 money(r.profit),
                 r.revenue > 0 ? pct(r.margin) : '-',
+                money(r.payout),
               ]}
             />
           ))}
+            </div>
+          </div>
         </div>
       </div>
     </div>

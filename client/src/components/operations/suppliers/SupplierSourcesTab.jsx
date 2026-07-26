@@ -12,18 +12,27 @@ import { Plus, Pencil, Trash2, Layers } from 'lucide-react';
 import SourceEditor from './SourceEditor';
 import { parseRules } from './tierRules';
 
+// Tones keyed to the SupplierSource pricing_model enum:
+// none | flat_cpl | profit_pct | revenue_pct | tiered.
 const MODEL_TONE = {
   none: 'tag-neutral',
-  rev_share: 'bg-status-queued status-queued',
+  revenue_pct: 'bg-status-queued status-queued',
+  profit_pct: 'bg-status-duplicate status-duplicate',
   flat_cpl: 'bg-status-sold status-sold',
   tiered: 'bg-primary/15 text-primary',
 };
 
 // Human readable effective price summary for a source row.
+// This used to test for a 'rev_share' model that does not exist in the schema,
+// so every Revenue % and Profit % source fell through to the unpriced label.
 function priceSummary(src) {
-  if (src.pricing_model === 'rev_share') {
-    const pct = src.rev_share_pct == null ? 0 : src.rev_share_pct;
+  if (src.pricing_model === 'revenue_pct') {
+    const pct = src.revenue_pct == null ? 0 : src.revenue_pct;
     return `${pct}% of revenue`;
+  }
+  if (src.pricing_model === 'profit_pct') {
+    const pct = src.profit_pct == null ? 0 : src.profit_pct;
+    return `${pct}% of profit`;
   }
   if (src.pricing_model === 'flat_cpl') {
     const v = src.flat_cpl == null ? 0 : src.flat_cpl;

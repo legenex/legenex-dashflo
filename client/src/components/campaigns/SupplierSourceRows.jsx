@@ -3,14 +3,18 @@ import { parseRules } from '@/components/operations/suppliers/tierRules';
 
 const MODEL_TONE = {
   none: 'tag-neutral',
-  rev_share: 'bg-status-queued status-queued',
+  revenue_pct: 'bg-status-queued status-queued',
+  profit_pct: 'bg-status-duplicate status-duplicate',
   flat_cpl: 'bg-status-sold status-sold',
   tiered: 'bg-primary/15 text-primary',
 };
 
 // Human readable effective price summary for one source.
+// 'rev_share' is not a value the schema can hold, so testing for it sent every
+// Revenue % and Profit % source to the "No CPL" label.
 function priceSummary(src) {
-  if (src.pricing_model === 'rev_share') return `${src.rev_share_pct == null ? 0 : src.rev_share_pct}% of revenue`;
+  if (src.pricing_model === 'revenue_pct') return `${src.revenue_pct == null ? 0 : src.revenue_pct}% of revenue`;
+  if (src.pricing_model === 'profit_pct') return `${src.profit_pct == null ? 0 : src.profit_pct}% of profit`;
   if (src.pricing_model === 'flat_cpl') return `$${Number(src.flat_cpl == null ? 0 : src.flat_cpl).toFixed(2)} per lead`;
   if (src.pricing_model === 'tiered') { const n = parseRules(src.tier_rules).length; return `${n} rule${n === 1 ? '' : 's'}`; }
   return 'No CPL';
