@@ -35,15 +35,15 @@ function StatTile({ label, value, total, delta }) {
     }
   }
   return (
-    <div className="rounded-[10px] border border-border bg-card p-4">
-      <div className="text-[10px] font-semibold uppercase tracking-[0.11em] text-muted-foreground/70 truncate">{label}</div>
-      <div className="flex items-baseline gap-2 mt-1">
-        <div className="text-[24px] font-bold font-mono tabular-nums leading-none text-foreground whitespace-nowrap">
+    <div className="rounded-[10px] border border-border bg-card p-2.5 lg:p-4">
+      <div className="text-[9px] lg:text-[10px] font-semibold uppercase tracking-[0.11em] text-muted-foreground/70 truncate">{label}</div>
+      <div className="flex items-baseline gap-1.5 lg:gap-2 mt-0.5 lg:mt-1">
+        <div className="text-[18px] lg:text-[24px] font-bold font-mono tabular-nums leading-none text-foreground whitespace-nowrap">
           {value == null ? '' : num(value)}
         </div>
         {indicator}
       </div>
-      {total != null && <div className="text-[11px] text-muted-foreground/70 mt-1.5 whitespace-nowrap"><span className="font-mono tabular-nums">{num(total)}</span> total</div>}
+      {total != null && <div className="text-[10px] lg:text-[11px] text-muted-foreground/70 mt-0.5 lg:mt-1.5 whitespace-nowrap"><span className="font-mono tabular-nums">{num(total)}</span> total</div>}
     </div>
   );
 }

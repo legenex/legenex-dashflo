@@ -43,17 +43,27 @@ export default function AppLayout() {
     { enabled: ptrEnabled }
   );
 
-  // Safety net for the mobile menu. Radix can leave pointer-events:none on
-  // <body> when the drawer closes during navigation, which silently kills the
-  // menu button until a full reload. Clear it once the drawer is closed.
+  // Safety net for the mobile menu. Radix locks scroll by setting
+  // pointer-events:none on <body> while the Sheet is open, and can fail to
+  // release it when the drawer closes during navigation. The whole page then
+  // stops responding to taps until a full reload, which is the "menu opens
+  // twice then dies" symptom.
+  //
+  // A one-shot timeout was not enough: Radix can re-apply the style after the
+  // timeout has already fired, and the race depends on how fast the route
+  // transition lands. So this watches <body> for as long as the drawer is
+  // closed and clears the lock every time it reappears.
   React.useEffect(() => {
     if (drawerOpen) return;
-    const id = setTimeout(() => {
+    const clear = () => {
       if (document.body.style.pointerEvents === 'none') {
         document.body.style.pointerEvents = '';
       }
-    }, 350);
-    return () => clearTimeout(id);
+    };
+    clear();
+    const observer = new MutationObserver(clear);
+    observer.observe(document.body, { attributes: true, attributeFilter: ['style'] });
+    return () => observer.disconnect();
   }, [drawerOpen, location.pathname]);
 
   // Auto-refresh: silently re-pull data every 15 minutes on the data-heavy
@@ -91,6 +101,13 @@ export default function AppLayout() {
         style={{ height: 'calc(52px + env(safe-area-inset-top))', paddingTop: 'env(safe-area-inset-top)' }}
       >
         <button
+          onPointerDown={() => {
+            // Last-resort unlock: if anything still holds the body lock at the
+            // moment of the tap, release it so this press always registers.
+            if (document.body.style.pointerEvents === 'none') {
+              document.body.style.pointerEvents = '';
+            }
+          }}
           onClick={() => setDrawerOpen(true)}
           aria-label="Open menu"
           className="tap-target relative w-[38px] h-[38px] flex items-center justify-center rounded-lg bg-card border border-border"

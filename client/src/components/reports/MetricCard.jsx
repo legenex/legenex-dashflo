@@ -21,10 +21,10 @@ export default function MetricCard({ card, value, series = [], onRemove, dragHan
       initial={{ opacity: 0, scale: 0.96 }}
       animate={{ opacity: 1, scale: 1 }}
       whileHover={{ y: -2 }}
-      className={`group relative bg-card border ${borderClass} rounded-[10px] p-3.5 flex flex-col justify-between min-h-[104px]`}
+      className={`group relative bg-card border ${borderClass} rounded-[10px] p-2.5 lg:p-3.5 flex flex-col justify-between min-h-[68px] lg:min-h-[104px]`}
     >
       <div className="flex items-start justify-between">
-        <span className="text-[9.5px] font-semibold uppercase tracking-[0.1em] text-muted-foreground pr-6 leading-tight truncate">{label}</span>
+        <span className="text-[9px] lg:text-[9.5px] font-semibold uppercase tracking-[0.1em] text-muted-foreground pr-6 leading-tight truncate">{label}</span>
         <div className="absolute top-2 right-2 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
           <button {...dragHandleProps} className="p-1 text-muted-foreground hover:text-foreground cursor-grab active:cursor-grabbing">
             <GripVertical className="w-3.5 h-3.5" />
@@ -34,8 +34,8 @@ export default function MetricCard({ card, value, series = [], onRemove, dragHan
           </button>
         </div>
       </div>
-      <div className="text-[22px] font-bold text-foreground font-mono tabular-nums mt-1 leading-none">{display}</div>
-      <div className="h-0.5 rounded-full mt-3 bg-border/70">
+      <div className="text-[17px] lg:text-[22px] font-bold text-foreground font-mono tabular-nums mt-0.5 lg:mt-1 leading-none truncate">{display}</div>
+      <div className="h-0.5 rounded-full mt-1.5 lg:mt-3 bg-border/70">
         <div className={`h-full rounded-full ${barClass} opacity-70`} style={{ width: '38%' }} />
       </div>
     </motion.div>

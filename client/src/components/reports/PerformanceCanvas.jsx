@@ -103,7 +103,7 @@ export default function PerformanceCanvas({
     <div>
       {/* METRIC BOARD: pinned row + category chips */}
       <div className="mb-6 rounded-xl border border-border bg-card shadow-[0_12px_32px_-16px_rgba(0,0,0,0.35)] overflow-hidden">
-        <div className="flex items-center justify-between px-5 pt-4">
+        <div className="flex items-center justify-between px-3 lg:px-5 pt-3 lg:pt-4">
           <div className="flex items-center gap-2">
             <Pin className="w-3.5 h-3.5 text-muted-foreground" />
             <h3 className="text-[13px] font-semibold text-foreground">Pinned metrics</h3>
@@ -114,12 +114,12 @@ export default function PerformanceCanvas({
         </div>
 
         {pinnedCards.length > 0 && (
-          <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3 px-5 pt-3 pb-4">
+          <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-2 lg:gap-3 px-3 lg:px-5 pt-2 lg:pt-3 pb-3 lg:pb-4">
             {pinnedCards.map(renderCard)}
           </div>
         )}
 
-        <div className="flex flex-wrap items-center gap-2 px-5 py-3 border-t border-border">
+        <div className="flex flex-wrap items-center gap-2 px-3 lg:px-5 py-2.5 lg:py-3 border-t border-border">
           {GROUPS.map(g => {
             const on = activeGroup === g.id;
             return (

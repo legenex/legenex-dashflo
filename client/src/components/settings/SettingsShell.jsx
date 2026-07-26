@@ -41,26 +41,26 @@ export default function SettingsShell({ title, subtitle, children }) {
   return (
     <div className="flex flex-col min-h-full">
       {/* Header */}
-      <div className="flex items-start justify-between mb-1">
-        <div className="flex items-center gap-2.5">
-          <h1 className="text-[22px] font-bold tracking-tight">
-            <span className="text-foreground">Settings</span>
-            <span className="text-muted-foreground font-medium"> / {title}</span>
+      <div className="flex items-center justify-between gap-2 mb-1">
+        <div className="flex items-center gap-2 min-w-0">
+          <h1 className="text-[17px] lg:text-[22px] font-bold tracking-tight truncate">
+            <span className="text-muted-foreground font-medium hidden lg:inline">Settings / </span>
+            <span className="text-foreground">{title}</span>
           </h1>
-          <span className="inline-flex items-center gap-1.5 rounded-full bg-status-sold px-2 py-0.5 text-[9.5px] font-semibold tracking-wider status-sold">
+          <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-status-sold px-2 py-0.5 text-[9.5px] font-semibold tracking-wider status-sold">
             <PulseDot /> LIVE
           </span>
         </div>
-        <div className="flex items-center gap-2">
-          <button className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-2.5 h-8 text-[12px] text-muted-foreground hover:text-foreground transition-colors">
-            <Search className="w-3.5 h-3.5" /> Search settings
+        <div className="flex shrink-0 items-center gap-2">
+          <button aria-label="Search settings" className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-2 lg:px-2.5 h-8 text-[12px] text-muted-foreground hover:text-foreground transition-colors">
+            <Search className="w-3.5 h-3.5" /> <span className="hidden lg:inline">Search settings</span>
           </button>
-          <button onClick={handleRefresh} className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-2.5 h-8 text-[12px] text-muted-foreground hover:text-foreground transition-colors">
-            <RefreshCw className="w-3.5 h-3.5" /> Refresh
+          <button onClick={handleRefresh} aria-label="Refresh" className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-2 lg:px-2.5 h-8 text-[12px] text-muted-foreground hover:text-foreground transition-colors">
+            <RefreshCw className="w-3.5 h-3.5" /> <span className="hidden lg:inline">Refresh</span>
           </button>
         </div>
       </div>
-      {subtitle && <p className="text-[13px] text-muted-foreground mb-5">{subtitle}</p>}
+      {subtitle && <p className="text-[13px] text-muted-foreground mb-4 lg:mb-5">{subtitle}</p>}
 
       {/* Panel content */}
       <div className="flex-1 min-h-0">{children}</div>

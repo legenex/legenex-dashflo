@@ -77,13 +77,39 @@ export function leadCost(lead) { return num(leadField(lead, 'cost')); }
 
 const S = (l) => String(l.final_status || '');
 
-// Only account-level AdSpend rows are cost. Campaign and ad rows are detail
-// views of the same money and now carry a supplier too, so summing them
-// alongside account rows multiplies spend two or three times over. Rows written
-// before levels existed carry no level at all and count as account.
-// Every cost total in reporting goes through here.
+// Cost basis for every spend total in the app.
+//
+// syncMetaSpend writes rows at three levels: account, campaign and ad. The
+// account row is a rollup of that day's campaign rows for the same ad account,
+// verified exactly: 2026-07-22 on act_630657151370020 is 1294.69 + 522.57 at
+// campaign level and 1817.26 at account level. So summing levels together
+// multiplies spend two or three times over.
+//
+// But account rows only exist for days the sync has covered at account level.
+// Filtering to account-only therefore silently drops every day that has
+// campaign rows and no account rollup yet, which under-reports cost by weeks
+// after a partial backfill.
+//
+// So: prefer the account row for a given ad account and day, and fall back to
+// that day's campaign rows only where no account row exists. Correct whether
+// the backfill has run or not, and it cannot double count, because the two
+// branches are mutually exclusive per account-day.
+//
+// Rows written before levels existed carry no level at all and count as account.
 export function spendRows(rows = []) {
-  return rows.filter((r) => !r.level || r.level === 'account');
+  const accountKeys = new Set();
+  const account = [];
+  for (const r of rows) {
+    if (!r.level || r.level === 'account') {
+      account.push(r);
+      accountKeys.add(`${r.ad_account_id || ''}|${String(r.date || '').slice(0, 10)}`);
+    }
+  }
+  const fallback = rows.filter(
+    (r) => r.level === 'campaign'
+      && !accountKeys.has(`${r.ad_account_id || ''}|${String(r.date || '').slice(0, 10)}`),
+  );
+  return fallback.length ? account.concat(fallback) : account;
 }
 
 // Account-level spend rows inside the report's date window.
