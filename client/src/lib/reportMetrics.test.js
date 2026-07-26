@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { spendRows } from '@/lib/reportMetrics';
+import { spendRows, spendInWindow } from '@/lib/reportMetrics';
 
 // spendRows is the cost basis for every spend total in the app, so both of its
 // failure modes are pinned here with the real shape of the data.
@@ -63,5 +63,41 @@ describe('spendRows', () => {
   it('returns nothing for empty input', () => {
     expect(spendRows([])).toEqual([]);
     expect(spendRows()).toEqual([]);
+  });
+});
+
+describe('spendInWindow filters', () => {
+  const rows = [
+    { ad_account_id: 'a1', date: '2026-07-05', level: 'account', vertical: 'MVA', supplier_name: 'LeadFlow', spend: 1000 },
+    { ad_account_id: 'a2', date: '2026-07-05', level: 'account', vertical: 'WC', supplier_name: 'LeadFlow', spend: 250 },
+    { ad_account_id: 'a3', date: '2026-07-05', level: 'account', vertical: 'MVA', supplier_name: 'Legenex', spend: 400 },
+    { ad_account_id: 'a1', date: '2026-08-01', level: 'account', vertical: 'MVA', supplier_name: 'LeadFlow', spend: 9999 },
+  ];
+  const total = (f) => spendInWindow(rows, f).reduce((a, r) => a + r.spend, 0);
+
+  it('narrows spend by vertical, instead of leaving it at the full month', () => {
+    // The WC bug: 3 leads were shown against the entire month of spend.
+    expect(total({ date_from: '2026-07-01', date_to: '2026-07-31', vertical: 'WC' })).toBe(250);
+  });
+
+  it('narrows spend by supplier, case-insensitively', () => {
+    expect(total({ date_from: '2026-07-01', date_to: '2026-07-31', supplier: 'LEADFLOW' })).toBe(1250);
+  });
+
+  it('combines a vertical and a supplier filter', () => {
+    expect(total({ date_from: '2026-07-01', date_to: '2026-07-31', vertical: 'MVA', supplier: 'LeadFlow' })).toBe(1000);
+  });
+
+  it('still respects the date window', () => {
+    expect(total({ date_from: '2026-07-01', date_to: '2026-07-31' })).toBe(1650);
+  });
+
+  it('treats "all" and empty as no filter', () => {
+    expect(total({ date_from: '2026-07-01', date_to: '2026-07-31', vertical: 'all', supplier: '' })).toBe(1650);
+  });
+
+  it('ignores filters spend has no dimension for, rather than zeroing cost', () => {
+    // Ad spend is incurred before a lead is sold to any buyer.
+    expect(total({ date_from: '2026-07-01', date_to: '2026-07-31', buyer: 'Walker Advertising' })).toBe(1650);
   });
 });

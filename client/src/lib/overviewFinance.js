@@ -2,10 +2,26 @@
 // Reuses reconcile() / workbench() from financeMetrics so numbers match the Finances section.
 import { reconcile, workbench, unmatched } from '@/lib/financeMetrics';
 import { leadField, leadEventInstant, leadEventDayKey, spendRows } from '@/lib/reportMetrics';
+import { formatInTimeZone } from 'date-fns-tz';
+import { APP_TZ } from '@/lib/periodRange';
 import { format, isWithinInterval, startOfDay, subDays } from 'date-fns';
 
 function num(v) { const n = Number(v); return isNaN(n) ? 0 : n; }
 const inWin = (d, win) => d && isWithinInterval(new Date(d), { start: win.start, end: win.end });
+
+// AdSpend.date is a plain yyyy-MM-dd spend day, not an instant. Passing it
+// through new Date() parses it as UTC midnight, which sits BEFORE a window that
+// starts at local midnight in APP_TZ, so the first day of every range was
+// silently dropped from ad spend. Compare day keys as strings instead, which is
+// what reportMetrics.spendInWindow already does.
+const dayKey = (d) => formatInTimeZone(d, APP_TZ, 'yyyy-MM-dd');
+const inWinDay = (d, win) => {
+  const k = String(d || '').slice(0, 10);
+  if (!k) return false;
+  if (win?.start && k < dayKey(win.start)) return false;
+  if (win?.end && k > dayKey(win.end)) return false;
+  return true;
+};
 
 // The full financial picture for a period window.
 export function financialTruth({ leads, buyers, suppliers, invoices, payments, payouts, adSpend, txns }, win) {
@@ -26,7 +42,7 @@ export function financialTruth({ leads, buyers, suppliers, invoices, payments, p
 
   // Supplier cost: accrued (lead cost + tracked spend) vs paid (payout paid_amount).
   const accruedCost = wLeads.reduce((a, l) => a + num(l.cost), 0);
-  const trackedSpend = acctSpend.filter(a => inWin(a.date, win)).reduce((a, r) => a + num(r.spend), 0);
+  const trackedSpend = acctSpend.filter(a => inWinDay(a.date, win)).reduce((a, r) => a + num(r.spend), 0);
   const paidPayouts = payouts.reduce((a, p) => a + num(p.paid_amount), 0);
 
   // Ad spend: tracked (synced) vs paid (bank money-out categorised media).

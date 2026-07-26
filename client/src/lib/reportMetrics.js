@@ -112,23 +112,59 @@ export function spendRows(rows = []) {
   return fallback.length ? account.concat(fallback) : account;
 }
 
-// Account-level spend rows inside the report's date window.
+// Spend rows inside the report's window AND matching the report's filters.
+//
 // applyFilters only ever touches leads, and AdSpend rows carry their own date,
 // so without this every report summed the entire spend history no matter which
-// period was selected. That is what made net profit on a This Month view read
-// against months of accumulated spend.
+// window was selected.
+//
+// It also has to honour the non-date filters. Previously only date_from/date_to
+// were applied, so selecting a vertical narrowed the leads but left cost at the
+// full month: picking WC gave 3 leads against ~$57k of spend, a CPL of ~$19,000
+// and a hugely negative profit.
+//
+// AdSpend rows carry vertical, brand, supplier_name/supplier_key, platform and
+// ad_account_id, so those filters apply directly. Filters that spend has no
+// dimension for (buyer, and any lead-level attribute such as state or status)
+// cannot narrow it, because ad spend is incurred upstream of the buyer a lead
+// is later sold to. Those are ignored here rather than zeroing cost.
+const SPEND_FILTERABLE = {
+  vertical: (r) => r.vertical,
+  brand: (r) => r.brand,
+  platform: (r) => r.platform,
+  supplier: (r) => r.supplier_name,
+  supplier_name: (r) => r.supplier_name,
+};
+
 export function spendInWindow(rows = [], filters = {}) {
   const from = filters?.date_from || '';
   const to = filters?.date_to || '';
-  const list = spendRows(rows);
-  if (!from && !to) return list;
-  return list.filter((r) => {
-    const d = String(r.date || '').slice(0, 10);
-    if (!d) return false;
-    if (from && d < from) return false;
-    if (to && d > to) return false;
-    return true;
-  });
+  let list = spendRows(rows);
+
+  if (from || to) {
+    list = list.filter((r) => {
+      const d = String(r.date || '').slice(0, 10);
+      if (!d) return false;
+      if (from && d < from) return false;
+      if (to && d > to) return false;
+      return true;
+    });
+  }
+
+  for (const [field, get] of Object.entries(SPEND_FILTERABLE)) {
+    const value = filters?.[field];
+    if (value == null || value === '' || value === 'all') continue;
+    const want = String(value).trim().toLowerCase();
+    list = list.filter((r) => {
+      const have = String(get(r) ?? '').trim().toLowerCase();
+      if (!have) return false;
+      // Supplier names arrive as LEADFLOW / LeadFlow / Leadflow, so match
+      // loosely rather than splitting one supplier into two.
+      return have === want || have.includes(want) || want.includes(have);
+    });
+  }
+
+  return list;
 }
 
 // The lead's real event time. mapped_fields.timestamp is a naive local string

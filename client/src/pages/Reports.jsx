@@ -12,7 +12,6 @@ import { toast } from 'sonner';
 import ReportSidebar, { STANDARD } from '@/components/reports/ReportSidebar';
 import ReportFilterBar from '@/components/reports/ReportFilterBar';
 import PerformanceCanvas, { makeDefaultCards, makeDefaultWidgets } from '@/components/reports/PerformanceCanvas';
-import { leadField } from '@/lib/reportMetrics';
 import DailyReport from '@/components/reports/views/DailyReport';
 import PnlReport from '@/components/reports/views/PnlReport';
 import AdReport from '@/components/reports/views/AdReport';
@@ -72,24 +71,10 @@ export default function Reports() {
   const { data: integrations = [] } = useQuery({ queryKey: ['report-integrations'], queryFn: () => api.entities.IntegrationConfig.list() });
   const { data: reports = [] } = useQuery({ queryKey: ['reports'], queryFn: () => api.entities.Report.filter({ group: 'custom' }, 'sort_order') });
   const { data: customFields = [] } = useQuery({ queryKey: ['custom-fields'], queryFn: () => api.entities.CustomField.list('sort_order') });
-  const { data: campaigns = [] } = useQuery({ queryKey: ['campaigns'], queryFn: () => api.entities.Campaign.list() });
   const { data: verticals = [] } = useQuery({ queryKey: ['verticals'], queryFn: () => api.entities.Vertical.list('sort_order') });
   const { data: suppliers = [] } = useQuery({ queryKey: ['suppliers'], queryFn: () => api.entities.Supplier.list() });
   const { data: buyers = [] } = useQuery({ queryKey: ['buyers'], queryFn: () => api.entities.Buyer.list() });
   const { data: brands = [] } = useQuery({ queryKey: ['brands'], queryFn: () => api.entities.Brand.list() });
-
-  // The Campaign filter matches against the campaign a lead actually carries
-  // (mapped_fields.utm_campaign, resolved via the report field aliases), so the
-  // dropdown has to offer those values. Campaign records are unioned in for
-  // campaigns that are configured but have not received a lead yet.
-  const campaignOptions = useMemo(() => {
-    const names = new Set(campaigns.map(c => c.name).filter(Boolean));
-    for (const l of leads) {
-      const v = leadField(l, 'campaign');
-      if (v) names.add(String(v));
-    }
-    return [...names].sort((a, b) => a.localeCompare(b)).map(name => ({ name }));
-  }, [campaigns, leads]);
 
   const isCustom = active.startsWith('custom:');
   const activeReport = isCustom ? reports.find(r => r.id === active.slice(7)) : null;
@@ -196,7 +181,7 @@ export default function Reports() {
         value={effectiveFilters}
         onChange={(v) => setFilters(v)}
         hide={hiddenFilters}
-        options={{ campaigns: campaignOptions, verticals, suppliers, buyers, brands }}
+        options={{ verticals, suppliers, buyers, brands }}
       />
 
       {active === 'std:daily' ? (

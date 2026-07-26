@@ -24,7 +24,7 @@ const fmt = (d) => formatInTimeZone(d, APP_TZ, 'yyyy-MM-dd');
 // buyer_id (a Buyer record id on the lead) while selecting a company name, so
 // the Buyer filter could never match anything.
 export default function ReportFilterBar({ value, onChange, options, hide = [] }) {
-  const { campaigns = [], verticals = [], suppliers = [], buyers = [], brands = [] } = options || {};
+  const { verticals = [], suppliers = [], buyers = [], brands = [] } = options || {};
   // Some standard views own a single dimension and must not offer the opposite
   // one, so the parent passes the keys to drop rather than every view rendering
   // its own near-identical bar.
@@ -65,7 +65,7 @@ export default function ReportFilterBar({ value, onChange, options, hide = [] })
   const opt = (all, items) => [{ value: '', label: all }, ...items];
 
   // Count active filters for the mobile Filters badge.
-  const activeCount = extra.length + (value.campaign ? 1 : 0) + (value.vertical ? 1 : 0) +
+  const activeCount = extra.length + (value.vertical ? 1 : 0) +
     (shows('supplier_name') && value.supplier_name ? 1 : 0) + (shows('buyer') && value.buyer ? 1 : 0) + (value.brand ? 1 : 0);
 
   return (
@@ -87,8 +87,12 @@ export default function ReportFilterBar({ value, onChange, options, hide = [] })
           </div>
         )}
 
-        <SearchableSelect value={value.campaign || ''} onValueChange={v => set('campaign', v)} className="w-full lg:w-[150px] bg-card border-border" options={opt('Campaign: All', campaigns.map(c => ({ value: c.name, label: c.name })))} />
-        <SearchableSelect value={value.vertical || ''} onValueChange={v => set('vertical', v)} className="w-full lg:w-[140px] bg-card border-border" options={opt('Vertical: All', verticals.map(v => ({ value: v.code, label: v.name })))} />
+        {/* What Lead Distribution calls a Campaign is the record Operations
+            calls a Vertical, so the vertical filter is labelled Campaign here.
+            The old Campaign filter listed Meta ad campaign names, which is an
+            ad-reporting dimension rather than a distribution campaign, and has
+            been removed. */}
+        <SearchableSelect value={value.vertical || ''} onValueChange={v => set('vertical', v)} className="w-full lg:w-[150px] bg-card border-border" options={opt('Campaign: All', verticals.map(v => ({ value: v.code, label: v.name })))} />
         {shows('supplier_name') && <SearchableSelect value={value.supplier_name || ''} onValueChange={v => set('supplier_name', v)} className="w-full lg:w-[150px] bg-card border-border" options={opt('Supplier: All', suppliers.map(s => ({ value: s.name, label: s.name })))} />}
         {shows('buyer') && <SearchableSelect value={value.buyer || ''} onValueChange={v => set('buyer', v)} className="w-full lg:w-[150px] bg-card border-border" options={opt('Buyer: All', buyers.map(b => ({ value: b.company_name, label: b.company_name })))} />}
         <SearchableSelect value={value.brand || ''} onValueChange={v => set('brand', v)} className="w-full lg:w-[140px] bg-card border-border" options={opt('Brand: All', brands.map(b => ({ value: b.brand_code, label: b.brand_name })))} />
