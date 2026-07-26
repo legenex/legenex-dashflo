@@ -78,7 +78,8 @@ export default function SettingsBrands() {
       </div>
 
       <div className="bg-card border border-border rounded-[10px] overflow-hidden">
-        <table className="w-full text-[13px]">
+        <div className="overflow-x-auto">
+        <table className="w-full min-w-[720px] text-[13px]">
           <thead>
             <tr className="border-b border-border bg-muted/50">
               {['Brand Name', 'Brand Code', 'Website', 'Optin URL', 'Status', 'Actions'].map(h => (
@@ -114,6 +115,7 @@ export default function SettingsBrands() {
             ))}
           </tbody>
         </table>
+        </div>
       </div>
 
       <AlertDialog open={!!deleteTarget} onOpenChange={(v) => { if (!v) setDeleteTarget(null); }}>

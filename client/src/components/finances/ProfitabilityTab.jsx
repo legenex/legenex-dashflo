@@ -26,7 +26,7 @@ const Stat = ({ label, value, sub, tone }) => {
   return (
     <div className="rounded-xl border border-border bg-card p-4 shadow-[0_12px_32px_-16px_rgba(0,0,0,0.4)]">
       <div className="text-[9.5px] font-semibold tracking-[0.1em] uppercase text-muted-foreground/70 truncate">{label}</div>
-      <div className={`text-[20px] font-bold font-mono tabular-nums mt-1.5 whitespace-nowrap ${valueClass}`}>{value}</div>
+      <div className={`text-[16px] sm:text-[18px] lg:text-[20px] font-bold font-mono tabular-nums mt-1.5 truncate ${valueClass}`}>{value}</div>
       {sub && <div className="text-[11px] text-muted-foreground/70 mt-0.5">{sub}</div>}
     </div>
   );
@@ -137,7 +137,8 @@ export default function ProfitabilityTab({ win, leads = [], adSpend = [], settin
           {/* Cost table */}
           <Panel className="overflow-hidden">
             <div className="px-4 py-3 border-b border-border/60 text-[13px] font-semibold text-foreground">Cost Breakdown</div>
-            <table className="w-full text-[12px]">
+            <div className="overflow-x-auto">
+            <table className="w-full min-w-[640px] text-[12px]">
               <thead>
                 <tr className="border-b border-border/60 bg-background/40 text-[9.5px] font-semibold tracking-[0.1em] uppercase text-muted-foreground/70">
                   <th className="text-left px-4 py-2.5">Category</th>
@@ -197,12 +198,14 @@ export default function ProfitabilityTab({ win, leads = [], adSpend = [], settin
                 })}
               </tbody>
             </table>
+            </div>
           </Panel>
 
           {/* Ad cost reconciliation */}
           <Panel className="p-4 space-y-3">
             <div className="text-[13px] font-semibold text-foreground">Ad Cost Reconciliation</div>
-            <table className="w-full text-[12px]">
+            <div className="overflow-x-auto">
+            <table className="w-full min-w-[640px] text-[12px]">
               <thead>
                 <tr className="border-b border-border/60 text-[9.5px] font-semibold tracking-[0.1em] uppercase text-muted-foreground/70">
                   <th className="text-left px-2 py-2">Source</th>
@@ -226,6 +229,7 @@ export default function ProfitabilityTab({ win, leads = [], adSpend = [], settin
                 </tr>
               </tbody>
             </table>
+            </div>
             <p className="text-[11px] text-muted-foreground/80">
               Synced spend is never added to cost. It is only compared against cash. The supplier row shows what LeadFlow spent on Meta against what you paid LeadFlow, so a positive markup is your margin on their media.
             </p>

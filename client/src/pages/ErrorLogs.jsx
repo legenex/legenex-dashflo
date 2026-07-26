@@ -115,7 +115,8 @@ export default function ErrorLogs({ embedded = false }) {
       </div>
 
       <Panel className="overflow-hidden">
-        <table className="w-full text-[13px]">
+        <div className="overflow-x-auto">
+        <table className="w-full min-w-[720px] text-[13px]">
           <thead>
             <tr className="border-b border-border bg-muted/50">
               {['Time', 'Stage', 'Severity', 'Supplier', 'Message', 'Lead', 'Resolved'].map(h => (
@@ -143,6 +144,7 @@ export default function ErrorLogs({ embedded = false }) {
             ))}
           </tbody>
         </table>
+        </div>
       </Panel>
 
       {/* Detail Modal */}

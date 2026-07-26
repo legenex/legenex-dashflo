@@ -134,7 +134,7 @@ export const KpiTile = ({ label, value, hint, delta, band, verified, tone }) => 
           <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: accent }} />
         ) : null}
       </div>
-      <div className="text-[22px] font-bold font-mono tabular-nums mt-1 text-foreground">{value}</div>
+      <div className="text-[17px] sm:text-[19px] lg:text-[22px] font-bold font-mono tabular-nums mt-1 text-foreground truncate">{value}</div>
       <div className="flex items-center gap-2 mt-1 flex-wrap">
         {hint && <span className="text-[10.5px] text-muted-foreground/70">{hint}</span>}
         {delta != null && (

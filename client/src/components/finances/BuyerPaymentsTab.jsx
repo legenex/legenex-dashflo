@@ -66,7 +66,8 @@ export default function BuyerPaymentsTab({ buyers, win }) {
         <Button size="sm" className="gap-1.5" onClick={() => setOpen(true)}><Plus className="w-3.5 h-3.5" /> Record Payment</Button>
       </div>
       <Panel className="overflow-hidden">
-        <table className="w-full text-[12px]">
+        <div className="overflow-x-auto">
+        <table className="w-full min-w-[720px] text-[12px]">
           <thead><THead cols={['Buyer', 'Method', 'Date', 'Amount']} alignRight={[3]} /></thead>
           <tbody className="divide-y divide-border/60">
             {payments.length === 0 && <tr><td colSpan={4} className="px-4 py-12 text-center text-muted-foreground">
@@ -83,6 +84,7 @@ export default function BuyerPaymentsTab({ buyers, win }) {
             ))}
           </tbody>
         </table>
+        </div>
       </Panel>
 
       {payments.length > 0 && (

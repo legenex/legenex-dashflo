@@ -10,7 +10,7 @@ export const ReportKpi = ({ label, value, hint, tone /* 'good' | 'risk' | undefi
         <span className="text-[9.5px] font-semibold tracking-[0.1em] uppercase text-muted-foreground truncate">{label}</span>
         {hex && <span className="w-1.5 h-1.5 rounded-full" style={{ background: hex }} />}
       </div>
-      <div className="text-[26px] font-bold tabular-nums mt-1 text-foreground">{value}</div>
+      <div className="text-[19px] sm:text-[22px] lg:text-[26px] font-bold tabular-nums mt-1 text-foreground truncate">{value}</div>
       {hint && <div className="text-[10.5px] mt-0.5 text-muted-foreground">{hint}</div>}
       <div className="h-0.5 rounded-full mt-3 bg-border/70">
         <div className="h-full rounded-full opacity-70" style={{ width: '38%', background: hex || 'hsl(var(--primary))' }} />

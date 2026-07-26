@@ -77,7 +77,8 @@ export default function SupplierPayoutsTab({ suppliers = [], leads = [], adSpend
       </div>
 
       <Panel className="overflow-hidden">
-        <table className="w-full text-[12px]">
+        <div className="overflow-x-auto">
+        <table className="w-full min-w-[720px] text-[12px]">
           <thead><THead cols={['Supplier', 'Declared Cost', 'Ad Spend', 'True Cost', 'Payouts Issued', 'Paid', 'Owing']} alignRight={[1, 2, 3, 4, 5, 6]} /></thead>
           <tbody className="divide-y divide-border/60">
             {rows.length === 0 && <tr><td colSpan={7} className="px-4 py-12 text-center text-muted-foreground">
@@ -97,6 +98,7 @@ export default function SupplierPayoutsTab({ suppliers = [], leads = [], adSpend
             ))}
           </tbody>
         </table>
+        </div>
       </Panel>
 
       {rows.length > 0 && (

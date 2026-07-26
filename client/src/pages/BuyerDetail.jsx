@@ -243,7 +243,8 @@ export default function BuyerDetail() {
             {transactions.length === 0 ? (
               <p className="text-[13px] text-muted-foreground">No transactions yet.</p>
             ) : (
-              <table className="w-full text-[13px]">
+              <div className="overflow-x-auto">
+              <table className="w-full min-w-[720px] text-[13px]">
                 <thead><tr className="border-b border-border text-[11px] text-muted-foreground uppercase tracking-wider">
                   <th className="text-left py-2">Type</th><th className="text-left py-2">Amount</th><th className="text-left py-2">Balance After</th><th className="text-left py-2">Description</th>
                 </tr></thead>
@@ -258,6 +259,7 @@ export default function BuyerDetail() {
                   ))}
                 </tbody>
               </table>
+              </div>
             )}
           </div>
 
@@ -269,7 +271,8 @@ export default function BuyerDetail() {
             {invoices.length === 0 ? (
               <p className="text-[13px] text-muted-foreground">No invoices yet.</p>
             ) : (
-              <table className="w-full text-[13px]">
+              <div className="overflow-x-auto">
+              <table className="w-full min-w-[720px] text-[13px]">
                 <thead><tr className="border-b border-border text-[11px] text-muted-foreground uppercase tracking-wider">
                   <th className="text-left py-2">Invoice</th><th className="text-left py-2">Amount</th><th className="text-left py-2">Leads</th><th className="text-left py-2">Status</th>
                 </tr></thead>
@@ -284,6 +287,7 @@ export default function BuyerDetail() {
                   ))}
                 </tbody>
               </table>
+              </div>
             )}
           </div>
         </TabsContent>

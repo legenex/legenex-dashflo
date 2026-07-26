@@ -149,7 +149,8 @@ export default function SettingsInboundWebhooks() {
 
       {/* Routes table */}
       <div className="bg-card border border-border rounded-[10px] overflow-hidden">
-        <table className="w-full text-[13px]">
+        <div className="overflow-x-auto">
+        <table className="w-full min-w-[720px] text-[13px]">
           <thead>
             <tr className="border-b border-border bg-muted/50">
               {['Name', 'Provider', 'Event', 'Enabled', 'Last Received', 'Receipts', 'Errors', 'Token', 'Inbound URL', 'Actions'].map((h) => (
@@ -201,6 +202,7 @@ export default function SettingsInboundWebhooks() {
             ))}
           </tbody>
         </table>
+        </div>
       </div>
 
       {/* Create modal + one-time reveal */}

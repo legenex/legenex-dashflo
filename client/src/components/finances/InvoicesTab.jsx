@@ -126,7 +126,11 @@ export default function InvoicesTab({ buyers, win }) {
       </div>
 
       <Panel className="overflow-hidden">
-        <table className="w-full text-[12px]">
+        {/* Panel clips with overflow-hidden, so without an inner scroll
+            container the right-hand columns were simply unreachable on a
+            narrow screen rather than scrollable. */}
+        <div className="overflow-x-auto">
+        <table className="w-full min-w-[720px] text-[12px]">
           <thead><THead cols={['Invoice', 'Buyer', 'Amount', 'Leads', 'Status', 'Action']} alignRight={[2, 3, 5]} /></thead>
           <tbody className="divide-y divide-border/60">
             {filtered.length === 0 && <tr><td colSpan={6} className="px-4 py-12 text-center text-muted-foreground">
@@ -145,6 +149,7 @@ export default function InvoicesTab({ buyers, win }) {
             ))}
           </tbody>
         </table>
+        </div>
       </Panel>
 
       <Dialog open={open} onOpenChange={setOpen}>

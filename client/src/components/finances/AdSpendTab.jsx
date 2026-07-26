@@ -92,7 +92,8 @@ export default function AdSpendTab({ win }) {
             <div className="grid grid-cols-1 lg:grid-cols-2 divide-y lg:divide-y-0 lg:divide-x divide-border/60">
               <div>
                 <div className="text-[10px] uppercase tracking-wider text-muted-foreground/70 px-4 pt-3 pb-1">By supplier / true CPL</div>
-                <table className="w-full text-[12px]">
+                <div className="overflow-x-auto">
+                <table className="w-full min-w-[560px] text-[12px]">
                   <thead><THead cols={['Supplier', 'Leads', 'Spend', 'True CPL']} alignRight={[1, 2, 3]} /></thead>
                   <tbody className="divide-y divide-border/60">
                     {p.suppliers.length === 0 && <tr><td colSpan={4} className="px-4 py-4 text-center text-muted-foreground">No supplier attribution</td></tr>}
@@ -106,10 +107,12 @@ export default function AdSpendTab({ win }) {
                     ))}
                   </tbody>
                 </table>
+                </div>
               </div>
               <div>
                 <div className="text-[10px] uppercase tracking-wider text-muted-foreground/70 px-4 pt-3 pb-1">By ad account / source</div>
-                <table className="w-full text-[12px]">
+                <div className="overflow-x-auto">
+                <table className="w-full min-w-[560px] text-[12px]">
                   <thead><THead cols={['Account / Source', 'Spend']} alignRight={[1]} /></thead>
                   <tbody className="divide-y divide-border/60">
                     {p.accounts.length === 0 && <tr><td colSpan={2} className="px-4 py-4 text-center text-muted-foreground">No account detail</td></tr>}
@@ -121,6 +124,7 @@ export default function AdSpendTab({ win }) {
                     ))}
                   </tbody>
                 </table>
+                </div>
               </div>
             </div>
           )}
@@ -130,7 +134,8 @@ export default function AdSpendTab({ win }) {
       {adSpend.length > 0 && (
         <Panel className="overflow-hidden">
           <PanelHeader title="All Ad Spend Rows" />
-          <table className="w-full text-[12px]">
+          <div className="overflow-x-auto">
+          <table className="w-full min-w-[640px] text-[12px]">
             <thead><THead cols={['Date', 'Platform', 'Supplier', 'Source', 'Spend']} alignRight={[4]} /></thead>
             <tbody className="divide-y divide-border/60">
               {adSpend.slice(0, 200).map((r, i) => (
@@ -144,6 +149,7 @@ export default function AdSpendTab({ win }) {
               ))}
             </tbody>
           </table>
+          </div>
         </Panel>
       )}
     </div>

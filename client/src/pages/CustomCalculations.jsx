@@ -365,7 +365,8 @@ export default function CustomCalculations() {
               <DragDropContext onDragEnd={onDragEnd}>
                 <Droppable droppableId="calcs">
                   {(provided) => (
-                    <table className="w-full text-[13px]">
+                    <div className="overflow-x-auto">
+                    <table className="w-full min-w-[640px] text-[13px]">
                       <thead>
                         <tr className="border-b border-border bg-muted/40">
                           {['Field', 'Formula', 'Status', ''].map((h, i) => (
@@ -419,6 +420,7 @@ export default function CustomCalculations() {
                         {provided.placeholder}
                       </tbody>
                     </table>
+                    </div>
                   )}
                 </Droppable>
               </DragDropContext>

@@ -113,8 +113,11 @@ export default function PerformanceCanvas({
           </button>
         </div>
 
+        {/* Six across only on a genuinely wide screen. At xl (1280px) a
+            six-column split leaves ~170px per card, which truncated ordinary
+            currency values to "$74,2...". */}
         {pinnedCards.length > 0 && (
-          <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-2 lg:gap-3 px-3 lg:px-5 pt-2 lg:pt-3 pb-3 lg:pb-4">
+          <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-6 gap-2 lg:gap-3 px-3 lg:px-5 pt-2 lg:pt-3 pb-3 lg:pb-4">
             {pinnedCards.map(renderCard)}
           </div>
         )}
@@ -135,9 +138,9 @@ export default function PerformanceCanvas({
           })}
         </div>
 
-        <div className="px-5 pb-5 pt-4 border-t border-border">
+        <div className="px-3 lg:px-5 pb-4 lg:pb-5 pt-3 lg:pt-4 border-t border-border">
           {activeCards.length > 0 ? (
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-6 gap-3">
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 2xl:grid-cols-6 gap-2 lg:gap-3">
               {activeCards.map(renderCard)}
             </div>
           ) : (

@@ -496,7 +496,8 @@ export default function Verification() {
         {logRows.length === 0 ? (
           <div className="py-10 text-center text-[13px] text-muted-foreground">No verification records yet</div>
         ) : (
-          <table className="w-full text-[13px]">
+          <div className="overflow-x-auto">
+          <table className="w-full min-w-[720px] text-[13px]">
             <thead>
               <tr className="border-b border-border bg-muted/40">
                 {['Time', 'Lead', 'Check', 'Result', 'Latency'].map(h => (
@@ -523,6 +524,7 @@ export default function Verification() {
               })}
             </tbody>
           </table>
+          </div>
         )}
       </div>
 

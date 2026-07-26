@@ -241,7 +241,8 @@ export default function SupplierDetail() {
 
         <TabsContent value="leads" className="mt-4">
           <div className="bg-card border border-border rounded-[10px] overflow-hidden">
-            <table className="w-full text-[13px]">
+            <div className="overflow-x-auto">
+            <table className="w-full min-w-[720px] text-[13px]">
               <thead>
                 <tr className="border-b border-border bg-muted/50">
                   {['Lead ID', 'Name', 'Status', 'Revenue', 'Created'].map(h => (
@@ -264,6 +265,7 @@ export default function SupplierDetail() {
                 ))}
               </tbody>
             </table>
+            </div>
           </div>
         </TabsContent>
       </Tabs>

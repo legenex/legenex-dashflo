@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
-import { Copy, Plus, Save } from 'lucide-react';
+import { Copy, Plus, Save, RefreshCw } from 'lucide-react';
 import { toast } from 'sonner';
 import ReportSidebar, { STANDARD } from '@/components/reports/ReportSidebar';
 import ReportFilterBar from '@/components/reports/ReportFilterBar';
@@ -34,6 +34,20 @@ function safeParse(raw, fallback) {
 
 export default function Reports() {
   const qc = useQueryClient();
+
+  // Reports had no way to pull fresh data short of a browser reload, which
+  // matters most right after a Meta sync lands. Invalidates every query the
+  // page reads rather than a hand-maintained list, so a new query added later
+  // is refreshed too.
+  const [refreshing, setRefreshing] = useState(false);
+  const refresh = async () => {
+    setRefreshing(true);
+    try {
+      await qc.invalidateQueries();
+    } finally {
+      setRefreshing(false);
+    }
+  };
   const [searchParams, setSearchParams] = useSearchParams();
 
   // Active view is derived from the URL so every report has a shareable link:
@@ -172,6 +186,9 @@ export default function Reports() {
         subtitle={isCustom ? 'Saved report with pinned filters' : 'Build your report - add cards, widgets and filters'}
       >
         {isCustom && <Button variant="outline" size="sm" onClick={deleteReport} className="text-destructive">Delete</Button>}
+        <Button variant="outline" size="sm" onClick={refresh} disabled={refreshing} className="gap-1.5">
+          <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin' : ''}`} /> Refresh
+        </Button>
         {!isCustom && <Button variant="outline" size="sm" onClick={() => setSaveOpen(true)} className="gap-1.5"><Save className="w-3.5 h-3.5" /> Save View</Button>}
         <Button variant="outline" size="sm" onClick={duplicateCurrent} className="gap-1.5"><Copy className="w-3.5 h-3.5" /> Duplicate</Button>
         <Button size="sm" onClick={newReport} className="gap-1.5"><Plus className="w-3.5 h-3.5" /> New Report</Button>

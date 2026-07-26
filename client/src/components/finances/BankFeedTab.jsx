@@ -242,7 +242,8 @@ export default function BankFeedTab({ win }) {
       )}
 
       <Panel className="overflow-hidden">
-        <table className="w-full text-[12px]">
+        <div className="overflow-x-auto">
+        <table className="w-full min-w-[720px] text-[12px]">
           <thead><THead cols={['Date', 'Description', 'Category', 'Matched', 'Amount']} alignRight={[4]} /></thead>
           <tbody className="divide-y divide-border/60">
             {displayTxns.length === 0 && <tr><td colSpan={5} className="px-4 py-10 text-center text-muted-foreground">{unmatchedOnly ? 'No unmatched transactions in this period.' : 'No transactions yet. Connect Mercury or import a CSV.'}</td></tr>}
@@ -257,6 +258,7 @@ export default function BankFeedTab({ win }) {
             ))}
           </tbody>
         </table>
+        </div>
       </Panel>
 
       {txns.length > 0 && (

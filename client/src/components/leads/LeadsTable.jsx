@@ -267,17 +267,47 @@ export default function LeadsTable({ view }) {
 
   const availableColumns = useMemo(() => buildAvailableColumns(customFields), [customFields]);
 
+  // Leads narrowed by everything EXCEPT the supplier and source multi-selects.
+  //
+  // The dropdown options used to be built from the raw all-time `leads`, so a
+  // July range still listed sources that had only ever appeared in June. The
+  // options have to reflect the current range.
+  //
+  // Each dropdown is then cross-filtered by the OTHER one but never by itself:
+  // filtering a select by its own value would collapse its list to the single
+  // option already chosen and you could never widen the selection again.
+  const scoped = useMemo(() => {
+    const { start, end } = resolvePeriod(period, customPeriod);
+    return leads.filter(lead => {
+      if (!matchesView(lead, view)) return false;
+      const inst = leadEventInstant(lead);
+      if (start && (!inst || inst < start)) return false;
+      if (end && (!inst || inst > end)) return false;
+      if (!customFilters.every(f => matchesFilter(lead, f))) return false;
+      if (search && !matchesSearch(lead, search)) return false;
+      if (statusFilter.length > 0 && !statusFilter.includes(lead.final_status)) return false;
+      return true;
+    });
+  }, [leads, view, period, customPeriod, customFilters, search, statusFilter]);
+
   const supplierOptions = useMemo(() => {
     const set = new Set();
-    leads.forEach(l => { if (l.supplier_name) set.add(l.supplier_name); });
+    scoped.forEach(l => {
+      if (sourceFilter.length > 0 && !sourceFilter.includes(getSource(l))) return;
+      if (l.supplier_name) set.add(l.supplier_name);
+    });
     return Array.from(set).sort().map(s => ({ value: s, label: s }));
-  }, [leads]);
+  }, [scoped, sourceFilter]);
 
   const sourceOptions = useMemo(() => {
     const set = new Set();
-    leads.forEach(l => { const s = getSource(l); if (s) set.add(s); });
+    scoped.forEach(l => {
+      if (supplierFilter.length > 0 && !supplierFilter.includes(l.supplier_name)) return;
+      const s = getSource(l);
+      if (s) set.add(s);
+    });
     return Array.from(set).sort().map(s => ({ value: s, label: s }));
-  }, [leads]);
+  }, [scoped, supplierFilter]);
 
   const columns = columnConfig.columns;
 
@@ -310,16 +340,9 @@ export default function LeadsTable({ view }) {
   }, [handleResizeMove, handleResizeEnd]);
 
   const filtered = useMemo(() => {
-    const { start, end } = resolvePeriod(period, customPeriod);
-    const result = leads.filter(lead => {
-      if (!matchesView(lead, view)) return false;
-      // Bound by the lead's real event time in APP_TZ, matching reporting.
-      const inst = leadEventInstant(lead);
-      if (start && (!inst || inst < start)) return false;
-      if (end && (!inst || inst > end)) return false;
-      if (!customFilters.every(f => matchesFilter(lead, f))) return false;
-      if (search && !matchesSearch(lead, search)) return false;
-      if (statusFilter.length > 0 && !statusFilter.includes(lead.final_status)) return false;
+    // scoped already applied view, period, custom filters, search and status.
+    // Only the two multi-selects remain.
+    const result = scoped.filter(lead => {
       if (supplierFilter.length > 0 && !supplierFilter.includes(lead.supplier_name)) return false;
       if (sourceFilter.length > 0 && !sourceFilter.includes(getSource(lead))) return false;
       return true;
@@ -334,7 +357,7 @@ export default function LeadsTable({ view }) {
       return Number.isNaN(t) ? -Infinity : t;
     };
     return result.sort((a, b) => instant(b) - instant(a));
-  }, [leads, view, period, customPeriod, customFilters, search, statusFilter, supplierFilter, sourceFilter]);
+  }, [scoped, supplierFilter, sourceFilter]);
 
   // Client-side pagination over the filtered set. Selection and bulk actions
   // still span the whole filtered set; only the rendered rows are sliced.

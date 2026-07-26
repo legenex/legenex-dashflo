@@ -769,7 +769,8 @@ export default function CsvImporter() {
           </div>
 
           <div className="border border-border rounded-[10px] overflow-hidden">
-            <table className="w-full text-[12px]">
+            <div className="overflow-x-auto">
+            <table className="w-full min-w-[640px] text-[12px]">
               <thead><tr className="border-b border-border bg-muted/40 text-[10px] text-muted-foreground uppercase tracking-wider">
                 <th className="text-left px-4 py-2.5">Source Column</th><th className="text-left px-4 py-2.5">Sample</th>
                 <th className="text-left px-4 py-2.5 w-[40px]"></th><th className="text-left px-4 py-2.5">Maps To</th>
@@ -803,6 +804,7 @@ export default function CsvImporter() {
                 ))}
               </tbody>
             </table>
+            </div>
           </div>
 
           {target === 'lead' && importDiagnostics && (

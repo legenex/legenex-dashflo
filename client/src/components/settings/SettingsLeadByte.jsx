@@ -790,7 +790,8 @@ function ResponseBuilderPanel({ mappings, onSave, onDelete, onSeed, editingMappi
       </div>
 
       <div className="bg-card border border-border rounded-lg overflow-hidden">
-        <table className="w-full text-[13px]">
+        <div className="overflow-x-auto">
+        <table className="w-full min-w-[720px] text-[13px]">
           <thead>
             <tr className="border-b border-border bg-muted/40">
               <th className="text-left px-3 py-2.5 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider w-6">#</th>
@@ -829,6 +830,7 @@ function ResponseBuilderPanel({ mappings, onSave, onDelete, onSeed, editingMappi
             ))}
           </tbody>
         </table>
+        </div>
       </div>
 
       {editingMapping ? (

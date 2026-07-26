@@ -159,7 +159,8 @@ export default function ReconciliationTab({ data, onResolve }) {
         {wb.openGaps.length === 0 ? (
           <div className="flex items-center gap-2 text-[13px] status-sold px-4 py-6"><CheckCircle2 className="w-4 h-4" /> No open gaps, everything reconciles.</div>
         ) : (
-          <table className="w-full text-[12px]">
+          <div className="overflow-x-auto">
+          <table className="w-full min-w-[640px] text-[12px]">
             <thead><THead cols={['Counterparty', 'Type', 'Expected', 'Paid', 'Short', 'Action']} alignRight={[2, 3, 4]} /></thead>
             <tbody className="divide-y divide-border/60">
               {wb.openGaps.map((g, i) => (
@@ -174,13 +175,15 @@ export default function ReconciliationTab({ data, onResolve }) {
               ))}
             </tbody>
           </table>
+          </div>
         )}
       </Panel>
 
       {/* 4) Counterparty Reconciliation table */}
       <Panel className="overflow-hidden">
         <PanelHeader title="Counterparty Reconciliation" />
-        <table className="w-full text-[12px]">
+        <div className="overflow-x-auto">
+        <table className="w-full min-w-[640px] text-[12px]">
           <thead><THead cols={['Name', 'Type', 'Leads', 'Revenue', 'Cost', 'Profit', 'Invoiced', 'Paid', 'Flag']} alignRight={[2, 3, 4, 5, 6, 7]} center={[8]} /></thead>
           <tbody className="divide-y divide-border/60">
             {rows.length === 0 && <tr><td colSpan={9} className="py-6 text-center text-muted-foreground">No counterparties yet</td></tr>}
@@ -199,6 +202,7 @@ export default function ReconciliationTab({ data, onResolve }) {
             ))}
           </tbody>
         </table>
+        </div>
       </Panel>
     </div>
   );

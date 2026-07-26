@@ -452,7 +452,8 @@ export default function SettingsCustomFields() {
       </div>
 
       <div className="bg-card border border-border rounded-[10px] overflow-hidden">
-        <table className="w-full text-[13px]">
+        <div className="overflow-x-auto">
+        <table className="w-full min-w-[720px] text-[13px]">
           <thead>
             <tr className="border-b border-border bg-muted/50">
               <th className="w-8 px-2">
@@ -537,6 +538,7 @@ export default function SettingsCustomFields() {
             </Droppable>
           </DragDropContext>
         </table>
+        </div>
       </div>
 
       {/* Edit/Create Modal */}

@@ -175,7 +175,8 @@ export default function SettingsUsers() {
       </div>
 
       <Panel className="overflow-hidden">
-        <table className="w-full text-[13px]">
+        <div className="overflow-x-auto">
+        <table className="w-full min-w-[720px] text-[13px]">
           <thead>
             <tr className="border-b border-border bg-muted/50">
               {['Name', 'Email', 'Role', 'Status', 'Access', 'Joined', ''].map(h => (
@@ -213,6 +214,7 @@ export default function SettingsUsers() {
             })}
           </tbody>
         </table>
+        </div>
       </Panel>
 
       {/* Invite */}

@@ -55,7 +55,7 @@ export function StatChip({ label, value, tone, sub, i = 0 }) {
         <span className={`w-1.5 h-1.5 rounded-full ${t.dot}`} />
         <span className="text-[9.5px] font-semibold tracking-[0.11em] uppercase text-muted-foreground/70 truncate">{label}</span>
       </div>
-      <div className={`text-[22px] font-bold font-mono tabular-nums mt-1.5 leading-none ${t.value}`}>{value}</div>
+      <div className={`text-[17px] sm:text-[19px] lg:text-[22px] font-bold font-mono tabular-nums mt-1.5 leading-none truncate ${t.value}`}>{value}</div>
       {sub && <div className="text-[10.5px] text-muted-foreground/70 mt-1 truncate">{sub}</div>}
     </Rise>
   );

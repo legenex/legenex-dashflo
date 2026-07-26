@@ -62,7 +62,8 @@ export default function SettingsFieldMapping() {
       </Panel>
 
       <Panel className="overflow-hidden" i={1}>
-        <table className="w-full text-[13px]">
+        <div className="overflow-x-auto">
+        <table className="w-full min-w-[720px] text-[13px]">
           <thead><tr className="border-b border-border bg-muted/50 text-[11px] text-muted-foreground uppercase tracking-wider font-semibold">
             <th className="text-left px-4 py-3">Source Key</th><th className="text-left px-4 py-3"></th>
             <th className="text-left px-4 py-3">Target Field</th><th className="text-right px-4 py-3"></th>
@@ -79,6 +80,7 @@ export default function SettingsFieldMapping() {
             ))}
           </tbody>
         </table>
+        </div>
       </Panel>
     </div>
   );

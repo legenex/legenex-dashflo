@@ -32,7 +32,7 @@ export function StatChip({ label, value, tone, pct = null, sub, i = 0 }) {
         <span className={`w-1.5 h-1.5 rounded-full ${t.dot}`} />
         <span className="text-[9.5px] font-semibold tracking-[0.11em] uppercase text-muted-foreground/70 truncate">{label}</span>
       </div>
-      <div className={`text-[20px] font-bold font-mono tabular-nums mt-1.5 leading-none whitespace-nowrap ${t.value}`}>{value}</div>
+      <div className={`text-[16px] sm:text-[18px] lg:text-[20px] font-bold font-mono tabular-nums mt-1.5 leading-none truncate ${t.value}`}>{value}</div>
       {sub && <div className="text-[10.5px] text-muted-foreground/70 mt-1 truncate">{sub}</div>}
       <div className="mt-2.5 h-1 rounded-full bg-border/60 overflow-hidden">
         {width != null && (
