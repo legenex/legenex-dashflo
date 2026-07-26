@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { api } from '@/api/client';
+import { fetchAll } from '@/lib/fetchAll';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { Label } from '@/components/ui/label';
@@ -30,7 +31,7 @@ export default function BuyerCoverageTab({ buyer, verticals }) {
 
   const { data: allRows = [] } = useQuery({
     queryKey: ['op-buyer-state-cpl'],
-    queryFn: () => api.entities.BuyerStateCpl.list('', 2000),
+    queryFn: () => fetchAll((limit, skip) => api.entities.BuyerStateCpl.list('', limit, skip)),
   });
   const rows = useMemo(() => allRows.filter((r) => r.buyer_id === buyer.id), [allRows, buyer.id]);
 

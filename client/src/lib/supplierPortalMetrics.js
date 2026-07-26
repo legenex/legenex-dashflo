@@ -2,6 +2,7 @@
 // Every number here is the supplier's own, never buyer identities or other
 // suppliers' data.
 import { resolvePeriod } from '@/lib/periodRange';
+import { leadCost } from '@/lib/reportMetrics';
 
 function num(v) { const n = Number(v); return isNaN(n) ? 0 : n; }
 
@@ -38,7 +39,7 @@ export function supplierPortalMetrics(leads) {
     else if (b === 'rejected') rejected++;
     else if (b === 'error') error++;
     revenue += num(l.revenue);
-    cost += num(l.cost);
+    cost += leadCost(l);
   }
   const profit = revenue - cost;
   return {
@@ -70,7 +71,7 @@ export function dailyBreakdown(leads) {
     map[day].total++;
     if (statusBucket(l.final_status) === 'accepted') map[day].accepted++;
     map[day].revenue += num(l.revenue);
-    map[day].cost += num(l.cost);
+    map[day].cost += leadCost(l);
   }
   return Object.values(map)
     .map(r => ({ ...r, acceptedPct: r.total > 0 ? (r.accepted / r.total) * 100 : 0 }))

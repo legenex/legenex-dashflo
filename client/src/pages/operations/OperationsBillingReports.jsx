@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useCallback } from 'react';
 import { api } from '@/api/client';
+import { fetchAll } from '@/lib/fetchAll';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTheme } from '@/lib/theme';
 import SectionHeader from '@/components/shared/SectionHeader';
@@ -33,7 +34,7 @@ export default function OperationsBillingReports() {
   });
   const { data: billingRuns = [] } = useQuery({
     queryKey: ['br-billing-runs'],
-    queryFn: () => api.entities.BillingRun.list('-created_date', 1000),
+    queryFn: () => fetchAll((limit, skip) => api.entities.BillingRun.list('-created_date', limit, skip)),
   });
   // Invoice is read to keep the client entity pattern consistent for later
   // builds; not surfaced as a figure here.

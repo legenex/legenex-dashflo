@@ -1,6 +1,7 @@
 import React, { useMemo } from 'react';
 import { TrendingUp, ArrowDown, Scale } from 'lucide-react';
 import { applyFilters, computeMetrics, money, spendInWindow } from '@/lib/reportMetrics';
+import { internalSupplierSet } from '@/lib/reportMetrics';
 import { ReportKpi, AINote } from '@/components/reports/reportViewAtoms';
 
 const GREEN = '#3DD68C';
@@ -29,12 +30,12 @@ const PnlLine = ({ item }) => {
   );
 };
 
-export default function PnlReport({ leads, adSpend, bankTx, filters }) {
+export default function PnlReport({ leads, adSpend, bankTx, suppliers = [], filters }) {
   const { m, lines, grossProfit, netProfit, verified, gap } = useMemo(() => {
     const f = applyFilters(leads, filters);
     // Spend carries its own date, so it has to be windowed separately or the
     // statement charges a month of revenue against the whole spend history.
-    const m = computeMetrics(f, spendInWindow(adSpend, filters));
+    const m = computeMetrics(f, spendInWindow(adSpend, filters), internalSupplierSet(suppliers));
 
     const techTotal = Math.abs(bankTx.filter(t => t.category === 'tech').reduce((a, t) => a + num(t.amount), 0));
     const otherTotal = Math.abs(bankTx.filter(t => ['other', 'media', 'personal'].includes(t.category)).reduce((a, t) => a + num(t.amount), 0));

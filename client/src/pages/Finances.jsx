@@ -47,7 +47,7 @@ export default function Finances() {
   const win = useMemo(() => resolvePeriod(period, custom), [period, custom]);
   const inWin = (d) => { if (!d) return false; try { return isWithinInterval(new Date(d), { start: win.start, end: win.end }); } catch { return false; } };
 
-  const { data: leads = [] } = useQuery({ queryKey: ['report-leads'], queryFn: () => api.entities.Lead.list('-created_date', 2000) });
+  const { data: leads = [] } = useQuery({ queryKey: ['report-leads'], queryFn: () => fetchAll((limit, skip) => api.entities.Lead.list('-created_date', limit, skip)) });
   const { data: buyers = [] } = useQuery({ queryKey: ['buyers'], queryFn: () => api.entities.Buyer.list() });
   const { data: suppliers = [] } = useQuery({ queryKey: ['suppliers'], queryFn: () => api.entities.Supplier.list() });
   const { data: invoices = [] } = useQuery({ queryKey: ['all-invoices'], queryFn: () => api.entities.Invoice.list('-created_date', 500) });

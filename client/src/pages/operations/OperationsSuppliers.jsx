@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { api } from '@/api/client';
+import { fetchAll } from '@/lib/fetchAll';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
 import { useTheme } from '@/lib/theme';
@@ -91,7 +92,7 @@ export default function OperationsSuppliers() {
 
   const { data: sources = [] } = useQuery({
     queryKey: ['op-supplier-sources'],
-    queryFn: () => api.entities.SupplierSource.list('', 2000),
+    queryFn: () => fetchAll((limit, skip) => api.entities.SupplierSource.list('', limit, skip)),
   });
 
   const ctx = { sources };

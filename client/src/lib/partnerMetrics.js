@@ -1,3 +1,4 @@
+import { leadCost } from '@/lib/reportMetrics';
 // Aggregates lead metrics per supplier / buyer for the Campaigns tables.
 // Reads from Lead records already loaded on the page - no extra fetch.
 
@@ -16,7 +17,7 @@ export function supplierMetrics(leads, supplierName) {
     if (s === 'Duplicate') duplicate++;
     if (s === 'Disqualified' || s === 'Rejected') dq++;
     revenue += num(l.revenue);
-    cost += num(l.cost);
+    cost += leadCost(l);
   }
   const profit = revenue - cost;
   const cpl = total > 0 ? cost / total : 0;
@@ -29,7 +30,7 @@ export function buyerMetrics(leads, buyerName) {
   // Buyers are matched by the response/destination - best-effort by supplier or brand.
   const rows = leads.filter(l => l.final_status === 'Sold');
   let revenue = 0, cost = 0;
-  for (const l of rows) { revenue += num(l.revenue); cost += num(l.cost); }
+  for (const l of rows) { revenue += num(l.revenue); cost += leadCost(l); }
   void buyerName;
   return { revenue, cost, profit: revenue - cost };
 }

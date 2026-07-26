@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { api } from '@/api/client';
+import { fetchAll } from '@/lib/fetchAll';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
@@ -37,9 +38,9 @@ export default function BuyerDeliveriesPanel({ buyerId }) {
   const [newOpen, setNewOpen] = useState(false);
 
   const { data: verticals = [] } = useQuery({ queryKey: ['verticals'], queryFn: () => api.entities.Vertical.list('-created_date', 500) });
-  const { data: allDeliveries = [], isLoading } = useQuery({ queryKey: ['deliveries'], queryFn: () => api.entities.Delivery.list('-created_date', 2000) });
-  const { data: subs = [] } = useQuery({ queryKey: ['subdeliveries'], queryFn: () => api.entities.SubDelivery.list('-created_date', 5000) });
-  const { data: members = [] } = useQuery({ queryKey: ['routemembers'], queryFn: () => api.entities.RouteMember.list('-created_date', 5000) });
+  const { data: allDeliveries = [], isLoading } = useQuery({ queryKey: ['deliveries'], queryFn: () => fetchAll((limit, skip) => api.entities.Delivery.list('-created_date', limit, skip)) });
+  const { data: subs = [] } = useQuery({ queryKey: ['subdeliveries'], queryFn: () => fetchAll((limit, skip) => api.entities.SubDelivery.list('-created_date', limit, skip)) });
+  const { data: members = [] } = useQuery({ queryKey: ['routemembers'], queryFn: () => fetchAll((limit, skip) => api.entities.RouteMember.list('-created_date', limit, skip)) });
   const { data: settings = [] } = useQuery({ queryKey: ['appsettings'], queryFn: () => api.entities.AppSettings.list() });
 
   const distributionMode = String((settings[0] && settings[0].distribution_mode) || 'legacy_only');

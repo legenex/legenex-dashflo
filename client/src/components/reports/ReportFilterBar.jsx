@@ -3,6 +3,7 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { SearchableSelect } from '@/components/ui/searchable-select';
+import { MultiSelect } from '@/components/ui/multi-select';
 import { Panel } from '@/components/settings/settingsUi';
 import MobileFilterSheet from '@/components/shared/MobileFilterSheet';
 import { Filter, Plus, X } from 'lucide-react';
@@ -62,11 +63,17 @@ export default function ReportFilterBar({ value, onChange, options, hide = [] })
     onChange({ date_from: fmt(w.start), date_to: fmt(w.end) });
   };
 
-  const opt = (all, items) => [{ value: '', label: all }, ...items];
+  // Filter values may be a single value (older saved views) or an array (the
+  // multi-selects), so normalise before handing one to a MultiSelect.
+  const asArray = (v) => {
+    if (Array.isArray(v)) return v;
+    return v == null || v === '' || v === 'all' ? [] : [v];
+  };
+  const count = (v) => asArray(v).length;
 
   // Count active filters for the mobile Filters badge.
-  const activeCount = extra.length + (value.vertical ? 1 : 0) +
-    (shows('supplier_name') && value.supplier_name ? 1 : 0) + (shows('buyer') && value.buyer ? 1 : 0) + (value.brand ? 1 : 0);
+  const activeCount = extra.length + count(value.vertical) +
+    (shows('supplier_name') ? count(value.supplier_name) : 0) + (shows('buyer') ? count(value.buyer) : 0) + count(value.brand);
 
   return (
     <div className="mb-5 space-y-3">
@@ -91,11 +98,14 @@ export default function ReportFilterBar({ value, onChange, options, hide = [] })
             calls a Vertical, so the vertical filter is labelled Campaign here.
             The old Campaign filter listed Meta ad campaign names, which is an
             ad-reporting dimension rather than a distribution campaign, and has
-            been removed. */}
-        <SearchableSelect value={value.vertical || ''} onValueChange={v => set('vertical', v)} className="w-full lg:w-[150px] bg-card border-border" options={opt('Campaign: All', verticals.map(v => ({ value: v.code, label: v.name })))} />
-        {shows('supplier_name') && <SearchableSelect value={value.supplier_name || ''} onValueChange={v => set('supplier_name', v)} className="w-full lg:w-[150px] bg-card border-border" options={opt('Supplier: All', suppliers.map(s => ({ value: s.name, label: s.name })))} />}
-        {shows('buyer') && <SearchableSelect value={value.buyer || ''} onValueChange={v => set('buyer', v)} className="w-full lg:w-[150px] bg-card border-border" options={opt('Buyer: All', buyers.map(b => ({ value: b.company_name, label: b.company_name })))} />}
-        <SearchableSelect value={value.brand || ''} onValueChange={v => set('brand', v)} className="w-full lg:w-[140px] bg-card border-border" options={opt('Brand: All', brands.map(b => ({ value: b.brand_code, label: b.brand_name })))} />
+            been removed.
+
+            All of these are multi-select: clicking an option toggles it, so a
+            second click deselects. Several selections mean "any of these". */}
+        <MultiSelect value={asArray(value.vertical)} onValueChange={v => set('vertical', v)} className="w-full lg:w-[150px] bg-card border-border" placeholder="Campaign: All" options={verticals.map(v => ({ value: v.code, label: v.name }))} />
+        {shows('supplier_name') && <MultiSelect value={asArray(value.supplier_name)} onValueChange={v => set('supplier_name', v)} className="w-full lg:w-[150px] bg-card border-border" placeholder="Supplier: All" options={suppliers.map(s => ({ value: s.name, label: s.name }))} />}
+        {shows('buyer') && <MultiSelect value={asArray(value.buyer)} onValueChange={v => set('buyer', v)} className="w-full lg:w-[150px] bg-card border-border" placeholder="Buyer: All" options={buyers.map(b => ({ value: b.company_name, label: b.company_name }))} />}
+        <MultiSelect value={asArray(value.brand)} onValueChange={v => set('brand', v)} className="w-full lg:w-[140px] bg-card border-border" placeholder="Brand: All" options={brands.map(b => ({ value: b.brand_code, label: b.brand_name }))} />
 
         <Button
           variant={showFilters || extra.length > 0 ? 'default' : 'outline'}

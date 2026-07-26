@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { api } from '@/api/client';
+import { fetchAll } from '@/lib/fetchAll';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
@@ -48,9 +49,9 @@ export default function CampaignsList({ onCreate, onOpen }) {
 
   const { data: campaigns = [], isLoading } = useQuery({ queryKey: ['campaigns'], queryFn: () => api.entities.Campaign.list('-created_date', 500) });
   const { data: verticals = [] } = useQuery({ queryKey: ['verticals'], queryFn: () => api.entities.Vertical.list('sort_order', 200) });
-  const { data: leads = [] } = useQuery({ queryKey: ['leads-metrics'], queryFn: () => api.entities.Lead.list('-created_date', 1000) });
-  const { data: groups = [] } = useQuery({ queryKey: ['routeGroups'], queryFn: () => api.entities.RouteGroup.list('-created_date', 1000) });
-  const { data: members = [] } = useQuery({ queryKey: ['allRouteMembers'], queryFn: () => api.entities.RouteMember.list('-created_date', 2000) });
+  const { data: leads = [] } = useQuery({ queryKey: ['leads-metrics'], queryFn: () => fetchAll((limit, skip) => api.entities.Lead.list('-created_date', limit, skip)) });
+  const { data: groups = [] } = useQuery({ queryKey: ['routeGroups'], queryFn: () => fetchAll((limit, skip) => api.entities.RouteGroup.list('-created_date', limit, skip)) });
+  const { data: members = [] } = useQuery({ queryKey: ['allRouteMembers'], queryFn: () => fetchAll((limit, skip) => api.entities.RouteMember.list('-created_date', limit, skip)) });
 
   // Map a vertical code to its full display name (e.g. "MVA" -> "Motor Vehicle Accidents").
   const verticalName = useMemo(() => {

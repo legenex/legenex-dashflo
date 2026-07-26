@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { api } from '@/api/client';
+import { fetchAll } from '@/lib/fetchAll';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import SectionHeader from '@/components/shared/SectionHeader';
@@ -31,11 +32,11 @@ export default function RouteGroups() {
   });
   const { data: groups = [], isLoading: groupsLoading } = useQuery({
     queryKey: ['routeGroups'],
-    queryFn: () => api.entities.RouteGroup.list('-created_date', 1000),
+    queryFn: () => fetchAll((limit, skip) => api.entities.RouteGroup.list('-created_date', limit, skip)),
   });
   const { data: allMembers = [] } = useQuery({
     queryKey: ['routeMembers', 'all'],
-    queryFn: () => api.entities.RouteMember.list('-created_date', 5000),
+    queryFn: () => fetchAll((limit, skip) => api.entities.RouteMember.list('-created_date', limit, skip)),
   });
 
   const campaignName = useMemo(() => {

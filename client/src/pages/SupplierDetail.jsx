@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '@/api/client';
+import { fetchAll } from '@/lib/fetchAll';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
@@ -49,7 +50,7 @@ export default function SupplierDetail() {
   });
   const { data: leads = [] } = useQuery({
     queryKey: ['leads-metrics'],
-    queryFn: () => api.entities.Lead.list('-created_date', 1000),
+    queryFn: () => fetchAll((limit, skip) => api.entities.Lead.list('-created_date', limit, skip)),
   });
   const { data: customFields = [] } = useQuery({
     queryKey: ['custom-fields'],

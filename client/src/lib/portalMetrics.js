@@ -1,5 +1,6 @@
 // Portal-scoped metrics over a buyer's own leads + feedback within a period.
 import { resolvePeriod } from '@/lib/periodRange';
+import { leadCost } from '@/lib/reportMetrics';
 
 function num(v) { const n = Number(v); return isNaN(n) ? 0 : n; }
 
@@ -16,7 +17,7 @@ export function portalMetrics(leads) {
   let revenue = 0, cost = 0, sold = 0;
   for (const l of leads) {
     revenue += num(l.revenue);
-    cost += num(l.cost);
+    cost += leadCost(l);
     if (String(l.final_status) === 'Sold') sold++;
   }
   const total = leads.length;
@@ -40,7 +41,7 @@ export function dailyBreakdown(leads) {
     map[day].total++;
     if (String(l.final_status) === 'Sold') map[day].sold++;
     map[day].revenue += num(l.revenue);
-    map[day].cost += num(l.cost);
+    map[day].cost += leadCost(l);
   }
   return Object.values(map)
     .map(r => ({ ...r, convRate: r.total > 0 ? (r.sold / r.total) * 100 : 0 }))

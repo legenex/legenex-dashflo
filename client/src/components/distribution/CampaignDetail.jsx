@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { api } from '@/api/client';
+import { fetchAll } from '@/lib/fetchAll';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
@@ -34,8 +35,8 @@ export default function CampaignDetail({ campaign }) {
   const qc = useQueryClient();
   const navigate = useNavigate();
 
-  const { data: groups = [] } = useQuery({ queryKey: ['routeGroups'], queryFn: () => api.entities.RouteGroup.list('-created_date', 1000) });
-  const { data: suppliers = [] } = useQuery({ queryKey: ['suppliers'], queryFn: () => api.entities.Supplier.list('-created_date', 1000) });
+  const { data: groups = [] } = useQuery({ queryKey: ['routeGroups'], queryFn: () => fetchAll((limit, skip) => api.entities.RouteGroup.list('-created_date', limit, skip)) });
+  const { data: suppliers = [] } = useQuery({ queryKey: ['suppliers'], queryFn: () => fetchAll((limit, skip) => api.entities.Supplier.list('-created_date', limit, skip)) });
   const { data: verticals = [] } = useQuery({ queryKey: ['verticals'], queryFn: () => api.entities.Vertical.list('-created_date', 500) });
 
   const campaignGroups = useMemo(

@@ -5,7 +5,7 @@
 
 import { formatInTimeZone } from 'date-fns-tz';
 import { APP_TZ } from '@/lib/periodRange';
-import { leadField, leadEventInstant } from '@/lib/reportMetrics';
+import { leadField, leadEventInstant, leadCost } from '@/lib/reportMetrics';
 
 const f = (lead, key) => {
   const v = leadField(lead, key);
@@ -31,7 +31,7 @@ export const LEAD_EXPORT_COLUMNS = [
   { key: 'vertical', label: 'Vertical', default: true, get: (l) => f(l, 'vertical') },
   { key: 'status', label: 'Status', default: true, get: (l) => l.final_status || '' },
   { key: 'revenue', label: 'Revenue', default: true, get: (l) => l.revenue ?? '' },
-  { key: 'cost', label: 'Cost', get: (l) => l.cost ?? '' },
+  { key: 'cost', label: 'Cost', get: (l) => { const c = leadCost(l); return c ? c : ''; } },
   { key: 'cpl', label: 'CPL', get: (l) => f(l, 'cpl') },
   { key: 'profit', label: 'Profit', get: (l) => f(l, 'profit') },
   { key: 'net_profit', label: 'Net Profit', get: (l) => f(l, 'net_profit') },

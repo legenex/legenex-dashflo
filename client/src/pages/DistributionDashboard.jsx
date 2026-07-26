@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { api } from '@/api/client';
+import { fetchAll } from '@/lib/fetchAll';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
@@ -111,7 +112,7 @@ export default function DistributionDashboard() {
   const prior = useMemo(() => priorWindow(win), [win]);
 
   const { data: leads = [] } = useQuery({ queryKey: ['dist-leads'], queryFn: () => api.entities.Lead.filter({ archived: false }, '-created_date', 2000) });
-  const { data: errors = [] } = useQuery({ queryKey: ['dist-errors'], queryFn: () => api.entities.ErrorLog.list('-created_date', 1000) });
+  const { data: errors = [] } = useQuery({ queryKey: ['dist-errors'], queryFn: () => fetchAll((limit, skip) => api.entities.ErrorLog.list('-created_date', limit, skip)) });
   const { data: hlrArr = [] } = useQuery({ queryKey: ['hlr-settings'], queryFn: () => api.entities.HlrSettings.list() });
   const { data: emailArr = [] } = useQuery({ queryKey: ['email-val-settings'], queryFn: () => api.entities.EmailValidationSettings.list() });
   const { data: appSettingsArr = [] } = useQuery({ queryKey: ['app-settings'], queryFn: () => api.entities.AppSettings.list() });

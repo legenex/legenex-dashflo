@@ -31,6 +31,8 @@ import {
 } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { resolvePeriod, PERIOD_LABELS } from '@/lib/periodRange';
+import { leadEventInstant } from '@/lib/reportMetrics';
+import { MultiSelect } from '@/components/ui/multi-select';
 import {
   financialTruth, actionQueue, financeDonut, dailyFinance, topCampaigns, buyerRisk, fmtMoney,
 } from '@/lib/overviewFinance';
@@ -47,6 +49,43 @@ const RISK_TONE = {
 };
 // Buyer-risk status -> the label copy the command center uses.
 const RISK_LABEL = { Overdue: 'Short Paid', Outstanding: 'No Payment Source', Overpaid: 'Overpaid', Settled: 'On Track' };
+
+const norm = (v) => String(v ?? '').trim().toLowerCase();
+
+// Supplier names arrive from inbound payloads in whatever case the supplier
+// uses (LEADFLOW) while the record may read LeadFlow, so compare loosely rather
+// than splitting one supplier into two.
+function supplierMatches(value, wanted) {
+  const have = norm(value);
+  if (!have || !wanted) return false;
+  return have === wanted || have.includes(wanted) || wanted.includes(have);
+}
+
+// A lead's source lives in the mapped_fields bag under any of several keys.
+function overviewSource(lead) {
+  let mf = {};
+  try { mf = JSON.parse(lead.mapped_fields || '{}'); } catch { mf = {}; }
+  for (const key of ['utm_source', 'source', 'lead_source', 'source_id', 'src']) {
+    for (const [k, v] of Object.entries(mf)) {
+      if (k.toLowerCase() === key && v != null && v !== '') return String(v);
+    }
+  }
+  return null;
+}
+
+// One dimension filter. Multi-select: clicking an option toggles it, so a
+// second click deselects, and several selections mean "any of these".
+function OverviewFilter({ label, value, onChange, options }) {
+  return (
+    <MultiSelect
+      value={value}
+      onValueChange={onChange}
+      options={options.map((o) => ({ value: o, label: o }))}
+      placeholder={`${label}: All`}
+      className={`w-full sm:w-[180px] bg-card ${value.length > 0 ? 'border-primary' : 'border-border'}`}
+    />
+  );
+}
 
 export default function Overview() {
   const qc = useQueryClient();
@@ -99,7 +138,13 @@ export default function Overview() {
 
   const win = useMemo(() => resolvePeriod(period, custom), [period, custom]);
 
-  const { data: leads = [] } = useQuery({ queryKey: ['ov-leads'], queryFn: () => api.entities.Lead.list('-created_date', 2000) });
+  // Dimension filters. Arrays so several values can be selected at once; an
+  // empty array means All.
+  const [buyerFilter, setBuyerFilter] = useState([]);
+  const [supplierFilter, setSupplierFilter] = useState([]);
+  const [sourceFilter, setSourceFilter] = useState([]);
+
+  const { data: leads = [] } = useQuery({ queryKey: ['ov-leads'], queryFn: () => fetchAll((limit, skip) => api.entities.Lead.list('-created_date', limit, skip)) });
   const { data: buyers = [] } = useQuery({ queryKey: ['buyers'], queryFn: () => api.entities.Buyer.list() });
   const { data: suppliers = [] } = useQuery({ queryKey: ['suppliers'], queryFn: () => api.entities.Supplier.list() });
   const { data: invoices = [] } = useQuery({ queryKey: ['all-invoices'], queryFn: () => api.entities.Invoice.list('-created_date', 500) });
@@ -112,9 +157,54 @@ export default function Overview() {
   const { data: spendMappings = [] } = useQuery({ queryKey: ['adspend-mappings'], queryFn: () => api.entities.AdSpendMapping.list() });
   const { data: leadSources = [] } = useQuery({ queryKey: ['lead-sources'], queryFn: () => api.entities.LeadSource.list('-created_date', 100) });
 
-  const dataset = { leads, buyers, suppliers, invoices, payments, payouts, adSpend, txns };
+  // Filtered dataset. Leads narrow on all three dimensions; ad spend can only
+  // narrow on supplier, because AdSpend rows carry a supplier but have no buyer
+  // or lead-source dimension. Spend is incurred before a lead is ever sold to a
+  // buyer, so a buyer filter genuinely cannot attribute it. Rather than invent
+  // an allocation, cost is left whole and the card says so.
+  const fLeads = useMemo(() => {
+    const nb = buyerFilter.map(norm); const ns = supplierFilter.map(norm); const nsrc = sourceFilter.map(norm);
+    if (!nb.length && !ns.length && !nsrc.length) return leads;
+    return leads.filter((l) => {
+      if (nb.length && !nb.includes(norm(l.buyer_name || l.buyer))) return false;
+      if (ns.length && !ns.some((w) => supplierMatches(l.supplier_name, w))) return false;
+      if (nsrc.length && !nsrc.includes(norm(overviewSource(l)))) return false;
+      return true;
+    });
+  }, [leads, buyerFilter, supplierFilter, sourceFilter]);
 
-  const truth = useMemo(() => financialTruth(dataset, win), [leads, buyers, suppliers, invoices, payments, payouts, adSpend, txns, win]);
+  const fAdSpend = useMemo(() => {
+    const ns = supplierFilter.map(norm);
+    if (!ns.length) return adSpend;
+    return adSpend.filter((r) => ns.some((w) => supplierMatches(r.supplier_key ?? r.supplier_name, w)));
+  }, [adSpend, supplierFilter]);
+
+  const costUnfiltered = buyerFilter.length > 0 || sourceFilter.length > 0;
+
+  // Filter options come from leads inside the selected period, so a July view
+  // never offers a source that only ever appeared in June.
+  const filterOptions = useMemo(() => {
+    const inWin = (l) => {
+      const inst = leadEventInstant(l);
+      if (!inst) return false;
+      if (win?.start && inst < win.start) return false;
+      if (win?.end && inst > win.end) return false;
+      return true;
+    };
+    const b = new Set(); const s = new Set(); const src = new Set();
+    for (const l of leads) {
+      if (!inWin(l)) continue;
+      const bv = l.buyer_name || l.buyer; if (bv) b.add(String(bv));
+      if (l.supplier_name) s.add(String(l.supplier_name));
+      const sv = overviewSource(l); if (sv) src.add(sv);
+    }
+    const sorted = (set) => [...set].sort((x, y) => x.localeCompare(y));
+    return { buyers: sorted(b), suppliers: sorted(s), sources: sorted(src) };
+  }, [leads, win]);
+
+  const dataset = { leads: fLeads, buyers, suppliers, invoices, payments, payouts, adSpend: fAdSpend, txns };
+
+  const truth = useMemo(() => financialTruth(dataset, win), [fLeads, buyers, suppliers, invoices, payments, payouts, fAdSpend, txns, win]);
   const queue = useMemo(() => actionQueue(truth, txns), [truth, txns]);
   const donut = useMemo(() => financeDonut(truth.wLeads), [truth]);
   const daily = useMemo(() => dailyFinance({ wLeads: truth.wLeads, payments, adSpend }, win), [truth, payments, adSpend, win]);
@@ -307,6 +397,27 @@ export default function Overview() {
         onToggleCompare={() => setCompare(c => !c)}
         onRefresh={refreshAll}
       />
+
+      {/* Dimension filters. Kept on their own row under the period bar so they
+          wrap cleanly on a phone rather than crushing the period buttons. */}
+      <div className="flex flex-wrap items-center gap-2 mt-3">
+        <OverviewFilter label="Buyer" value={buyerFilter} onChange={setBuyerFilter} options={filterOptions.buyers} />
+        <OverviewFilter label="Supplier" value={supplierFilter} onChange={setSupplierFilter} options={filterOptions.suppliers} />
+        <OverviewFilter label="Source" value={sourceFilter} onChange={setSourceFilter} options={filterOptions.sources} />
+        {(buyerFilter.length > 0 || supplierFilter.length > 0 || sourceFilter.length > 0) && (
+          <button
+            onClick={() => { setBuyerFilter([]); setSupplierFilter([]); setSourceFilter([]); }}
+            className="text-[12px] font-medium text-muted-foreground hover:text-foreground px-2 py-1.5"
+          >
+            Clear
+          </button>
+        )}
+        {costUnfiltered && (
+          <span className="text-[11px] text-muted-foreground/80">
+            Cost and CPL stay unfiltered: ad spend carries no buyer or source dimension.
+          </span>
+        )}
+      </div>
 
       {/* AI Analyst summary band */}
       <Reveal>

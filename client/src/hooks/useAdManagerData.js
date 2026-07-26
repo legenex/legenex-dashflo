@@ -18,7 +18,7 @@ export default function useAdManagerData() {
   const win = useMemo(() => resolvePeriod(period, custom), [period, custom]);
 
   const spendQ = useQuery({ queryKey: ['adspend'], queryFn: () => fetchAll((limit, skip) => api.entities.AdSpend.list('-date', limit, skip)) });
-  const leadsQ = useQuery({ queryKey: ['report-leads'], queryFn: () => api.entities.Lead.list('-created_date', 5000) });
+  const leadsQ = useQuery({ queryKey: ['report-leads'], queryFn: () => fetchAll((limit, skip) => api.entities.Lead.list('-created_date', limit, skip)) });
   const mapQ = useQuery({ queryKey: ['adspend-mappings'], queryFn: () => api.entities.AdSpendMapping.list() });
   const metaQ = useQuery({ queryKey: ['ad-creative-meta'], queryFn: () => api.entities.AdCreativeMeta.list() });
 

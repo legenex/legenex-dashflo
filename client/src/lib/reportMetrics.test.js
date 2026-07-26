@@ -96,6 +96,16 @@ describe('spendInWindow filters', () => {
     expect(total({ date_from: '2026-07-01', date_to: '2026-07-31', vertical: 'all', supplier: '' })).toBe(1650);
   });
 
+  it('accepts an array of values, meaning any of these', () => {
+    // The filter bars are multi-select, so two verticals means either one.
+    expect(total({ date_from: '2026-07-01', date_to: '2026-07-31', vertical: ['MVA', 'WC'] })).toBe(1650);
+    expect(total({ date_from: '2026-07-01', date_to: '2026-07-31', vertical: ['WC'] })).toBe(250);
+  });
+
+  it('treats an empty array as no filter', () => {
+    expect(total({ date_from: '2026-07-01', date_to: '2026-07-31', vertical: [] })).toBe(1650);
+  });
+
   it('ignores filters spend has no dimension for, rather than zeroing cost', () => {
     // Ad spend is incurred before a lead is sold to any buyer.
     expect(total({ date_from: '2026-07-01', date_to: '2026-07-31', buyer: 'Walker Advertising' })).toBe(1650);

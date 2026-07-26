@@ -64,11 +64,11 @@ export default function CampaignSuppliers() {
   });
   const { data: leads = [] } = useQuery({
     queryKey: ['leads-metrics'],
-    queryFn: () => api.entities.Lead.list('-created_date', 1000),
+    queryFn: () => fetchAll((limit, skip) => api.entities.Lead.list('-created_date', limit, skip)),
   });
   const { data: allSources = [] } = useQuery({
     queryKey: ['op-supplier-sources'],
-    queryFn: () => api.entities.SupplierSource.list('source_code', 1000),
+    queryFn: () => fetchAll((limit, skip) => api.entities.SupplierSource.list('source_code', limit, skip)),
   });
   const { data: adSpend = [] } = useQuery({
     queryKey: ['ad-spend-all'],

@@ -23,6 +23,18 @@ export const navGroups = [
     ],
   },
   {
+    label: 'Reports', icon: BarChart3, type: 'dropdown', path: '/reports', permKey: 'reports',
+    children: [
+      { label: 'Performance Overview', path: '/reports', tab: 'performance_overview', icon: TrendingUp, permKey: 'reports' },
+      { label: 'Daily Performance', path: '/reports', tab: 'daily', icon: CalendarDays, permKey: 'reports' },
+      { label: 'Campaign Performance', path: '/reports', tab: 'campaign', icon: Target, permKey: 'reports' },
+      { label: 'P&L', path: '/reports', tab: 'pnl', icon: DollarSign, permKey: 'reports' },
+      { label: 'Ad Performance', path: '/reports', tab: 'ad', icon: PieChart, permKey: 'reports' },
+      { label: 'Buyer Performance', path: '/reports', tab: 'buyer', icon: UserCheck, permKey: 'reports' },
+      { label: 'Supplier Performance', path: '/reports', tab: 'supplier', icon: Building2, permKey: 'reports' },
+    ],
+  },
+  {
     label: 'Operations', icon: SlidersHorizontal, type: 'dropdown', path: '/operations', permKey: 'operations',
     children: [
       { label: 'Dashboard', path: '/operations', icon: Gauge, permKey: 'operations' },
@@ -41,18 +53,6 @@ export const navGroups = [
       { label: 'Campaigns', path: '/campaigns', icon: Megaphone, permKey: 'dist_campaigns' },
       { label: 'Webhooks', path: '/deliveries', icon: Webhook, permKey: 'dist_deliveries' },
       { label: 'Conversion Events', path: '/conversion-events', icon: Zap, permKey: 'dist_conversion_events' },
-    ],
-  },
-  {
-    label: 'Reports', icon: BarChart3, type: 'dropdown', path: '/reports', permKey: 'reports',
-    children: [
-      { label: 'Performance Overview', path: '/reports', tab: 'performance_overview', icon: TrendingUp, permKey: 'reports' },
-      { label: 'Daily Performance', path: '/reports', tab: 'daily', icon: CalendarDays, permKey: 'reports' },
-      { label: 'Campaign Performance', path: '/reports', tab: 'campaign', icon: Target, permKey: 'reports' },
-      { label: 'P&L', path: '/reports', tab: 'pnl', icon: DollarSign, permKey: 'reports' },
-      { label: 'Ad Performance', path: '/reports', tab: 'ad', icon: PieChart, permKey: 'reports' },
-      { label: 'Buyer Performance', path: '/reports', tab: 'buyer', icon: UserCheck, permKey: 'reports' },
-      { label: 'Supplier Performance', path: '/reports', tab: 'supplier', icon: Building2, permKey: 'reports' },
     ],
   },
   {

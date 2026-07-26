@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { api } from '@/api/client';
+import { fetchAll } from '@/lib/fetchAll';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useParams, useNavigate, useSearchParams, Link } from 'react-router-dom';
 import { toast } from 'sonner';
@@ -54,7 +55,7 @@ function UnderlineTabs({ tabs, value, onChange }) {
 export default function DistributionBuyers() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const { data: buyers = [], isLoading } = useQuery({ queryKey: ['buyers'], queryFn: () => api.entities.Buyer.list('-created_date', 1000) });
+  const { data: buyers = [], isLoading } = useQuery({ queryKey: ['buyers'], queryFn: () => fetchAll((limit, skip) => api.entities.Buyer.list('-created_date', limit, skip)) });
 
   const selected = buyers.find((b) => b.id === id) || null;
 
@@ -147,8 +148,8 @@ function RoutingTab({ buyer }) {
   const [busy, setBusy] = useState(false);
 
   const { data: campaigns = [] } = useQuery({ queryKey: ['campaigns'], queryFn: () => api.entities.Campaign.list('-created_date', 500) });
-  const { data: groups = [] } = useQuery({ queryKey: ['routegroups'], queryFn: () => api.entities.RouteGroup.list('-created_date', 1000) });
-  const { data: members = [] } = useQuery({ queryKey: ['routemembers'], queryFn: () => api.entities.RouteMember.list('-created_date', 5000) });
+  const { data: groups = [] } = useQuery({ queryKey: ['routegroups'], queryFn: () => fetchAll((limit, skip) => api.entities.RouteGroup.list('-created_date', limit, skip)) });
+  const { data: members = [] } = useQuery({ queryKey: ['routemembers'], queryFn: () => fetchAll((limit, skip) => api.entities.RouteMember.list('-created_date', limit, skip)) });
 
   const groupById = useMemo(() => Object.fromEntries(groups.map((g) => [g.id, g])), [groups]);
   const campaignById = useMemo(() => Object.fromEntries(campaigns.map((c) => [c.id, c])), [campaigns]);
@@ -233,8 +234,8 @@ function RoutingTab({ buyer }) {
 
 // Read-only commercial summary. Editing lives in Operations (single source of truth).
 function SummaryTab({ buyer }) {
-  const { data: wallets = [] } = useQuery({ queryKey: ['buyerwallets'], queryFn: () => api.entities.BuyerWallet.list('-created_date', 2000) });
-  const { data: stateCpl = [] } = useQuery({ queryKey: ['buyerstatecpl'], queryFn: () => api.entities.BuyerStateCpl.list('-created_date', 5000).catch(() => []) });
+  const { data: wallets = [] } = useQuery({ queryKey: ['buyerwallets'], queryFn: () => fetchAll((limit, skip) => api.entities.BuyerWallet.list('-created_date', limit, skip)) });
+  const { data: stateCpl = [] } = useQuery({ queryKey: ['buyerstatecpl'], queryFn: () => fetchAll((limit, skip) => api.entities.BuyerStateCpl.list('-created_date', limit, skip)).catch(() => []) });
 
   const wallet = wallets.find((w) => w.buyer_id === buyer.id) || null;
   const coverageCount = stateCpl.filter((r) => r.buyer_id === buyer.id).length;

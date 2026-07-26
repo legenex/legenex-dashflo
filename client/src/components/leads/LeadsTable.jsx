@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { motion } from 'framer-motion';
+import { useSearchParams } from 'react-router-dom';
 import { api } from '@/api/client';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import ErrorStatusPill from '@/components/leads/ErrorStatusPill';
@@ -161,8 +162,30 @@ export default function LeadsTable({ view }) {
 
   const [search, setSearch] = useState('');
   // Every leads table defaults to This Month (APP_TZ calendar month).
-  const [period, setPeriod] = useState('this_month');
-  const [customPeriod, setCustomPeriod] = useState({ from: '', to: '' });
+  //
+  // The period lives in the URL so the sub-nav count badges and the telemetry
+  // footer resolve the SAME window as this table. They used to count every lead
+  // ever received while the table showed one month, so a single page reported
+  // Sold as 562 in the sidebar, 562 in the footer and 292 in the table.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const period = searchParams.get('period') || 'this_month';
+  const customPeriod = {
+    from: searchParams.get('from') || '',
+    to: searchParams.get('to') || '',
+  };
+  const setPeriod = (p) => {
+    const next = new URLSearchParams(searchParams);
+    next.set('period', p);
+    if (p !== 'custom') { next.delete('from'); next.delete('to'); }
+    setSearchParams(next, { replace: true });
+  };
+  const setCustomPeriod = (c) => {
+    const next = new URLSearchParams(searchParams);
+    next.set('period', 'custom');
+    if (c?.from) next.set('from', c.from); else next.delete('from');
+    if (c?.to) next.set('to', c.to); else next.delete('to');
+    setSearchParams(next, { replace: true });
+  };
   const [customFilters, setCustomFilters] = useState([]);
   const [selectedLead, setSelectedLead] = useState(null);
   const [initialTab, setInitialTab] = useState('summary');
@@ -370,14 +393,31 @@ export default function LeadsTable({ view }) {
   // Reset to page 1 whenever the view, search, or any filter changes.
   useEffect(() => { setPage(1); }, [view, search, period, customPeriod, customFilters, statusFilter, supplierFilter, sourceFilter, pageSize]);
 
-  // Real telemetry for the shell footer, computed across all loaded leads.
+  // Real telemetry for the shell footer.
+  //
+  // Counted over the SELECTED PERIOD, not every lead ever loaded. Counting all
+  // time here while the table showed one month is what made the footer read
+  // Sold 562 under a table showing 292. The view filter is deliberately not
+  // applied: the footer is a summary of the period across all statuses, so the
+  // Sold figure here matches the Sold tab's own row count.
+  const periodLeads = useMemo(() => {
+    const { start, end } = resolvePeriod(period, customPeriod);
+    return leads.filter((l) => {
+      const inst = leadEventInstant(l);
+      if (start && (!inst || inst < start)) return false;
+      if (end && (!inst || inst > end)) return false;
+      return true;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [leads, period, customPeriod.from, customPeriod.to]);
+
   const telemetry = useMemo(() => ({
-    total: leads.length,
-    sold: leads.filter(l => l.final_status === 'Sold').length,
-    queued: leads.filter(l => l.final_status === 'Queued').length,
-    errors: leads.filter(l => l.final_status === 'Error').length,
+    total: periodLeads.length,
+    sold: periodLeads.filter(l => l.final_status === 'Sold').length,
+    queued: periodLeads.filter(l => l.final_status === 'Queued').length,
+    errors: periodLeads.filter(l => l.final_status === 'Error').length,
     lastLeadAt: leads[0]?.created_date || null,
-  }), [leads]);
+  }), [periodLeads, leads]);
 
   const exportCSV = () => {
     const cols = columns;

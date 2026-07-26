@@ -5,6 +5,7 @@ import MetricPicker from './MetricPicker';
 import ReportWidget from './ReportWidget';
 import AddWidgetPicker from './AddWidgetPicker';
 import { computeMetrics, dailySeries, applyFilters, METRIC_CATALOG, leadField, seriesWindow, spendInWindow } from '@/lib/reportMetrics';
+import { internalSupplierSet } from '@/lib/reportMetrics';
 import { reorder } from '@/lib/reorder';
 
 let idc = 0;
@@ -32,7 +33,7 @@ const groupOf = (metric) => CATEGORY[metric] || 'data';
 
 // The Performance Overview canvas: pinned + grouped metric board, then widgets.
 export default function PerformanceCanvas({
-  leads, adSpend, cards, widgets, onCardsChange, onWidgetsChange, customFields, filters,
+  leads, adSpend, suppliers = [], cards, widgets, onCardsChange, onWidgetsChange, customFields, filters,
 }) {
   const [pickCard, setPickCard] = useState(false);
   const [pickWidget, setPickWidget] = useState(false);
@@ -41,7 +42,7 @@ export default function PerformanceCanvas({
   const filtered = applyFilters(leads, filters);
   // Spend has to be windowed separately: applyFilters only touches leads.
   const spend = spendInWindow(adSpend, filters);
-  const metrics = computeMetrics(filtered, spend);
+  const metrics = computeMetrics(filtered, spend, internalSupplierSet(suppliers));
   // Sparklines follow the selected date range, not a fixed trailing 14 days.
   const series = dailySeries(filtered, spend, 14, seriesWindow(filters));
   const revSeries = series.map(s => s.revenue);

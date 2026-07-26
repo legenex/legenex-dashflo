@@ -208,9 +208,9 @@ export default function Reports() {
       {active === 'std:daily' ? (
         <DailyReport leads={leads} adSpend={adSpend} filters={effectiveFilters} />
       ) : active === 'std:pnl' ? (
-        <PnlReport leads={leads} adSpend={adSpend} bankTx={bankTx} filters={effectiveFilters} />
+        <PnlReport leads={leads} adSpend={adSpend} bankTx={bankTx} suppliers={suppliers} filters={effectiveFilters} />
       ) : active === 'std:ad' ? (
-        <AdReport adSpend={adSpend} adMappings={adMappings} integrations={integrations} leads={leads} filters={effectiveFilters} />
+        <AdReport adSpend={adSpend} adMappings={adMappings} integrations={integrations} leads={leads} suppliers={suppliers} filters={effectiveFilters} />
       ) : active === 'std:supplier' ? (
         <SupplierReport leads={leads} adSpend={adSpend} suppliers={suppliers} supplierSources={supplierSources} filters={effectiveFilters} />
       ) : active === 'std:buyer' ? (
@@ -219,6 +219,7 @@ export default function Reports() {
         <PerformanceCanvas
           leads={leads}
           adSpend={adSpend}
+          suppliers={suppliers}
           cards={view.cards}
           widgets={view.widgets}
           onCardsChange={setCards}

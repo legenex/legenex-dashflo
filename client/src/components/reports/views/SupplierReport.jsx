@@ -4,6 +4,7 @@ import { Download } from 'lucide-react';
 import {
   applyFilters, computeMetrics, spendInWindow, leadField, money, pct, int,
 } from '@/lib/reportMetrics';
+import { internalSupplierSet } from '@/lib/reportMetrics';
 import { ReportKpi, THead, TRow, AINote } from '@/components/reports/reportViewAtoms';
 import { resolveSource, supplierPayoutForWindow } from '@/lib/supplierCost';
 
@@ -51,7 +52,7 @@ export default function SupplierReport({ leads, adSpend, suppliers = [], supplie
     const rows = [...names.entries()].map(([key, label]) => {
       const supLeads = scoped.filter((l) => norm(l.supplier_name || leadField(l, 'supplier_name')) === key);
       const supSpend = spend.filter((r) => norm(r.supplier_key || r.supplier_name) === key);
-      const m = computeMetrics(supLeads, supSpend);
+      const m = computeMetrics(supLeads, supSpend, internalSupplierSet(suppliers));
       const record = suppliers.find((s) => norm(s.name) === key);
       // Payout uses the supplier's own sources, since the payout rule lives on
       // the source (falling back to the supplier-level payout_type). Profit

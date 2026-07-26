@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { api } from '@/api/client';
+import { fetchAll } from '@/lib/fetchAll';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
 import { useTheme } from '@/lib/theme';
@@ -74,12 +75,12 @@ export default function OperationsBuyers() {
 
   const { data: cplRows = [] } = useQuery({
     queryKey: ['op-buyer-state-cpl'],
-    queryFn: () => api.entities.BuyerStateCpl.list('', 2000),
+    queryFn: () => fetchAll((limit, skip) => api.entities.BuyerStateCpl.list('', limit, skip)),
   });
 
   const { data: stateStatuses = [] } = useQuery({
     queryKey: ['op-state-status'],
-    queryFn: () => api.entities.StateStatus.list('', 2000),
+    queryFn: () => fetchAll((limit, skip) => api.entities.StateStatus.list('', limit, skip)),
   });
 
   const { data: verticals = [] } = useQuery({

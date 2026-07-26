@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { api } from '@/api/client';
+import { fetchAll } from '@/lib/fetchAll';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
@@ -35,10 +36,10 @@ export default function CampaignDetailPage({ campaign, onBack }) {
   const [tab, setTab] = useState('overview');
   const [savingHeader, setSavingHeader] = useState(false);
 
-  const { data: groups = [] } = useQuery({ queryKey: ['routeGroups'], queryFn: () => api.entities.RouteGroup.list('-created_date', 1000) });
+  const { data: groups = [] } = useQuery({ queryKey: ['routeGroups'], queryFn: () => fetchAll((limit, skip) => api.entities.RouteGroup.list('-created_date', limit, skip)) });
   const { data: buyers = [] } = useQuery({ queryKey: ['buyers'], queryFn: () => api.entities.Buyer.list('-created_date', 500) });
   const { data: verticals = [] } = useQuery({ queryKey: ['verticals'], queryFn: () => api.entities.Vertical.list('sort_order', 200) });
-  const { data: leads = [] } = useQuery({ queryKey: ['leads-metrics'], queryFn: () => api.entities.Lead.list('-created_date', 1000) });
+  const { data: leads = [] } = useQuery({ queryKey: ['leads-metrics'], queryFn: () => fetchAll((limit, skip) => api.entities.Lead.list('-created_date', limit, skip)) });
 
   const verticalLabel = useMemo(() => {
     const code = String(campaign.vertical || '').toLowerCase();
@@ -52,7 +53,7 @@ export default function CampaignDetailPage({ campaign, onBack }) {
   );
   const defaultGroup = campaignGroups[0] || null;
 
-  const { data: allMembers = [] } = useQuery({ queryKey: ['routeMembers'], queryFn: () => api.entities.RouteMember.list('-created_date', 5000) });
+  const { data: allMembers = [] } = useQuery({ queryKey: ['routeMembers'], queryFn: () => fetchAll((limit, skip) => api.entities.RouteMember.list('-created_date', limit, skip)) });
 
   const buyerName = useMemo(() => Object.fromEntries(buyers.map((b) => [b.id, b.company_name || b.name || b.id])), [buyers]);
   const supplierCount = useMemo(() => parseIds(campaign.supplier_ids).length, [campaign.supplier_ids]);

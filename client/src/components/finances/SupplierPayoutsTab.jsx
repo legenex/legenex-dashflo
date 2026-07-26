@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { api } from '@/api/client';
 import { isWithinInterval } from 'date-fns';
+import { leadCost } from '@/lib/reportMetrics';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { motion } from 'framer-motion';
 import { Button } from '@/components/ui/button';
@@ -36,7 +37,7 @@ export default function SupplierPayoutsTab({ suppliers = [], leads = [], adSpend
     ].filter(Boolean));
     return Array.from(names).map(name => {
       const sLeads = winLeads.filter(l => l.supplier_name === name);
-      const declaredCost = sLeads.reduce((a, l) => a + n(l.cost), 0);
+      const declaredCost = sLeads.reduce((a, l) => a + leadCost(l), 0);
       const spend = winSpend.filter(a => a.supplier_name === name).reduce((a, r) => a + n(r.spend), 0);
       const sPayouts = payouts.filter(p => p.supplier_name === name);
       const issued = sPayouts.reduce((a, p) => a + n(p.amount), 0);
