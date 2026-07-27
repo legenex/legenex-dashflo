@@ -140,31 +140,6 @@ const SYSTEM_FILTER_FIELDS = [
 ];
 
 const FILTERS_STORAGE_KEY = 'legenex_saved_filters';
-const PERIOD_STORAGE_KEY = 'legenex_leads_period';
-
-// Remembered period per leads view, per browser profile.
-//
-// A saved 'custom' with no dates is discarded rather than restored: it would
-// otherwise open the page on an empty custom range with the Custom tab lit and
-// no rows, which reads as broken. Anything unrecognised falls back to This
-// Month, so a stale or corrupted value can never strand the page.
-function loadPeriodPref(view) {
-  try {
-    const all = JSON.parse(localStorage.getItem(PERIOD_STORAGE_KEY) || '{}');
-    const saved = all[view];
-    if (!saved || typeof saved !== 'object') return {};
-    if (saved.period === 'custom' && !(saved.from && saved.to)) return {};
-    return saved;
-  } catch { return {}; }
-}
-
-function savePeriodPref(view, value) {
-  try {
-    const all = JSON.parse(localStorage.getItem(PERIOD_STORAGE_KEY) || '{}');
-    all[view] = value;
-    localStorage.setItem(PERIOD_STORAGE_KEY, JSON.stringify(all));
-  } catch { /* storage unavailable: fall back to This Month next load */ }
-}
 
 function loadSavedSets(view) {
   try {
@@ -186,41 +161,41 @@ export default function LeadsTable({ view }) {
   const config = VIEW_CONFIGS[view] || VIEW_CONFIGS.all;
 
   const [search, setSearch] = useState('');
-  // Period resolution, in order: the URL, then this operator's last choice,
-  // then This Month.
+  // Period ALWAYS starts at This Month, on every visit, refresh and login.
   //
-  // It lives in the URL so the sub-nav count badges and the telemetry footer
-  // resolve the SAME window as this table. They used to count every lead ever
-  // received while the table showed one month, so a single page reported Sold
-  // as 562 in the sidebar, 562 in the footer and 292 in the table.
-  //
-  // It is ALSO remembered per operator, so a chosen range survives a reload.
-  // But the remembered value is only ever applied on first mount, and a saved
-  // 'custom' with no dates falls back to This Month rather than stranding the
-  // page on an empty custom range.
-  const [searchParams, setSearchParams] = useSearchParams();
+  // The URL is an OUTPUT only, never an input: the sub-nav badges and the
+  // telemetry footer read it so they resolve the same window as this table.
+  // Reading it back in was the bug: navigating within the app carried
+  // ?period=custom from a previous screen, so the page reopened on a stale
+  // custom range with the Custom tab lit. Nothing is persisted either, so two
+  // visits can never resolve different windows and report different counts.
+  const [, setSearchParams] = useSearchParams();
+  const [period, setPeriodState] = useState('this_month');
+  const [customPeriod, setCustomPeriodState] = useState({ from: '', to: '' });
 
-  const urlPeriod = searchParams.get('period');
-  const [remembered] = useState(() => loadPeriodPref(view));
-  const period = urlPeriod || remembered.period || 'this_month';
-  const customPeriod = urlPeriod
-    ? { from: searchParams.get('from') || '', to: searchParams.get('to') || '' }
-    : { from: remembered.from || '', to: remembered.to || '' };
+  // Publish the current window to the URL, including on first mount, which
+  // overwrites anything inherited from the previous screen.
+  useEffect(() => {
+    const next = new URLSearchParams(window.location.search);
+    next.set('period', period);
+    if (period === 'custom') {
+      if (customPeriod.from) next.set('from', customPeriod.from); else next.delete('from');
+      if (customPeriod.to) next.set('to', customPeriod.to); else next.delete('to');
+    } else {
+      next.delete('from');
+      next.delete('to');
+    }
+    setSearchParams(next, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [period, customPeriod.from, customPeriod.to]);
 
   const setPeriod = (p) => {
-    const next = new URLSearchParams(searchParams);
-    next.set('period', p);
-    if (p !== 'custom') { next.delete('from'); next.delete('to'); }
-    setSearchParams(next, { replace: true });
-    savePeriodPref(view, { period: p, from: '', to: '' });
+    setPeriodState(p);
+    if (p !== 'custom') setCustomPeriodState({ from: '', to: '' });
   };
   const setCustomPeriod = (c) => {
-    const next = new URLSearchParams(searchParams);
-    next.set('period', 'custom');
-    if (c?.from) next.set('from', c.from); else next.delete('from');
-    if (c?.to) next.set('to', c.to); else next.delete('to');
-    setSearchParams(next, { replace: true });
-    savePeriodPref(view, { period: 'custom', from: c?.from || '', to: c?.to || '' });
+    setPeriodState('custom');
+    setCustomPeriodState({ from: c?.from || '', to: c?.to || '' });
   };
   const [customFilters, setCustomFilters] = useState([]);
   const [selectedLead, setSelectedLead] = useState(null);
@@ -554,8 +529,7 @@ export default function LeadsTable({ view }) {
       invalidateLeadCaches(qc);
       await Promise.all([
         qc.refetchQueries({ queryKey: ['leads-all-non-archived'] }),
-        qc.refetchQueries({ queryKey: ['leads-nav-counts'] }),
-      ]);
+              ]);
     } catch (e) {
       toast.error(`Delete failed: ${e?.message || 'unknown error'}`);
     }
@@ -617,8 +591,7 @@ export default function LeadsTable({ view }) {
         // views (Reports, Finances, campaign metrics) in sync too.
         await Promise.all([
           qc.refetchQueries({ queryKey: ['leads-all-non-archived'], type: 'active' }),
-          qc.refetchQueries({ queryKey: ['leads-nav-counts'], type: 'active' }),
-        ]);
+                  ]);
         invalidateLeadCaches(qc);
       }}
       onExport={exportCSV}

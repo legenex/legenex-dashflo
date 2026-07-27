@@ -45,8 +45,16 @@ export default function LeadsNav() {
     to: searchParams.get('to') || '',
   };
 
+  // Deliberately the SAME query key as the leads table.
+  //
+  // This used to be its own key ('leads-nav-counts'), which meant two separate
+  // caches of an identical query, populated at different moments and refreshed
+  // independently. Leads arrive continuously, so the badges and the table could
+  // disagree for no visible reason, and a refetch after an action invalidated
+  // only the table's copy, leaving these counts stale. One key, one cache, one
+  // answer.
   const { data: leads = [] } = useQuery({
-    queryKey: ['leads-nav-counts'],
+    queryKey: ['leads-all-non-archived'],
     queryFn: async () => {
       const all = [];
       let p = 0;
