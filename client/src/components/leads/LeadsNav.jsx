@@ -1,10 +1,12 @@
 import React, { useMemo } from 'react';
-import { Link, useLocation } from 'react-router-dom';
+import { Link, useLocation, useSearchParams } from 'react-router-dom';
 import { List, CheckCircle2, XCircle, Ban, Slash, Clock, AlertTriangle } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '@/api/client';
 import { differenceInHours } from 'date-fns';
 import SubNavShell from '@/components/layout/SubNavShell';
+import { resolvePeriod } from '@/lib/periodRange';
+import { leadEventInstant } from '@/lib/reportMetrics';
 
 const ITEMS = [
   { label: 'All Leads', path: '/leads', icon: List, view: 'all' },
@@ -33,6 +35,15 @@ function matchesView(lead, view) {
 // live count badges, active red pill, and a queued-alert card for old queued leads.
 export default function LeadsNav() {
   const location = useLocation();
+  // The table writes its period into the URL. Reading it here keeps the badges
+  // and the table answering the same question: counting all time next to a
+  // table showing one month is what made Sold read 562 above a list of 292.
+  const [searchParams] = useSearchParams();
+  const period = searchParams.get('period') || 'this_month';
+  const customPeriod = {
+    from: searchParams.get('from') || '',
+    to: searchParams.get('to') || '',
+  };
 
   const { data: leads = [] } = useQuery({
     queryKey: ['leads-nav-counts'],
@@ -52,10 +63,18 @@ export default function LeadsNav() {
   });
 
   const counts = useMemo(() => {
+    const { start, end } = resolvePeriod(period, customPeriod);
+    const inWindow = leads.filter((l) => {
+      const inst = leadEventInstant(l);
+      if (start && (!inst || inst < start)) return false;
+      if (end && (!inst || inst > end)) return false;
+      return true;
+    });
     const c = {};
-    for (const item of ITEMS) c[item.view] = leads.filter(l => matchesView(l, item.view)).length;
+    for (const item of ITEMS) c[item.view] = inWindow.filter(l => matchesView(l, item.view)).length;
     return c;
-  }, [leads]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [leads, period, customPeriod.from, customPeriod.to]);
 
   const queuedOld = useMemo(() => {
     const now = new Date();

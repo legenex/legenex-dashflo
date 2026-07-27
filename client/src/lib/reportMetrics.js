@@ -286,8 +286,12 @@ export function computeMetrics(leads, adSpendRows = [], internalSuppliers) {
   // them. A supplier is one or the other, never both, so adding the two is safe
   // and matches how the supplier cost engine prices a supplier.
   const totalCost = cost + adSpend;
-  const blendedCpl = total > 0 ? totalCost / total : 0;
-  const costPerSold = sold > 0 ? totalCost / sold : 0;
+  // CPL is cost per SOLD lead, not cost per lead received. We pay for traffic to
+  // produce sold leads, so dividing by every lead (including DQs, which are the
+  // majority) understates the real acquisition cost badly. cost_per_sold is kept
+  // as an alias so saved report cards referencing it keep working.
+  const blendedCpl = sold > 0 ? totalCost / sold : 0;
+  const costPerSold = blendedCpl;
   const convRate = total > 0 ? (sold / total) * 100 : 0;
   const qpMargin = revenue > 0 ? (profit / revenue) * 100 : 0;
   const roas = adSpend > 0 ? revenue / adSpend : 0;

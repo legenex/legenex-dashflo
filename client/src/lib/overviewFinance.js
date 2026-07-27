@@ -71,7 +71,10 @@ export function financialTruth({ leads, buyers, suppliers, invoices, payments, p
   // counts. CPL is that cost over leads in the same window, which is the only
   // basis that rolls up correctly to any period.
   const totalCost = accruedCost + trackedSpend;
-  const blendedCpl = wLeads.length > 0 ? totalCost / wLeads.length : 0;
+  // CPL is cost per SOLD lead, not per lead received. Dividing by every lead
+  // (DQs are the majority) understates what a sold lead actually costs.
+  const soldCount = wLeads.filter((l) => String(l.final_status || '') === 'Sold').length;
+  const blendedCpl = soldCount > 0 ? totalCost / soldCount : 0;
 
   const kpis = {
     revenue: { headline: bookedRevenue, sub: verifiedRevenue, gap: bookedRevenue - verifiedRevenue },
@@ -79,7 +82,7 @@ export function financialTruth({ leads, buyers, suppliers, invoices, payments, p
     adSpend: { headline: trackedSpend, sub: paidSpend, gap: trackedSpend - paidSpend },
     supplierCost: { headline: totalCost, sub: paidPayouts, gap: totalCost - paidPayouts },
     cost: { headline: totalCost, sub: paidPayouts + paidSpend, gap: totalCost - (paidPayouts + paidSpend) },
-    cpl: { headline: blendedCpl, sub: wLeads.length, gap: 0 },
+    cpl: { headline: blendedCpl, sub: soldCount, gap: 0 },
   };
 
   // Small stat cards.

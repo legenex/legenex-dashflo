@@ -102,6 +102,30 @@ export default function PerformanceCanvas({
 
   return (
     <div>
+      {/* LEAD STATUS STRIP: the shape of the pipeline for the current filters,
+          above the money metrics. Same statuses the Leads section counts, so
+          Sold here and Sold on the Leads page answer the same question. */}
+      <div className="mb-4 rounded-xl border border-border bg-card shadow-[0_12px_32px_-16px_rgba(0,0,0,0.35)] overflow-hidden">
+        <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-7 divide-x divide-y sm:divide-y-0 divide-border/60">
+          {[
+            { label: 'Total Leads', value: metrics.total_leads, cls: 'text-foreground' },
+            { label: 'Sold', value: metrics.sold, cls: 'status-sold' },
+            { label: 'Unsold', value: metrics.unsold, cls: 'status-unsold' },
+            { label: 'Disqualified', value: metrics.dqs, cls: 'status-disqualified' },
+            { label: 'Returned', value: metrics.returns, cls: 'status-returned' },
+            { label: 'Duplicate', value: metrics.duplicates, cls: 'status-duplicate' },
+            { label: 'Conv Rate', value: `${(metrics.conv_rate || 0).toFixed(1)}%`, cls: 'text-primary' },
+          ].map((s) => (
+            <div key={s.label} className="px-3 py-3 lg:px-4 lg:py-3.5 min-w-0">
+              <div className="text-[9.5px] font-semibold tracking-[0.1em] uppercase text-muted-foreground/70 truncate">{s.label}</div>
+              <div className={`text-[17px] sm:text-[19px] lg:text-[22px] font-bold font-mono tabular-nums mt-1 truncate ${s.cls}`}>
+                {typeof s.value === 'number' ? s.value.toLocaleString() : s.value}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
       {/* METRIC BOARD: pinned row + category chips */}
       <div className="mb-6 rounded-xl border border-border bg-card shadow-[0_12px_32px_-16px_rgba(0,0,0,0.35)] overflow-hidden">
         <div className="flex items-center justify-between px-3 lg:px-5 pt-3 lg:pt-4">

@@ -368,7 +368,7 @@ export default function Overview() {
     adSpend: 'No platform sync',
     supplierCost: 'No statements ingested',
     cost: 'Supplier lead cost plus attributed ad spend',
-    cpl: 'Cost divided by leads in this period',
+    cpl: 'Cost divided by sold leads in this period',
   };
 
   // Right-aligned meta chips for the lower panel section headers.
@@ -442,7 +442,7 @@ export default function Overview() {
           { key: 'revenue', label: 'Revenue', subLabel: 'Verified', icon: DollarSign, cmp: 'Booked' },
           { key: 'profit', label: 'Profit', subLabel: 'Cash', icon: TrendingUp, cmp: 'Reported' },
           { key: 'cost', label: 'Cost', subLabel: 'Paid', icon: Megaphone, cmp: 'Accrued' },
-          { key: 'cpl', label: 'CPL', subLabel: 'Leads', icon: Users, cmp: 'Blended', subFormat: 'number', hideGap: true },
+          { key: 'cpl', label: 'CPL', subLabel: 'Sold', icon: Users, cmp: 'Blended', subFormat: 'number', hideGap: true },
         ].map((c) => (
           <motion.div key={c.key} variants={itemVariants}>
             <GroupedKpiCard
