@@ -92,7 +92,7 @@ export default function Verification() {
   });
   const { data: leads = [] } = useQuery({
     queryKey: ['verification-leads'],
-    queryFn: () => api.entities.Lead.list('-created_date', 500),
+    queryFn: () => api.entities.Lead.filter({ archived: false }, '-created_date', 500),
   });
 
   const settings = hlrArr[0] || {};

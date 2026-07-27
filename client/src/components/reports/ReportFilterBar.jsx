@@ -32,7 +32,23 @@ export default function ReportFilterBar({ value, onChange, options, hide = [] })
   const shows = (key) => !hide.includes(key);
   const [showFilters, setShowFilters] = useState(false);
   const [extra, setExtra] = useState(Object.keys(value || {}).filter(k => OPTIONAL_FILTERS.some(f => f.key === k) && value[k]));
-  const [period, setPeriod] = useState(value.date_from || value.date_to ? 'custom' : 'this_month');
+  // Which named period the current dates correspond to.
+  //
+  // This used to be `dates present ? 'custom' : 'this_month'`, but the effect
+  // below writes This Month's dates on mount. So any remount (switching report
+  // views) saw dates already present and displayed Custom, even though the
+  // range WAS This Month. Match the dates back to a named period instead, and
+  // fall back to Custom only when they genuinely match none.
+  const periodFromDates = (v) => {
+    if (!v?.date_from && !v?.date_to) return 'this_month';
+    for (const p of STANDARD_PERIODS) {
+      if (p.value === 'custom') continue;
+      const w = resolvePeriod(p.value);
+      if (fmt(w.start) === v.date_from && fmt(w.end) === v.date_to) return p.value;
+    }
+    return 'custom';
+  };
+  const [period, setPeriod] = useState(() => periodFromDates(value));
 
   const set = (k, v) => onChange({ ...value, [k]: v });
   const setDates = (from, to) => onChange({ ...value, date_from: from || '', date_to: to || '' });

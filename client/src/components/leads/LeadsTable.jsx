@@ -193,9 +193,18 @@ export default function LeadsTable({ view }) {
     setPeriodState(p);
     if (p !== 'custom') setCustomPeriodState({ from: '', to: '' });
   };
+  // Only switches to the custom range when dates are actually supplied.
+  //
+  // This used to flip to 'custom' unconditionally, and the view-reset effect
+  // below clears the range by calling it with two empty strings. So every mount
+  // and every view change reset the period to This Month and then immediately
+  // knocked it back to Custom, which is why the page always opened on Custom no
+  // matter how many times the default was 'fixed'.
   const setCustomPeriod = (c) => {
-    setPeriodState('custom');
-    setCustomPeriodState({ from: c?.from || '', to: c?.to || '' });
+    const from = c?.from || '';
+    const to = c?.to || '';
+    setCustomPeriodState({ from, to });
+    if (from || to) setPeriodState('custom');
   };
   const [customFilters, setCustomFilters] = useState([]);
   const [selectedLead, setSelectedLead] = useState(null);
@@ -234,8 +243,10 @@ export default function LeadsTable({ view }) {
 
   useEffect(() => {
     setSearch('');
-    setPeriod('this_month');
-    setCustomPeriod({ from: '', to: '' });
+    // Reset straight through the raw setters. Going via setPeriod /
+    // setCustomPeriod here is what caused the Custom-on-load bug.
+    setPeriodState('this_month');
+    setCustomPeriodState({ from: '', to: '' });
     setCustomFilters([]);
     setSavedSets(loadSavedSets(view));
     setSelectedIds(new Set());

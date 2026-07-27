@@ -26,7 +26,7 @@ const uniq = (arr) => Array.from(new Set(arr.filter(Boolean)));
 // down by supplier (true CPL) and by ad account / source.
 export default function AdSpendTab({ win }) {
   const { data: allSpend = [] } = useQuery({ queryKey: ['adspend'], queryFn: () => fetchAll((limit, skip) => api.entities.AdSpend.list('-date', limit, skip)) });
-  const { data: allLeads = [] } = useQuery({ queryKey: ['report-leads'], queryFn: () => fetchAll((limit, skip) => api.entities.Lead.list('-created_date', limit, skip)) });
+  const { data: allLeads = [] } = useQuery({ queryKey: ['report-leads'], queryFn: () => fetchAll((limit, skip) => api.entities.Lead.filter({ archived: false }, '-created_date', limit, skip)) });
   const { data: mappings = [] } = useQuery({ queryKey: ['adspend-mappings'], queryFn: () => api.entities.AdSpendMapping.list() });
 
   const inWin = (d) => !win || (d && isWithinInterval(new Date(d), { start: win.start, end: win.end }));

@@ -50,7 +50,7 @@ export default function SupplierDetail() {
   });
   const { data: leads = [] } = useQuery({
     queryKey: ['leads-metrics'],
-    queryFn: () => fetchAll((limit, skip) => api.entities.Lead.list('-created_date', limit, skip)),
+    queryFn: () => fetchAll((limit, skip) => api.entities.Lead.filter({ archived: false }, '-created_date', limit, skip)),
   });
   const { data: customFields = [] } = useQuery({
     queryKey: ['custom-fields'],
