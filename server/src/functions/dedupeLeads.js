@@ -1,4 +1,19 @@
-import { requireUser, HttpError } from './_runtime.js';
+// Find and optionally remove duplicate leads.
+//
+// A double-run CSV import on 19 July 2026 wrote 40+ leads twice under a single
+// import_batch_id, inflating every Sold count in the app. The importer now
+// blocks on duplicates and asks, but the records already written need cleaning.
+//
+// Two modes:
+//   { mode: 'scan'  }  (default) reports what it would do and changes nothing
+//   { mode: 'apply' }  deletes the redundant copies
+//
+// The OLDEST record in each group is always kept, because it is the one other
+// records (deliveries, billing, events) were written against. Newer copies are
+// merged into it first: any field the keeper is missing but a duplicate has is
+// copied across, so removing the copy cannot lose data.
+//
+// Operator-gated. Never exposed to portal users.
 
 const OPERATOR_PERMISSION_KEYS = ['leads', 'reports', 'overview', 'finances', 'distribution', 'operations'];
 
@@ -42,22 +57,19 @@ const isEmpty = (v) => v === null || v === undefined || v === '' || v === 0;
 export default async function dedupeLeads(ctx) {
   try {
     const db = ctx.db;
-    let user = null;
-    try {
-      user = requireUser(ctx);
-    } catch {
-      user = null;
-    }
+    const user = ctx.user;
     if (!isOperator(user)) return ctx.json({ error: 'Unauthorized' }, 401);
 
     const body = ctx.body || {};
     const mode = body?.mode === 'apply' ? 'apply' : 'scan';
 
-    // Page through every lead. A single call is capped at 500 rows.
+    // Page through every LIVE lead. A single call is capped at 500 rows.
+    // Archived records are excluded: they are already retired, and including
+    // them would re-flag every duplicate that has previously been handled.
     const all = [];
     const pageSize = 500;
     for (let page = 0; page < 400; page += 1) {
-      const batch = await db.entities.Lead.list('created_date', pageSize, page * pageSize);
+      const batch = await db.entities.Lead.filter({ archived: false }, 'created_date', pageSize, page * pageSize);
       if (!batch || batch.length === 0) break;
       all.push(...batch);
       if (batch.length < pageSize) break;
@@ -93,7 +105,7 @@ export default async function dedupeLeads(ctx) {
     }));
 
     if (mode === 'scan') {
-      return {
+      return ctx.json({
         success: true,
         mode,
         total_leads: all.length,
@@ -101,7 +113,7 @@ export default async function dedupeLeads(ctx) {
         records_to_remove: duplicateCount,
         would_remain: all.length - duplicateCount,
         sample,
-      };
+      });
     }
 
     // APPLY: merge anything the keeper is missing, then delete the copy.
@@ -130,15 +142,22 @@ export default async function dedupeLeads(ctx) {
       }
       for (const dupe of g.remove) {
         try {
-          await db.entities.Lead.delete(dupe.id);
+          // Archive rather than hard delete. A duplicate can always be restored
+          // if the match turns out to be wrong; a deleted lead cannot. Every
+          // reporting query already excludes archived records, so the counts
+          // correct immediately either way.
+          await db.entities.Lead.update(dupe.id, {
+            archived: true,
+            archived_reason: 'duplicate_scan',
+          });
           deleted += 1;
         } catch (e) {
-          failures.push(`delete ${dupe.id}: ${e.message}`);
+          failures.push(`archive ${dupe.id}: ${e.message}`);
         }
       }
     }
 
-    return {
+    return ctx.json({
       success: true,
       mode,
       total_leads_before: all.length,
@@ -148,9 +167,8 @@ export default async function dedupeLeads(ctx) {
       remaining: all.length - deleted,
       failures: failures.slice(0, 20),
       failure_count: failures.length,
-    };
+    });
   } catch (error) {
-    if (error instanceof HttpError) throw error;
     return ctx.json({ error: error.message }, 500);
   }
 }
