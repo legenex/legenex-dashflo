@@ -3,13 +3,17 @@ import {
   ResponsiveContainer, BarChart, Bar, LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid,
 } from 'recharts';
 import { campaignMetrics } from '@/lib/campaignMetrics';
+import { leadField } from '@/lib/reportMetrics';
 import { Users, Factory, Tag as TagIcon, Activity } from 'lucide-react';
 
 const money = (v) => `$${Number(v || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
 const pct = (v) => `${Number(v || 0).toFixed(1)}%`;
 
 function num(v) { const n = Number(v); return Number.isFinite(n) ? n : 0; }
-function leadVertical(l) { return String(l.lead_vertical || l.vertical || '').toLowerCase(); }
+// Vertical lives in the mapped_fields bag, not in a lead column: both
+// lead_vertical and vertical read null on every lead, so this used to group
+// everything under the empty string.
+function leadVertical(l) { return String(leadField(l, 'vertical') ?? '').toLowerCase(); }
 
 // At-a-glance summary of the campaign, its buyers, suppliers and leads. Pure UI
 // aggregation over records already loaded on the detail page.

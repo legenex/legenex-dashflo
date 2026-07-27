@@ -38,7 +38,10 @@ export const LEAD_EXPORT_COLUMNS = [
   { key: 'supplier_source', label: 'Supplier Source', get: (l) => f(l, 'Supplier Source') },
   { key: 'supplier_brand', label: 'Supplier Brand', get: (l) => f(l, 'supplier_brand') },
   { key: 'ssid', label: 'SSID', get: (l) => f(l, 'ssid') },
-  { key: 'buyer', label: 'Buyer', default: true, get: (l) => l.buyer_name || f(l, 'buyer_id') },
+  // Prefer the buyer's NAME from the mapped_fields bag over the code. The
+  // top-level column is null, so this used to export "LFWC5" rather than the
+  // company it stands for.
+  { key: 'buyer', label: 'Buyer', default: true, get: (l) => l.buyer_name || f(l, 'buyer') || f(l, 'buyer_id') },
   { key: 'buyer_feedback', label: 'Buyer Feedback', get: (l) => l.buyer_feedback || '' },
   { key: 'phone_verified', label: 'Verification', default: true, get: (l) => f(l, 'phone_verified') },
   { key: 'hlr_status', label: 'HLR Status', get: (l) => l.hlr_status || '' },

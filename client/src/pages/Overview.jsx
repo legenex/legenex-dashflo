@@ -169,7 +169,7 @@ export default function Overview() {
     const nsrc = sourceFilter.map(norm); const nv = verticalFilter.map(norm);
     if (!nb.length && !ns.length && !nsrc.length && !nv.length) return leads;
     return leads.filter((l) => {
-      if (nb.length && !nb.includes(norm(l.buyer_name || l.buyer))) return false;
+      if (nb.length && !nb.includes(norm(leadField(l, 'buyer')))) return false;
       if (ns.length && !ns.some((w) => supplierMatches(l.supplier_name, w))) return false;
       if (nsrc.length && !nsrc.includes(norm(overviewSource(l)))) return false;
       if (nv.length && !nv.includes(norm(leadField(l, 'vertical')))) return false;
@@ -203,7 +203,11 @@ export default function Overview() {
     const b = new Set(); const s = new Set(); const src = new Set(); const v = new Set();
     for (const l of leads) {
       if (!inWin(l)) continue;
-      const bv = l.buyer_name || l.buyer; if (bv) b.add(String(bv));
+      // The top-level buyer_name column is null on leads: the buyer lives in
+      // the mapped_fields bag, which leadField resolves through its aliases.
+      // Reading the column directly produced an empty dropdown that matched
+      // nothing.
+      const bv = leadField(l, 'buyer'); if (bv) b.add(String(bv));
       if (l.supplier_name) s.add(String(l.supplier_name));
       const sv = overviewSource(l); if (sv) src.add(sv);
       const vv = leadField(l, 'vertical'); if (vv) v.add(String(vv));

@@ -1,4 +1,4 @@
-import { leadEventInstant } from '@/lib/reportMetrics';
+import { leadEventInstant, leadField } from '@/lib/reportMetrics';
 // Per-campaign aggregate metrics for the Campaigns list table. A campaign is a
 // vertical, so leads are matched to a campaign by their lead_vertical / vertical
 // against the campaign's vertical code. Reads from records already loaded on the
@@ -6,8 +6,11 @@ import { leadEventInstant } from '@/lib/reportMetrics';
 
 function num(v) { const n = Number(v); return Number.isFinite(n) ? n : 0; }
 
+// Vertical lives in the mapped_fields bag, not in a lead column: both
+// lead_vertical and vertical read null on every lead, so this used to group
+// everything under the empty string. leadField resolves the bag.
 function leadVertical(l) {
-  return String(l.lead_vertical || l.vertical || '').toLowerCase();
+  return String(leadField(l, 'vertical') ?? '').toLowerCase();
 }
 
 // Returns metrics for one campaign: leads14d, total, accepted %, duplicate %,
