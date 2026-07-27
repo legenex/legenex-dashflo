@@ -1,0 +1,156 @@
+import { requireUser, HttpError } from './_runtime.js';
+
+const OPERATOR_PERMISSION_KEYS = ['leads', 'reports', 'overview', 'finances', 'distribution', 'operations'];
+
+// Operator authorization, mirroring the other service-role functions: admins
+// and operators holding a management permission are allowed; portal (buyer or
+// supplier) accounts are rejected outright. Deleting leads must never be
+// reachable from a portal session.
+function isOperator(caller) {
+  if (!caller) return false;
+  if (caller.base_role === 'supplier' || caller.base_role === 'buyer') return false;
+  if (caller.linked_buyer_id || caller.linked_supplier_id) return false;
+  let permissions = {};
+  try {
+    permissions = typeof caller.permissions === 'string'
+      ? JSON.parse(caller.permissions || '{}')
+      : (caller.permissions || {});
+  } catch { permissions = {}; }
+  return caller.role === 'admin' || OPERATOR_PERMISSION_KEYS.some((k) => permissions[k] === true);
+}
+
+function normEmail(v) {
+  return String(v ?? '').trim().toLowerCase() || null;
+}
+
+function normMobile(v) {
+  const digits = String(v ?? '').replace(/\D/g, '');
+  if (!digits) return null;
+  const trimmed = digits.length === 11 && digits.startsWith('1') ? digits.slice(1) : digits;
+  return trimmed.length >= 7 ? trimmed : null;
+}
+
+// Fields worth rescuing from a duplicate before it is deleted.
+const MERGEABLE = [
+  'revenue', 'supplier_payout', 'buyer_name', 'final_status', 'state',
+  'mapped_fields', 'raw_payload', 'trustedform_url', 'jornaya_token',
+  'first_name', 'last_name', 'email', 'mobile', 'timestamp',
+];
+
+const isEmpty = (v) => v === null || v === undefined || v === '' || v === 0;
+
+export default async function dedupeLeads(ctx) {
+  try {
+    const db = ctx.db;
+    let user = null;
+    try {
+      user = requireUser(ctx);
+    } catch {
+      user = null;
+    }
+    if (!isOperator(user)) return ctx.json({ error: 'Unauthorized' }, 401);
+
+    const body = ctx.body || {};
+    const mode = body?.mode === 'apply' ? 'apply' : 'scan';
+
+    // Page through every lead. A single call is capped at 500 rows.
+    const all = [];
+    const pageSize = 500;
+    for (let page = 0; page < 400; page += 1) {
+      const batch = await db.entities.Lead.list('created_date', pageSize, page * pageSize);
+      if (!batch || batch.length === 0) break;
+      all.push(...batch);
+      if (batch.length < pageSize) break;
+    }
+
+    // Group by the first key that identifies a person. Email wins over mobile so
+    // one person cannot land in two groups.
+    const byKey = new Map();
+    for (const l of all) {
+      const key = normEmail(l.email) || normMobile(l.mobile);
+      if (!key) continue;
+      if (!byKey.has(key)) byKey.set(key, []);
+      byKey.get(key).push(l);
+    }
+
+    const groups = [];
+    for (const [key, members] of byKey) {
+      if (members.length < 2) continue;
+      // Already sorted ascending by created_date from the list call above.
+      const [keep, ...rest] = members;
+      groups.push({ key, keep, remove: rest });
+    }
+
+    const duplicateCount = groups.reduce((a, g) => a + g.remove.length, 0);
+
+    const sample = groups.slice(0, 25).map((g) => ({
+      key: g.key,
+      keep_id: g.keep.id,
+      keep_created: g.keep.created_date,
+      remove_ids: g.remove.map((r) => r.id),
+      remove_created: g.remove.map((r) => r.created_date),
+      status: g.keep.final_status,
+    }));
+
+    if (mode === 'scan') {
+      return {
+        success: true,
+        mode,
+        total_leads: all.length,
+        duplicate_groups: groups.length,
+        records_to_remove: duplicateCount,
+        would_remain: all.length - duplicateCount,
+        sample,
+      };
+    }
+
+    // APPLY: merge anything the keeper is missing, then delete the copy.
+    let merged = 0;
+    let deleted = 0;
+    const failures = [];
+
+    for (const g of groups) {
+      const patch = {};
+      for (const dupe of g.remove) {
+        for (const f of MERGEABLE) {
+          if (isEmpty(g.keep[f]) && !isEmpty(dupe[f]) && isEmpty(patch[f])) {
+            patch[f] = dupe[f];
+          }
+        }
+      }
+      if (Object.keys(patch).length > 0) {
+        try {
+          await db.entities.Lead.update(g.keep.id, patch);
+          merged += 1;
+        } catch (e) {
+          failures.push(`merge ${g.keep.id}: ${e.message}`);
+          // Do not delete the copies if the merge failed, or data is lost.
+          continue;
+        }
+      }
+      for (const dupe of g.remove) {
+        try {
+          await db.entities.Lead.delete(dupe.id);
+          deleted += 1;
+        } catch (e) {
+          failures.push(`delete ${dupe.id}: ${e.message}`);
+        }
+      }
+    }
+
+    return {
+      success: true,
+      mode,
+      total_leads_before: all.length,
+      duplicate_groups: groups.length,
+      records_deleted: deleted,
+      keepers_enriched: merged,
+      remaining: all.length - deleted,
+      failures: failures.slice(0, 20),
+      failure_count: failures.length,
+    };
+  } catch (error) {
+    if (error instanceof HttpError) throw error;
+    return ctx.json({ error: error.message }, 500);
+  }
+}

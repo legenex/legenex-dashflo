@@ -10,6 +10,7 @@ import { Upload, Loader2, Sparkles, Check, ArrowRight, Save, Copy, AlertTriangle
 import { toast } from 'sonner';
 import Papa from 'papaparse';
 import { toZonedTime } from 'date-fns-tz';
+import { partitionImport, buildDedupeIndex, findExisting } from '@/lib/leadDedupe';
 import { APP_TZ } from '@/lib/periodRange';
 import { invalidateLeadCaches } from '@/lib/leadCaches';
 import { materializeRecord, finalizePendingImports } from '@/lib/importFinalize';
@@ -280,6 +281,11 @@ export default function CsvImporter() {
   const [templateName, setTemplateName] = useState('');
   const [dupChecking, setDupChecking] = useState(false);
   const [dupResult, setDupResult] = useState(null); // { newCount, dupCount }
+  // Duplicate decision for the current import. The prompt holds the partitioned
+  // records; the ref carries the operator's choice back into the import run
+  // without waiting on a state flush.
+  const [dupPrompt, setDupPrompt] = useState(null);
+  const dupChoiceRef = useRef(null);
   const [dateOrder, setDateOrder] = useState('day'); // 'day' | 'month', user-overridable
   const [detectedOrder, setDetectedOrder] = useState('ambiguous'); // 'day' | 'month' | 'ambiguous'
 
@@ -607,41 +613,65 @@ export default function CsvImporter() {
         return out;
       });
       if (target === 'lead') {
-        // Load every existing lead's email + mobile (all time) into normalized sets for dedup.
-        const existingEmails = new Set();
-        const existingMobiles = new Set();
-        let page = 0;
         const pageSize = 500;
-        // eslint-disable-next-line no-constant-condition
-        while (true) {
-          const batch = await api.entities.Lead.list('-created_date', pageSize, page * pageSize);
-          batch.forEach(l => {
-            const e = normEmail(l.email); if (e) existingEmails.add(e);
-            const m = normMobile(l.mobile); if (m) existingMobiles.add(m);
-          });
-          if (batch.length < pageSize) break;
-          page += 1;
-        }
 
         const batchId = `import_${Date.now()}`;
-        const seenEmails = new Set();
-        const seenMobiles = new Set();
-        let skipped = 0;
-        const clean = [];
-        records.forEach(r => {
-          const e = normEmail(r.email);
-          const m = normMobile(r.mobile);
-          const dupExisting = (e && existingEmails.has(e)) || (m && existingMobiles.has(m));
-          const dupIntra = (e && seenEmails.has(e)) || (m && seenMobiles.has(m));
-          if (dupExisting || dupIntra) { skipped += 1; return; }
-          if (e) seenEmails.add(e);
-          if (m) seenMobiles.add(m);
-          clean.push({
-            ...r,
-            revenue: r.revenue != null ? Number(r.revenue) || 0 : undefined,
-            import_batch_id: batchId,
+        const allExisting = [];
+        {
+          let p = 0;
+          // eslint-disable-next-line no-constant-condition
+          while (true) {
+            const b = await api.entities.Lead.list('-created_date', pageSize, p * pageSize);
+            allExisting.push(...b);
+            if (b.length < pageSize) break;
+            p += 1;
+          }
+        }
+
+        const { fresh, existingDupes, intraFileDupes } = partitionImport(records, allExisting);
+        const dupTotal = existingDupes.length + intraFileDupes.length;
+
+        // Duplicates are never resolved silently. A double-run import on
+        // 19 July wrote 40+ leads twice and inflated every Sold count in the
+        // app, and nothing on screen said so. Ask, then act.
+        if (dupTotal > 0 && !dupChoiceRef.current) {
+          setProgress(null);
+          setBusy(false);
+          setDupPrompt({
+            fresh,
+            existingDupes,
+            intraFileDupes,
+            batchId,
+            records,
           });
-        });
+          return;
+        }
+
+        const choice = dupChoiceRef.current || 'skip';
+        dupChoiceRef.current = null;
+
+        // 'skip' imports only genuinely new leads. 'merge' additionally updates
+        // the matched existing lead in place rather than creating a second
+        // copy, so a re-exported file can correct revenue or status without
+        // ever duplicating a record.
+        const clean = fresh.map(r => ({
+          ...r,
+          revenue: r.revenue != null ? Number(r.revenue) || 0 : undefined,
+          import_batch_id: batchId,
+        }));
+        let merged = 0;
+        if (choice === 'merge') {
+          for (const { record, existing } of existingDupes) {
+            try {
+              const patch = { ...record };
+              delete patch.email;
+              delete patch.mobile;
+              await api.entities.Lead.update(existing.id, patch);
+              merged += 1;
+            } catch { /* a failed merge leaves the original untouched */ }
+          }
+        }
+        const skipped = dupTotal - merged;
 
         const chunkSize = 100;
         setProgress({ done: 0, total: clean.length });
@@ -654,9 +684,31 @@ export default function CsvImporter() {
             await api.entities.Lead.bulkCreate(chunk);
             createdCount += chunk.length;
           } catch {
-            // One bad row can fail the whole chunk, so retry the chunk one
-            // record at a time and skip only the genuinely bad rows.
+            // A chunk can fail AFTER writing some of its rows. Retrying the
+            // whole chunk one row at a time therefore re-creates whatever
+            // already landed, which is exactly how the 19 July import wrote
+            // 40+ leads twice under a single batch id.
+            //
+            // Re-read what actually persisted for this batch, and only retry
+            // the rows that are genuinely missing.
+            let landed = null;
+            try {
+              const written = [];
+              let p = 0;
+              // eslint-disable-next-line no-constant-condition
+              while (true) {
+                const b = await api.entities.Lead.filter({ import_batch_id: batchId }, '-created_date', pageSize, p * pageSize);
+                written.push(...b);
+                if (b.length < pageSize) break;
+                p += 1;
+              }
+              const idx = buildDedupeIndex(written);
+              landed = idx;
+            } catch {
+              landed = null; // could not verify, fall back to retrying all
+            }
             for (const rec of chunk) {
+              if (landed && findExisting(landed, rec)) { createdCount += 1; continue; }
               try {
                 await api.entities.Lead.create(rec);
                 createdCount += 1;
@@ -697,6 +749,45 @@ export default function CsvImporter() {
 
   return (
     <div className="bg-card border border-border rounded-[12px] p-5">
+      {/* Duplicate decision. Blocks the import until the operator chooses, so a
+          re-run can never quietly write a second copy of every lead. */}
+      {dupPrompt && (
+        <div className="mb-4 rounded-lg border border-status-unsold bg-status-unsold p-4">
+          <div className="flex items-start gap-2.5">
+            <AlertTriangle className="w-4 h-4 status-unsold shrink-0 mt-0.5" />
+            <div className="min-w-0 flex-1">
+              <p className="text-[13px] font-semibold text-foreground">
+                {dupPrompt.existingDupes.length + dupPrompt.intraFileDupes.length} duplicate{dupPrompt.existingDupes.length + dupPrompt.intraFileDupes.length === 1 ? '' : 's'} found
+              </p>
+              <ul className="text-[12px] text-muted-foreground mt-1.5 space-y-0.5">
+                <li><span className="text-foreground font-medium tabular-nums">{dupPrompt.fresh.length}</span> new leads to import</li>
+                {dupPrompt.existingDupes.length > 0 && (
+                  <li><span className="text-foreground font-medium tabular-nums">{dupPrompt.existingDupes.length}</span> already in the system (matched on email or mobile)</li>
+                )}
+                {dupPrompt.intraFileDupes.length > 0 && (
+                  <li><span className="text-foreground font-medium tabular-nums">{dupPrompt.intraFileDupes.length}</span> repeated inside this file</li>
+                )}
+              </ul>
+              <div className="flex flex-wrap items-center gap-2 mt-3">
+                <Button size="sm" onClick={() => { dupChoiceRef.current = 'skip'; setDupPrompt(null); commit(); }}>
+                  Import {dupPrompt.fresh.length} new, ignore duplicates
+                </Button>
+                {dupPrompt.existingDupes.length > 0 && (
+                  <Button size="sm" variant="outline" onClick={() => { dupChoiceRef.current = 'merge'; setDupPrompt(null); commit(); }}>
+                    Merge: update the {dupPrompt.existingDupes.length} existing
+                  </Button>
+                )}
+                <Button size="sm" variant="ghost" onClick={() => { dupChoiceRef.current = null; setDupPrompt(null); }}>
+                  Cancel
+                </Button>
+              </div>
+              <p className="text-[11px] text-muted-foreground/80 mt-2">
+                Merge updates the matched lead in place. It never creates a second copy, and it leaves email and mobile untouched.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
       <div className="flex items-center gap-2 mb-1">
         <Sparkles className="w-4 h-4 text-primary" />
         <div className="text-[15px] font-semibold text-foreground">CSV Importer</div>
