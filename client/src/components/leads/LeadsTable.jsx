@@ -140,6 +140,31 @@ const SYSTEM_FILTER_FIELDS = [
 ];
 
 const FILTERS_STORAGE_KEY = 'legenex_saved_filters';
+const PERIOD_STORAGE_KEY = 'legenex_leads_period';
+
+// Remembered period per leads view, per browser profile.
+//
+// A saved 'custom' with no dates is discarded rather than restored: it would
+// otherwise open the page on an empty custom range with the Custom tab lit and
+// no rows, which reads as broken. Anything unrecognised falls back to This
+// Month, so a stale or corrupted value can never strand the page.
+function loadPeriodPref(view) {
+  try {
+    const all = JSON.parse(localStorage.getItem(PERIOD_STORAGE_KEY) || '{}');
+    const saved = all[view];
+    if (!saved || typeof saved !== 'object') return {};
+    if (saved.period === 'custom' && !(saved.from && saved.to)) return {};
+    return saved;
+  } catch { return {}; }
+}
+
+function savePeriodPref(view, value) {
+  try {
+    const all = JSON.parse(localStorage.getItem(PERIOD_STORAGE_KEY) || '{}');
+    all[view] = value;
+    localStorage.setItem(PERIOD_STORAGE_KEY, JSON.stringify(all));
+  } catch { /* storage unavailable: fall back to This Month next load */ }
+}
 
 function loadSavedSets(view) {
   try {
