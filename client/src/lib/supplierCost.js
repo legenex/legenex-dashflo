@@ -328,7 +328,11 @@ export function supplierCostMetrics(supplier, allLeads, sourcesBySupplier, adSpe
 
   const leads = rows.length;
   const profit = revenue - cost;
-  const cpl = leads > 0 ? cost / leads : 0;
+  // CPL is cost per SOLD lead, matching every other CPL in the app. Dividing by
+  // all leads received (DQs are usually the majority) reports a number that
+  // looks like an acquisition cost but is not one, and it disagreed with the
+  // CPL on Overview and Reports for the same supplier and window.
+  const cpl = sold > 0 ? cost / sold : 0;
   // What the supplier is owed, which is a different number from what the leads
   // cost. Computed on the window totals so a profit share reflects exactly the
   // date range on screen.

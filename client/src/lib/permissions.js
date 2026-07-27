@@ -62,6 +62,13 @@ export const PERMISSION_GROUPS = [
     ],
   },
   {
+    group: 'Assistants',
+    items: [
+      { key: 'databot', label: 'DataBot (data + knowledge base Q&A)' },
+      { key: 'buildbot', label: 'BuildBot (draft app changes)' },
+    ],
+  },
+  {
     group: 'Portal',
     items: [
       { key: 'portal_access', label: 'Portal access' },
@@ -75,7 +82,7 @@ export const ALL_KEYS = PERMISSION_GROUPS.flatMap(g => g.items.map(i => i.key));
 const DIST_KEYS = PERMISSION_GROUPS.find(g => g.group === 'Lead Distribution').items.map(i => i.key);
 const FINANCE_KEYS = ['finances', 'bank_feed'];
 const OPERATIONS_KEYS = ['operations', 'ad_manager'];
-export const RESTRICTED_FOR_PARTNERS = [...DIST_KEYS, ...FINANCE_KEYS, ...OPERATIONS_KEYS];
+export const RESTRICTED_FOR_PARTNERS = [...DIST_KEYS, ...FINANCE_KEYS, ...OPERATIONS_KEYS, 'buildbot'];
 
 const all = () => Object.fromEntries(ALL_KEYS.map(k => [k, true]));
 const only = (keys) => Object.fromEntries(keys.map(k => [k, true]));
@@ -84,9 +91,9 @@ const allExcept = (excluded) => Object.fromEntries(ALL_KEYS.filter(k => !exclude
 export const ROLE_PRESETS = {
   owner: { label: 'Owner', description: 'Everything. Can delete users, including the Owner.', canDeleteOwner: true, permissions: all() },
   admin: { label: 'Admin', description: 'Everything except deleting the Owner. Finances & Bank Feed off by default.', canDeleteOwner: false, permissions: allExcept(['finances', 'bank_feed']) },
-  manager: { label: 'Manager', description: 'Most things except Finances & Bank Feed.', canDeleteOwner: false, permissions: allExcept(FINANCE_KEYS) },
-  supplier: { label: 'Supplier', description: 'Own data only. No Lead Distribution, no Finances.', canDeleteOwner: false, permissions: only(['overview', 'leads_all', 'leads_sold', 'leads_unsold', 'reports', 'portal_access']) },
-  buyer: { label: 'Buyer', description: 'Own data only. No Lead Distribution, no Finances.', canDeleteOwner: false, permissions: only(['overview', 'leads_all', 'leads_sold', 'reports', 'portal_access']) },
+  manager: { label: 'Manager', description: 'Most things except Finances & Bank Feed. No BuildBot.', canDeleteOwner: false, permissions: allExcept([...FINANCE_KEYS, 'buildbot']) },
+  supplier: { label: 'Supplier', description: 'Own data only. No Lead Distribution, no Finances.', canDeleteOwner: false, permissions: only(['overview', 'leads_all', 'leads_sold', 'leads_unsold', 'reports', 'portal_access', 'databot']) },
+  buyer: { label: 'Buyer', description: 'Own data only. No Lead Distribution, no Finances.', canDeleteOwner: false, permissions: only(['overview', 'leads_all', 'leads_sold', 'reports', 'portal_access', 'databot']) },
 };
 
 // Maps a route path to the permission key that gates it.

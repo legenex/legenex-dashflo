@@ -1,5 +1,6 @@
 // Operational metrics for the Distribution dashboard. No revenue/profit/CPL anywhere.
 import { format, eachDayOfInterval, isWithinInterval, differenceInCalendarDays } from 'date-fns';
+import { leadEventInstant } from '@/lib/reportMetrics';
 
 const inWin = (d, win) => { const dt = new Date(d); return isWithinInterval(dt, { start: win.start, end: win.end }); };
 
@@ -60,7 +61,8 @@ export function leadsOverTime(leads, win) {
   return days.map(day => {
     const dayStr = format(day, fmt);
     const dl = leads.filter(l => {
-      const d = new Date(l.created_date);
+      const d = leadEventInstant(l);
+      if (!d) return false;
       return d >= new Date(day.getFullYear(), day.getMonth(), day.getDate()) &&
         d < new Date(day.getFullYear(), day.getMonth(), day.getDate() + 1);
     });

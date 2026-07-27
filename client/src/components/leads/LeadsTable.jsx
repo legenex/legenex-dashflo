@@ -17,7 +17,7 @@ import { toast } from 'sonner';
 import { processLead } from '@/functions/processLead';
 import { bulkDeleteLeads } from '@/functions/bulkDeleteLeads';
 import { loadColumnConfig, saveColumnConfig, getColumnDef, buildAvailableColumns } from '@/lib/columnConfig';
-import { leadEventInstant } from '@/lib/reportMetrics';
+import { leadEventInstant, leadField } from '@/lib/reportMetrics';
 import { invalidateLeadCaches } from '@/lib/leadCaches';
 import { resolvePeriod } from '@/lib/periodRange';
 
@@ -161,23 +161,33 @@ export default function LeadsTable({ view }) {
   const config = VIEW_CONFIGS[view] || VIEW_CONFIGS.all;
 
   const [search, setSearch] = useState('');
-  // Every leads table defaults to This Month (APP_TZ calendar month).
+  // Period resolution, in order: the URL, then this operator's last choice,
+  // then This Month.
   //
-  // The period lives in the URL so the sub-nav count badges and the telemetry
-  // footer resolve the SAME window as this table. They used to count every lead
-  // ever received while the table showed one month, so a single page reported
-  // Sold as 562 in the sidebar, 562 in the footer and 292 in the table.
+  // It lives in the URL so the sub-nav count badges and the telemetry footer
+  // resolve the SAME window as this table. They used to count every lead ever
+  // received while the table showed one month, so a single page reported Sold
+  // as 562 in the sidebar, 562 in the footer and 292 in the table.
+  //
+  // It is ALSO remembered per operator, so a chosen range survives a reload.
+  // But the remembered value is only ever applied on first mount, and a saved
+  // 'custom' with no dates falls back to This Month rather than stranding the
+  // page on an empty custom range.
   const [searchParams, setSearchParams] = useSearchParams();
-  const period = searchParams.get('period') || 'this_month';
-  const customPeriod = {
-    from: searchParams.get('from') || '',
-    to: searchParams.get('to') || '',
-  };
+
+  const urlPeriod = searchParams.get('period');
+  const [remembered] = useState(() => loadPeriodPref(view));
+  const period = urlPeriod || remembered.period || 'this_month';
+  const customPeriod = urlPeriod
+    ? { from: searchParams.get('from') || '', to: searchParams.get('to') || '' }
+    : { from: remembered.from || '', to: remembered.to || '' };
+
   const setPeriod = (p) => {
     const next = new URLSearchParams(searchParams);
     next.set('period', p);
     if (p !== 'custom') { next.delete('from'); next.delete('to'); }
     setSearchParams(next, { replace: true });
+    savePeriodPref(view, { period: p, from: '', to: '' });
   };
   const setCustomPeriod = (c) => {
     const next = new URLSearchParams(searchParams);
@@ -185,6 +195,7 @@ export default function LeadsTable({ view }) {
     if (c?.from) next.set('from', c.from); else next.delete('from');
     if (c?.to) next.set('to', c.to); else next.delete('to');
     setSearchParams(next, { replace: true });
+    savePeriodPref(view, { period: 'custom', from: c?.from || '', to: c?.to || '' });
   };
   const [customFilters, setCustomFilters] = useState([]);
   const [selectedLead, setSelectedLead] = useState(null);
@@ -199,6 +210,7 @@ export default function LeadsTable({ view }) {
   const [statusFilter, setStatusFilter] = useState([]);
   const [supplierFilter, setSupplierFilter] = useState([]);
   const [sourceFilter, setSourceFilter] = useState([]);
+  const [verticalFilter, setVerticalFilter] = useState([]);
   const [page, setPage] = useState(1);
   // Rows per page. 50 unless the operator saved a different default with the
   // tick box next to the selector (persisted per browser).
@@ -322,6 +334,12 @@ export default function LeadsTable({ view }) {
     return Array.from(set).sort().map(s => ({ value: s, label: s }));
   }, [scoped, sourceFilter]);
 
+  const verticalOptions = useMemo(() => {
+    const set = new Set();
+    scoped.forEach(l => { const v = leadField(l, 'vertical'); if (v) set.add(String(v)); });
+    return Array.from(set).sort().map(v => ({ value: v, label: v }));
+  }, [scoped]);
+
   const sourceOptions = useMemo(() => {
     const set = new Set();
     scoped.forEach(l => {
@@ -368,6 +386,7 @@ export default function LeadsTable({ view }) {
     const result = scoped.filter(lead => {
       if (supplierFilter.length > 0 && !supplierFilter.includes(lead.supplier_name)) return false;
       if (sourceFilter.length > 0 && !sourceFilter.includes(getSource(lead))) return false;
+      if (verticalFilter.length > 0 && !verticalFilter.includes(String(leadField(lead, 'vertical') ?? ''))) return false;
       return true;
     });
     // Sort newest first by the lead's real event time. leadEventInstant is the
@@ -391,7 +410,7 @@ export default function LeadsTable({ view }) {
     [filtered, safePage, pageSize]
   );
   // Reset to page 1 whenever the view, search, or any filter changes.
-  useEffect(() => { setPage(1); }, [view, search, period, customPeriod, customFilters, statusFilter, supplierFilter, sourceFilter, pageSize]);
+  useEffect(() => { setPage(1); }, [view, search, period, customPeriod, customFilters, statusFilter, supplierFilter, sourceFilter, verticalFilter, pageSize]);
 
   // Real telemetry for the shell footer.
   //
@@ -607,6 +626,9 @@ export default function LeadsTable({ view }) {
         setSupplierFilter={setSupplierFilter}
         supplierOptions={supplierOptions}
         sourceFilter={sourceFilter}
+        verticalFilter={verticalFilter}
+        setVerticalFilter={setVerticalFilter}
+        verticalOptions={verticalOptions}
         setSourceFilter={setSourceFilter}
         sourceOptions={sourceOptions}
       />

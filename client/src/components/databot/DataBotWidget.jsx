@@ -56,8 +56,9 @@ const BOTS = {
 };
 
 export default function DataBotWidget() {
-  const { realRole } = usePermissions();
-  const isOperator = realRole === 'owner' || realRole === 'admin';
+  const { can } = usePermissions();
+  const showData = can('databot');
+  const showBuild = can('buildbot');
   const [open, setOpen] = useState(false);
   const [activeBot, setActiveBot] = useState(null); // null = picker
   const [input, setInput] = useState('');
@@ -71,6 +72,8 @@ export default function DataBotWidget() {
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
   }, [threads, activeBot, open]);
+
+  if (!showData && !showBuild) return null;
 
   const openBot = (bot) => {
     setActiveBot(bot);
@@ -120,11 +123,13 @@ export default function DataBotWidget() {
           {!activeBot ? (
             <div className="flex-1 overflow-y-auto px-4 py-4 space-y-3">
               <p className="text-[12px] text-muted-foreground">Pick an assistant to get started.</p>
-              <button onClick={() => openBot('data')} className="w-full text-left rounded-[12px] border border-border bg-card p-3 hover:bg-accent transition-colors">
-                <div className="flex items-center gap-2"><MessageSquare className="w-4 h-4 text-primary" /><span className="text-[13px] font-semibold text-foreground">DataBot</span></div>
-                <p className="mt-1 text-[12px] text-muted-foreground">Ask questions about your data and the knowledge base. Scoped to your account.</p>
-              </button>
-              {isOperator && (
+              {showData && (
+                <button onClick={() => openBot('data')} className="w-full text-left rounded-[12px] border border-border bg-card p-3 hover:bg-accent transition-colors">
+                  <div className="flex items-center gap-2"><MessageSquare className="w-4 h-4 text-primary" /><span className="text-[13px] font-semibold text-foreground">DataBot</span></div>
+                  <p className="mt-1 text-[12px] text-muted-foreground">Ask questions about your data and the knowledge base. Scoped to your account.</p>
+                </button>
+              )}
+              {showBuild && (
                 <button onClick={() => openBot('build')} className="w-full text-left rounded-[12px] border border-border bg-card p-3 hover:bg-accent transition-colors">
                   <div className="flex items-center gap-2"><Hammer className="w-4 h-4 text-primary" /><span className="text-[13px] font-semibold text-foreground">BuildBot</span></div>
                   <p className="mt-1 text-[12px] text-muted-foreground">Describe a change; get a ready-to-run build request for the safe build channel.</p>

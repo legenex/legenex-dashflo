@@ -1,5 +1,9 @@
-import { describe, it, expect } from 'vitest';
-import { spendRows, spendInWindow, computeMetrics } from '@/lib/reportMetrics';
+import { describe, it, expect, beforeEach } from 'vitest';
+import { spendRows, spendInWindow, computeMetrics, registerInternalSuppliers } from '@/lib/reportMetrics';
+
+// leadCost consults a registered set of Internal suppliers by default. Reset it
+// between suites so one test's registration cannot leak into another.
+beforeEach(() => registerInternalSuppliers([]));
 
 // spendRows is the cost basis for every spend total in the app, so both of its
 // failure modes are pinned here with the real shape of the data.
@@ -102,6 +106,32 @@ describe('CPL is cost per SOLD lead', () => {
     const spend = [{ ad_account_id: 'a1', date: '2026-07-05', level: 'account', spend: 250 }];
     const m = computeMetrics(leads, spend);
     expect(m.blended_cpl).toBeCloseTo(250, 2); // 250 spend / 1 sold
+  });
+});
+
+describe('internal suppliers never carry a per-lead cost', () => {
+  // An Internal supplier costs ad spend, never a posted price. Legenex is
+  // internal with no mapped ad accounts, so its cost must be zero even though
+  // its leads carry a cpl value on the payload.
+  const legenexLead = { supplier_name: 'LGNX', final_status: 'Sold', revenue: 300, mapped_fields: JSON.stringify({ cpl: 120 }) };
+  const inboundsLead = { supplier_name: 'Inbounds', final_status: 'Sold', revenue: 300, mapped_fields: JSON.stringify({ cpl: 120 }) };
+
+  it('counts an external supplier posted price', () => {
+    registerInternalSuppliers([{ name: 'Legenex', supplier_type: 'Internal' }]);
+    const m = computeMetrics([inboundsLead], []);
+    expect(m.cost).toBeCloseTo(120, 2);
+  });
+
+  it('suppresses the posted price for an internal supplier', () => {
+    registerInternalSuppliers([{ name: 'Legenex', supplier_type: 'Internal' }, { name: 'LGNX', supplier_type: 'Internal' }]);
+    const m = computeMetrics([legenexLead], []);
+    expect(m.cost).toBe(0);
+  });
+
+  it('takes the posted price at face value when nothing is registered', () => {
+    registerInternalSuppliers([]);
+    const m = computeMetrics([legenexLead], []);
+    expect(m.cost).toBeCloseTo(120, 2);
   });
 });
 

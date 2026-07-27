@@ -36,6 +36,7 @@ export default function LeadsFilterBar({
   statusFilter, setStatusFilter, statusOptions,
   supplierFilter, setSupplierFilter, supplierOptions,
   sourceFilter, setSourceFilter, sourceOptions,
+  verticalFilter, setVerticalFilter, verticalOptions = [],
 }) {
   const [showFilters, setShowFilters] = useState(false);
   const [showSaveDialog, setShowSaveDialog] = useState(false);
@@ -115,6 +116,14 @@ export default function LeadsFilterBar({
         options={supplierOptions}
         placeholder="All Suppliers"
       />
+      <MultiSelect
+        value={Array.isArray(verticalFilter) ? verticalFilter : []}
+        onValueChange={setVerticalFilter}
+        className="w-full lg:w-[160px] bg-card border-border"
+        options={verticalOptions}
+        placeholder="All Verticals"
+      />
+
       <MultiSelect
         value={Array.isArray(sourceFilter) ? sourceFilter : []}
         onValueChange={setSourceFilter}

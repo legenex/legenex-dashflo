@@ -11,6 +11,7 @@ import { Sheet, SheetContent } from '@/components/ui/sheet';
 import { navGroups } from './navConfig';
 import { usePullToRefresh } from '@/hooks/usePullToRefresh';
 import useMetaAutoSync from '@/hooks/useMetaAutoSync';
+import useInternalSuppliers from '@/hooks/useInternalSuppliers';
 
 // Resolve a human page title from the nav config for the current path.
 function usePageTitle() {
@@ -39,6 +40,11 @@ export default function AppLayout() {
   // Meta spend keeps itself current on a 15 minute cadence. Mounted here rather
   // than on Overview so it holds regardless of which page is open.
   useMetaAutoSync();
+
+  // Registers which suppliers are Internal so lead cost is suppressed for them
+  // consistently across every page, rather than only where a page happens to
+  // pass the supplier list into its metric call.
+  useInternalSuppliers();
 
   // Pull-to-refresh only on the data-heavy list dashboards.
   const ptrEnabled = location.pathname === '/' || location.pathname === '/leads';

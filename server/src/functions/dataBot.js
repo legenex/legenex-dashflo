@@ -1,37 +1,11 @@
-import { requireUser } from './_runtime.js';
-import { callLLM } from '../integrations/llm.js';
+import { requireUser, HttpError } from './_runtime.js';
+import { callLLM, invokeLLM } from '../integrations/llm.js';
 
 // DataBot: answers questions about the app's own data + a curated Knowledge Base.
-// Uses the shared LLM integration (callLLM).
-
-function parseJsonLoose(text) {
-  if (text == null) return null;
-  if (typeof text === 'object') return text;
-  let s = String(text).trim();
-  if (s.startsWith('')) s = s.replace(/^(?:json)?/i, '').replace(/$/i, '').trim();
-  try { return JSON.parse(s); } catch { /* fall through */ }
-  const m = s.match(/\{[\s\S]*\}/);
-  if (m) { try { return JSON.parse(m[0]); } catch { /* ignore */ } }
-  return s;
-}
-
-// Detect whether an LLM credential is available so we can degrade gracefully
-// instead of throwing when nothing is configured.
-function llmConfigured(ctx) {
-  const i = (ctx.config && ctx.config.integrations) || {};
-  const env = ctx.env || {};
-  return Boolean(i.openaiApiKey || i.anthropicApiKey || env.OPENAI_API_KEY || env.ANTHROPIC_API_KEY);
-}
-
-async function askLLM({ prompt, system, model = 'gpt-4o-mini', temperature = 0.4, jsonSchema = null }) {
-  const content = await callLLM({ prompt, system, temperature, maxTokens: 2000 });
-  if (jsonSchema) return parseJsonLoose(content);
-  return typeof content === 'string' ? content : JSON.stringify(content);
-}
 
 // Scope a change request into a single-concern build prompt for the CONTROLLED
-// channel (Claude via connector, the builder, or Claude Code). Never executes.
-// If the message is really an analytics question, returns is_build=false.
+// channel. Never executes. If the message is really an analytics question,
+// returns is_build=false.
 async function draftBuildRequest(question, history) {
   const schema = {
     type: 'object',
@@ -47,15 +21,15 @@ async function draftBuildRequest(question, history) {
     required: ['is_build', 'title', 'summary', 'ready_prompt'],
   };
   const convo = history.map((m) => `${m.role === 'user' ? 'User' : 'DataBot'}: ${m.content}`).join('\n');
-  const system = `You scope change requests for the Legenex app so they can be handed to a controlled build channel (Claude via the connector, the builder, or Claude Code). You NEVER execute changes yourself. If the user's message is actually an analytics or data question rather than a request to change the app, set is_build=false and leave the other fields empty.\n\nBake these conventions into ready_prompt so it is safe to run:\n- One concern per change, with an explicit do-not-touch list.\n- Follow DESIGN-SYSTEM.md: semantic tokens only, never raw hex/hsl or raw palette utilities.\n- RED surfaces that need explicit human approval and must not be edited casually: processLead, the four LeadByteConnectors and their enabled states, Conversion Events, distribution_mode (only via distributionSetMode), credentials, live endpoints, billing records, buyer pricing and state coverage.\n- Additive schema only. No em dashes anywhere. Checkpoint before any schema or destructive change. Verify with the design-token gate and lint.\n\nready_prompt must be a complete, copy-pasteable instruction a builder can act on: the target area, the exact change, the do-not-touch list, and the verification step. Set risk=red if the request touches any RED surface, amber if it touches shared or data surfaces, green for isolated UI or docs.`;
-  const prompt = `Conversation so far:\n${convo || '(none)'}\n\nUser request: ${question}\n\nReturn a single JSON object only, with keys: is_build (boolean), title (string), summary (string), target_files (string array), do_not_touch (string array), risk ("green"|"amber"|"red"), ready_prompt (string). Required: is_build, title, summary, ready_prompt.`;
-  return await askLLM({ system, prompt, jsonSchema: schema, temperature: 0.2 });
+  const system = `You scope change requests for the Legenex app so they can be handed to a controlled build channel. You NEVER execute changes yourself. If the user's message is actually an analytics or data question rather than a request to change the app, set is_build=false and leave the other fields empty.\n\nBake these conventions into ready_prompt so it is safe to run:\n- One concern per change, with an explicit do-not-touch list.\n- Follow DESIGN-SYSTEM.md: semantic tokens only, never raw hex/hsl or raw palette utilities.\n- RED surfaces that need explicit human approval and must not be edited casually: processLead, the four LeadByteConnectors and their enabled states, Conversion Events, distribution_mode (only via distributionSetMode), credentials, live endpoints, billing records, buyer pricing and state coverage.\n- Additive schema only. No em dashes anywhere. Checkpoint before any schema or destructive change. Verify with the design-token gate and lint.\n\nready_prompt must be a complete, copy-pasteable instruction a builder can act on: the target area, the exact change, the do-not-touch list, and the verification step. Set risk=red if the request touches any RED surface, amber if it touches shared or data surfaces, green for isolated UI or docs.`;
+  const prompt = `Conversation so far:\n${convo || '(none)'}\n\nUser request: ${question}\n\nReturn JSON only.`;
+  return await invokeLLM({ system, prompt, temperature: 0.2, response_json_schema: schema });
 }
 
 export default async function dataBot(ctx) {
-  const user = requireUser(ctx);
   try {
     const db = ctx.db;
+    const user = requireUser(ctx);
 
     const body = ctx.body || {};
     const question = (body.question || '').toString().trim();
@@ -65,21 +39,40 @@ export default async function dataBot(ctx) {
     const isAdmin = user.role === 'admin';
     const mode = body.mode === 'build' ? 'build' : 'data';
 
-    // Friendly, actionable message instead of a silent 500 when no key is configured.
-    if (!llmConfigured(ctx)) {
-      return ctx.json({ type: 'answer', answer: 'This assistant is not configured yet: no LLM API key is set. An admin can add it in the app secrets, then I can answer.' });
+    // Resolve DataBot/BuildBot access from the permission model: explicit perms
+    // when the user has any stored, otherwise the role default. Partners (supplier
+    // or buyer) can never build, matching RESTRICTED_FOR_PARTNERS.
+    const resolvePerms = (u) => {
+      let p = {};
+      try { p = u.permissions ? (typeof u.permissions === 'string' ? JSON.parse(u.permissions) : u.permissions) : {}; } catch { p = {}; }
+      if (p && Object.keys(p).length) return p;
+      return { databot: true, buildbot: u.role === 'owner' || u.role === 'admin' };
+    };
+    const isPartner = user.base_role === 'supplier' || user.base_role === 'buyer' || !!user.linked_supplier_id || !!user.linked_buyer_id;
+    const perms = resolvePerms(user);
+    const canData = !!perms.databot;
+    const canBuild = !isPartner && !!perms.buildbot;
+    void isAdmin;
+
+    // Friendly, actionable message instead of a silent 500 when the key is unset.
+    if (!(ctx.config?.integrations?.openaiApiKey || ctx.env?.OPENAI_API_KEY)) {
+      return ctx.json({ type: 'answer', answer: 'This assistant is not configured yet: the OPENAI_API_KEY secret is missing. An admin can add it in the app secrets, then I can answer.' });
     }
 
     // BuildBot: draft a single-concern build request for the controlled channel.
-    // Operator-gated for now; a grantable buildbot permission comes next.
+    // Gated by the buildbot permission (owner/admin by default, grantable in Users and Roles).
     if (mode === 'build') {
-      if (!isAdmin) {
-        return ctx.json({ type: 'answer', answer: 'BuildBot is available to admins and owners only.' });
+      if (!canBuild) {
+        return ctx.json({ type: 'answer', answer: 'BuildBot is not enabled for your account. An admin can grant the BuildBot permission in Users and Roles.' });
       }
       try {
         const draft = await draftBuildRequest(question, history);
         if (draft && draft.is_build) return ctx.json({ type: 'build_request', build_request: draft });
       } catch (_) { /* not a build, or draft failed: fall through to an answer */ }
+    }
+
+    if (!canData) {
+      return ctx.json({ type: 'answer', answer: 'DataBot access is turned off for your account. An admin can enable it in Users and Roles.' });
     }
 
     // --- Resolve caller scope (deny-by-default), then gather only what they may see ---
@@ -188,10 +181,11 @@ ${convo || '(none)'}
 User: ${question}
 DataBot:`;
 
-    const answer = await askLLM({ prompt });
+    const answer = await callLLM({ prompt, temperature: 0.4 });
 
     return ctx.json({ type: 'answer', answer: typeof answer === 'string' ? answer : JSON.stringify(answer) });
   } catch (error) {
+    if (error instanceof HttpError) throw error;
     return ctx.json({ error: error.message }, 500);
   }
 }

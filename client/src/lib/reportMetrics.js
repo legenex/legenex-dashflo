@@ -86,6 +86,24 @@ export function internalSupplierSet(suppliers = []) {
   return set;
 }
 
+// Application-wide default for the above.
+//
+// leadCost is called from roughly a dozen places (reports, portals, campaign
+// and supplier groupings), and threading an explicit set through every one of
+// them is how they drift apart. Any surface that loads the Supplier list
+// registers it once here, and every call site is then correct by default while
+// still allowing an explicit override.
+let defaultInternalSuppliers = new Set();
+
+export function registerInternalSuppliers(suppliers = []) {
+  defaultInternalSuppliers = internalSupplierSet(suppliers);
+  return defaultInternalSuppliers;
+}
+
+export function getInternalSuppliers() {
+  return defaultInternalSuppliers;
+}
+
 // Per-lead acquisition cost.
 //
 // A supplier costs money one of two ways and NEVER both: an External supplier
@@ -98,9 +116,10 @@ export function internalSupplierSet(suppliers = []) {
 // internalSuppliers is optional. Without it the caller has no supplier records
 // to judge by, so the posted price is taken at face value.
 export function leadCost(lead, internalSuppliers) {
-  if (internalSuppliers && internalSuppliers.size > 0) {
+  const internal = internalSuppliers || defaultInternalSuppliers;
+  if (internal && internal.size > 0) {
     const sup = String(lead?.supplier_name ?? '').trim().toLowerCase();
-    if (sup && internalSuppliers.has(sup)) return 0;
+    if (sup && internal.has(sup)) return 0;
   }
   return num(leadField(lead, 'cost'));
 }
@@ -277,15 +296,21 @@ export function computeMetrics(leads, adSpendRows = [], internalSuppliers) {
   }
 
   const adSpend = spendRows(adSpendRows).reduce((a, r) => a + num(r.spend), 0);
-  const profit = revenue - cost;
-  const netRevenue = revenue - returns * (total ? revenue / Math.max(total, 1) : 0);
-  const netProfit = netRevenue - cost - adSpend;
-  const cpl = total > 0 ? cost / total : 0;
   // What the leads actually cost us. External suppliers post their price on the
   // lead as cpl; Meta-sourced suppliers cost whatever ad spend was attributed to
   // them. A supplier is one or the other, never both, so adding the two is safe
   // and matches how the supplier cost engine prices a supplier.
   const totalCost = cost + adSpend;
+  // Profit subtracts the FULL cost, ad spend included.
+  //
+  // This was revenue minus lead cost only, which ignored ad spend entirely. On
+  // a month with ~$58k of spend and ~$1k of posted lead cost, Reports showed a
+  // profit of ~$80.7k while Overview (which does subtract spend) showed ~$22.8k
+  // for the same window. Same word, two numbers, one of them meaningless.
+  const profit = revenue - totalCost;
+  const netRevenue = revenue - returns * (total ? revenue / Math.max(total, 1) : 0);
+  const netProfit = netRevenue - totalCost;
+  const cpl = total > 0 ? cost / total : 0;
   // CPL is cost per SOLD lead, not cost per lead received. We pay for traffic to
   // produce sold leads, so dividing by every lead (including DQs, which are the
   // majority) understates the real acquisition cost badly. cost_per_sold is kept
@@ -471,7 +496,7 @@ export function groupBy(leads, field, adSpendRows = []) {
     .map(r => ({
       ...r,
       profit: r.revenue - r.cost,
-      cpl: r.leads ? r.cost / r.leads : 0,
+      cpl: r.sold ? r.cost / r.sold : 0,
       convRate: r.leads ? (r.sold / r.leads) * 100 : 0,
     }))
     .sort((a, b) => b.revenue - a.revenue);

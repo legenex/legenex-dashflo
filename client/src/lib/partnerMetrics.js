@@ -20,7 +20,9 @@ export function supplierMetrics(leads, supplierName) {
     cost += leadCost(l);
   }
   const profit = revenue - cost;
-  const cpl = total > 0 ? cost / total : 0;
+  // CPL is cost per SOLD lead, consistent with Overview, Reports and the
+  // supplier cost engine. accepted is the sold count here.
+  const cpl = accepted > 0 ? cost / accepted : 0;
   const acceptedPct = total > 0 ? (accepted / total) * 100 : 0;
   const convRate = total > 0 ? (accepted / total) * 100 : 0;
   return { total, accepted, duplicate, dq, revenue, cost, profit, cpl, acceptedPct, convRate };

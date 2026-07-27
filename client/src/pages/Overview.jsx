@@ -31,7 +31,7 @@ import {
 } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { resolvePeriod, PERIOD_LABELS } from '@/lib/periodRange';
-import { leadEventInstant } from '@/lib/reportMetrics';
+import { leadEventInstant, leadField } from '@/lib/reportMetrics';
 import { MultiSelect } from '@/components/ui/multi-select';
 import {
   financialTruth, actionQueue, financeDonut, dailyFinance, topCampaigns, buyerRisk, fmtMoney,
@@ -75,6 +75,7 @@ function overviewSource(lead) {
 
 // One dimension filter. Multi-select: clicking an option toggles it, so a
 // second click deselects, and several selections mean "any of these".
+// Sized to sit inline with the period bar rather than stretch across a row.
 function OverviewFilter({ label, value, onChange, options }) {
   return (
     <MultiSelect
@@ -82,7 +83,7 @@ function OverviewFilter({ label, value, onChange, options }) {
       onValueChange={onChange}
       options={options.map((o) => ({ value: o, label: o }))}
       placeholder={`${label}: All`}
-      className={`w-full sm:w-[180px] bg-card ${value.length > 0 ? 'border-primary' : 'border-border'}`}
+      className={`h-9 w-[150px] text-[12px] bg-card ${value.length > 0 ? 'border-primary' : 'border-border'}`}
     />
   );
 }
@@ -143,6 +144,7 @@ export default function Overview() {
   const [buyerFilter, setBuyerFilter] = useState([]);
   const [supplierFilter, setSupplierFilter] = useState([]);
   const [sourceFilter, setSourceFilter] = useState([]);
+  const [verticalFilter, setVerticalFilter] = useState([]);
 
   const { data: leads = [] } = useQuery({ queryKey: ['ov-leads'], queryFn: () => fetchAll((limit, skip) => api.entities.Lead.list('-created_date', limit, skip)) });
   const { data: buyers = [] } = useQuery({ queryKey: ['buyers'], queryFn: () => api.entities.Buyer.list() });
@@ -163,21 +165,28 @@ export default function Overview() {
   // buyer, so a buyer filter genuinely cannot attribute it. Rather than invent
   // an allocation, cost is left whole and the card says so.
   const fLeads = useMemo(() => {
-    const nb = buyerFilter.map(norm); const ns = supplierFilter.map(norm); const nsrc = sourceFilter.map(norm);
-    if (!nb.length && !ns.length && !nsrc.length) return leads;
+    const nb = buyerFilter.map(norm); const ns = supplierFilter.map(norm);
+    const nsrc = sourceFilter.map(norm); const nv = verticalFilter.map(norm);
+    if (!nb.length && !ns.length && !nsrc.length && !nv.length) return leads;
     return leads.filter((l) => {
       if (nb.length && !nb.includes(norm(l.buyer_name || l.buyer))) return false;
       if (ns.length && !ns.some((w) => supplierMatches(l.supplier_name, w))) return false;
       if (nsrc.length && !nsrc.includes(norm(overviewSource(l)))) return false;
+      if (nv.length && !nv.includes(norm(leadField(l, 'vertical')))) return false;
       return true;
     });
-  }, [leads, buyerFilter, supplierFilter, sourceFilter]);
+  }, [leads, buyerFilter, supplierFilter, sourceFilter, verticalFilter]);
 
   const fAdSpend = useMemo(() => {
-    const ns = supplierFilter.map(norm);
-    if (!ns.length) return adSpend;
-    return adSpend.filter((r) => ns.some((w) => supplierMatches(r.supplier_key ?? r.supplier_name, w)));
-  }, [adSpend, supplierFilter]);
+    const ns = supplierFilter.map(norm); const nv = verticalFilter.map(norm);
+    if (!ns.length && !nv.length) return adSpend;
+    return adSpend.filter((r) => {
+      if (ns.length && !ns.some((w) => supplierMatches(r.supplier_key ?? r.supplier_name, w))) return false;
+      // AdSpend rows carry a vertical, so a vertical filter narrows cost too.
+      if (nv.length && !nv.includes(norm(r.vertical))) return false;
+      return true;
+    });
+  }, [adSpend, supplierFilter, verticalFilter]);
 
   const costUnfiltered = buyerFilter.length > 0 || sourceFilter.length > 0;
 
@@ -191,15 +200,16 @@ export default function Overview() {
       if (win?.end && inst > win.end) return false;
       return true;
     };
-    const b = new Set(); const s = new Set(); const src = new Set();
+    const b = new Set(); const s = new Set(); const src = new Set(); const v = new Set();
     for (const l of leads) {
       if (!inWin(l)) continue;
       const bv = l.buyer_name || l.buyer; if (bv) b.add(String(bv));
       if (l.supplier_name) s.add(String(l.supplier_name));
       const sv = overviewSource(l); if (sv) src.add(sv);
+      const vv = leadField(l, 'vertical'); if (vv) v.add(String(vv));
     }
     const sorted = (set) => [...set].sort((x, y) => x.localeCompare(y));
-    return { buyers: sorted(b), suppliers: sorted(s), sources: sorted(src) };
+    return { buyers: sorted(b), suppliers: sorted(s), sources: sorted(src), verticals: sorted(v) };
   }, [leads, win]);
 
   const dataset = { leads: fLeads, buyers, suppliers, invoices, payments, payouts, adSpend: fAdSpend, txns };
@@ -386,8 +396,6 @@ export default function Overview() {
 
   return (
     <div>
-      <ActivityStreamBar events={activityEvents} />
-
       <OverviewHeader
         period={period}
         onPeriodChange={setPeriod}
@@ -396,28 +404,30 @@ export default function Overview() {
         compare={compare}
         onToggleCompare={() => setCompare(c => !c)}
         onRefresh={refreshAll}
+        activity={<ActivityStreamBar events={activityEvents} inline />}
+        filters={(
+          <>
+            <div className="w-px h-6 bg-border mx-0.5 hidden sm:block" />
+            <OverviewFilter label="Vertical" value={verticalFilter} onChange={setVerticalFilter} options={filterOptions.verticals} />
+            <OverviewFilter label="Buyer" value={buyerFilter} onChange={setBuyerFilter} options={filterOptions.buyers} />
+            <OverviewFilter label="Supplier" value={supplierFilter} onChange={setSupplierFilter} options={filterOptions.suppliers} />
+            <OverviewFilter label="Source" value={sourceFilter} onChange={setSourceFilter} options={filterOptions.sources} />
+            {(buyerFilter.length > 0 || supplierFilter.length > 0 || sourceFilter.length > 0 || verticalFilter.length > 0) && (
+              <button
+                onClick={() => { setBuyerFilter([]); setSupplierFilter([]); setSourceFilter([]); setVerticalFilter([]); }}
+                className="text-[12px] font-medium text-muted-foreground hover:text-foreground px-2 py-1.5"
+              >
+                Clear
+              </button>
+            )}
+            {costUnfiltered && (
+              <span className="text-[11px] text-muted-foreground/80 basis-full sm:basis-auto">
+                Cost and CPL stay unfiltered: ad spend carries no buyer or source dimension.
+              </span>
+            )}
+          </>
+        )}
       />
-
-      {/* Dimension filters. Kept on their own row under the period bar so they
-          wrap cleanly on a phone rather than crushing the period buttons. */}
-      <div className="flex flex-wrap items-center gap-2 mt-3">
-        <OverviewFilter label="Buyer" value={buyerFilter} onChange={setBuyerFilter} options={filterOptions.buyers} />
-        <OverviewFilter label="Supplier" value={supplierFilter} onChange={setSupplierFilter} options={filterOptions.suppliers} />
-        <OverviewFilter label="Source" value={sourceFilter} onChange={setSourceFilter} options={filterOptions.sources} />
-        {(buyerFilter.length > 0 || supplierFilter.length > 0 || sourceFilter.length > 0) && (
-          <button
-            onClick={() => { setBuyerFilter([]); setSupplierFilter([]); setSourceFilter([]); }}
-            className="text-[12px] font-medium text-muted-foreground hover:text-foreground px-2 py-1.5"
-          >
-            Clear
-          </button>
-        )}
-        {costUnfiltered && (
-          <span className="text-[11px] text-muted-foreground/80">
-            Cost and CPL stay unfiltered: ad spend carries no buyer or source dimension.
-          </span>
-        )}
-      </div>
 
       {/* AI Analyst summary band */}
       <Reveal>

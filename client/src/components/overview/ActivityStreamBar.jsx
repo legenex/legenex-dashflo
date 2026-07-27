@@ -11,7 +11,11 @@ const DOT = {
 
 // Live activity stream: cycles through recent events as fading inline chips.
 // `events` = [{ id, tone, text }]. Presentational + timed cycling only.
-export default function ActivityStreamBar({ events = [], right = null }) {
+// `inline` renders it as a compact strip for the page header rather than a
+// full-width band of its own. On Overview it used to sit on its own line above
+// the title, which cost a whole row of vertical space and duplicated the LIVE
+// pill sitting right beneath it.
+export default function ActivityStreamBar({ events = [], right = null, inline = false }) {
   const [idx, setIdx] = useState(0);
 
   useEffect(() => {
@@ -23,7 +27,7 @@ export default function ActivityStreamBar({ events = [], right = null }) {
   const current = events[idx];
 
   return (
-    <div className="flex items-center justify-between gap-3 mb-4">
+    <div className={inline ? 'flex items-center gap-3 min-w-0' : 'flex items-center justify-between gap-3 mb-4'}>
       <div className="flex items-center gap-3 min-w-0">
         <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground shrink-0">
           <span className="relative flex h-2 w-2">

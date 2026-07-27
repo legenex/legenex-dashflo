@@ -1,3 +1,4 @@
+import { leadEventInstant } from '@/lib/reportMetrics';
 // Per-campaign aggregate metrics for the Campaigns list table. A campaign is a
 // vertical, so leads are matched to a campaign by their lead_vertical / vertical
 // against the campaign's vertical code. Reads from records already loaded on the
@@ -20,7 +21,7 @@ export function campaignMetrics(campaign, leads, now = new Date()) {
   let revenue = 0, cost = 0;
   for (const l of rows) {
     total++;
-    const created = new Date(l.created_date || l.processed_at || 0).getTime();
+    const created = (leadEventInstant(l) || new Date(l.processed_at || 0)).getTime();
     if (created >= cutoff) leads14d++;
     const s = String(l.final_status || '');
     if (s === 'Sold') accepted++;

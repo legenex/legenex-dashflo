@@ -8,6 +8,7 @@ import { toast } from 'sonner';
 import SectionHeader from '@/components/shared/SectionHeader';
 import RefreshButton from '@/components/shared/RefreshButton';
 import ColumnManager from '@/components/leads/ColumnManager';
+import { MultiSelect } from '@/components/ui/multi-select';
 import { PulseDot } from '@/components/settings/settingsUi';
 import BuyerTable from '@/components/operations/buyers/BuyerTable';
 import BuyersEmptyState from '@/components/operations/buyers/BuyersEmptyState';
@@ -119,14 +120,21 @@ export default function OperationsBuyers() {
 
   const ctx = { cplRows };
 
+  // Vertical filter, applied alongside the client-type tabs. Empty means all.
+  const [verticalFilter, setVerticalFilter] = useState([]);
+  const matchesVertical = (b) => verticalFilter.length === 0 || verticalFilter.includes(b.vertical);
+
   const tabCounts = useMemo(() => {
     const counts = {};
-    for (const t of TABS) counts[t.key] = buyers.filter((b) => matchesTab(b, t.key)).length;
+    // Counts respect the vertical filter so the tab badges agree with the rows
+    // actually listed underneath them.
+    for (const t of TABS) counts[t.key] = buyers.filter((b) => matchesTab(b, t.key) && matchesVertical(b)).length;
     return counts;
-  }, [buyers]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [buyers, verticalFilter]);
 
   const rows = useMemo(() => {
-    const filtered = buyers.filter((b) => matchesTab(b, tab));
+    const filtered = buyers.filter((b) => matchesTab(b, tab) && matchesVertical(b));
     const col = getBuyerColumnDef(sortKey);
     if (!col) return filtered;
     const sorted = [...filtered].sort((a, b) => {
@@ -137,7 +145,8 @@ export default function OperationsBuyers() {
       return 0;
     });
     return sortDir === 'asc' ? sorted : sorted.reverse();
-  }, [buyers, tab, sortKey, sortDir, cplRows]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [buyers, tab, sortKey, sortDir, cplRows, verticalFilter]);
 
   const onSort = (key) => {
     if (sortKey === key) {
@@ -313,7 +322,21 @@ export default function OperationsBuyers() {
                 </button>
               ))}
             </div>
-            <ColumnManager config={config} availableColumns={BUYER_AVAILABLE_COLUMNS} onChange={onConfigChange} />
+            <div className="flex items-center gap-2">
+              {/* Vertical filter. Buyers already carry a vertical and the table
+                  shows it as a column, so it needs to be filterable: with WC and
+                  MVA buyers side by side the list is otherwise unreadable.
+                  Multi-select, and it grows automatically as new verticals are
+                  created rather than needing another hardcoded tab. */}
+              <MultiSelect
+                value={verticalFilter}
+                onValueChange={setVerticalFilter}
+                options={verticals.map((v) => ({ value: v.code, label: v.name || v.code }))}
+                placeholder="All Verticals"
+                className={`h-9 w-[170px] text-[12px] bg-card ${verticalFilter.length > 0 ? 'border-primary' : 'border-border'}`}
+              />
+              <ColumnManager config={config} availableColumns={BUYER_AVAILABLE_COLUMNS} onChange={onConfigChange} />
+            </div>
           </div>
 
           <BuyerBulkDeleteBar
