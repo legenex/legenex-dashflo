@@ -8,11 +8,12 @@ import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
+import { BUYER_TYPES } from '@/lib/buyerTypes';
 import {
   Select, SelectTrigger, SelectValue, SelectContent, SelectItem,
 } from '@/components/ui/select';
 
-const CLIENT_TYPES = ['Law Firm', 'Aggregator', 'Network', 'Reseller'];
+
 const BILLING_TYPES = [
   { value: 'prepay', label: 'Prepay' },
   { value: 'invoiced_daily', label: 'Invoiced daily' },
@@ -118,11 +119,11 @@ export default function BuyerCreateModal({ open, onOpenChange, verticals, onCrea
           </Field>
 
           <div className="grid grid-cols-2 gap-4">
-            <Field label="Client Type" required>
+            <Field label="Buyer Type" required>
               <Select value={form.client_type} onValueChange={(v) => set('client_type', v)}>
                 <SelectTrigger><SelectValue placeholder="Select type" /></SelectTrigger>
                 <SelectContent>
-                  {CLIENT_TYPES.map((t) => <SelectItem key={t} value={t}>{t}</SelectItem>)}
+                  {BUYER_TYPES.map((t) => <SelectItem key={t} value={t}>{t}</SelectItem>)}
                 </SelectContent>
               </Select>
             </Field>

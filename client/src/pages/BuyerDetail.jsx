@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useParams, useNavigate, Link } from 'react-router-dom';
+import { useParams, useNavigate } from 'react-router-dom';
 import { api } from '@/api/client';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
@@ -113,15 +113,6 @@ export default function BuyerDetail() {
           </div>
         </div>
         <div className="flex items-center gap-4">
-          {/* Cross-links into the buyer-centric distribution surface (routing + endpoints edit there). */}
-          <div className="flex items-center gap-1">
-            <Button asChild size="sm" variant="ghost">
-              <Link to={`/distribution/buyers/${id}?tab=routing`}><ExternalLink className="w-3.5 h-3.5 mr-1" />Routing</Link>
-            </Button>
-            <Button asChild size="sm" variant="ghost">
-              <Link to={`/distribution/buyers/${id}?tab=deliveries`}><ExternalLink className="w-3.5 h-3.5 mr-1" />Deliveries</Link>
-            </Button>
-          </div>
           <div className="text-right">
             <div className="text-[11px] text-muted-foreground uppercase tracking-wider">Balance</div>
             <div className="text-[22px] font-bold text-foreground font-mono">{money(buyer.balance)}</div>

@@ -158,7 +158,7 @@ export default function OperationsActiveStates() {
           <SearchableSelect
             value={clientType}
             onValueChange={setClientType}
-            options={[{ value: 'all', label: 'All client types' }, ...CLIENT_TYPES.map((c) => ({ value: c, label: c }))]}
+            options={[{ value: 'all', label: 'All buyer types' }, ...CLIENT_TYPES.map((c) => ({ value: c, label: c }))]}
           />
         </div>
         <div className="w-full sm:w-56">

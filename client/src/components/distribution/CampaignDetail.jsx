@@ -249,7 +249,7 @@ function CampaignMembers({ campaign, defaultGroup, groups }) {
             >
               <GripVertical className="w-4 h-4 text-muted-foreground/60 shrink-0 cursor-grab" aria-label="Drag to reorder" />
               <span className="w-6 text-center font-mono tabular-nums text-muted-foreground shrink-0">{i + 1}</span>
-              <Link to={`/distribution/buyers/${m.buyer_id}?tab=routing`} className="flex-1 min-w-0 truncate hover:text-primary hover:underline">
+              <Link to={`/operations/buyers?buyer=${m.buyer_id}`} className="flex-1 min-w-0 truncate hover:text-primary hover:underline">
                 {buyerName[m.buyer_id] || m.buyer_id || '--'}
               </Link>
               <span className="text-muted-foreground capitalize shrink-0 w-16">{m.price_mode || 'fixed'}</span>
@@ -260,7 +260,7 @@ function CampaignMembers({ campaign, defaultGroup, groups }) {
               <div className="flex items-center gap-1 shrink-0">
                 <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => { setEditingMember(m); setMemberOpen(true); }} aria-label="Edit member"><Pencil className="w-3.5 h-3.5" /></Button>
                 <Button asChild size="icon" variant="ghost" className="h-7 w-7" aria-label="Open buyer routing">
-                  <Link to={`/distribution/buyers/${m.buyer_id}?tab=routing`}><ExternalLink className="w-3.5 h-3.5" /></Link>
+                  <Link to={`/operations/buyers?buyer=${m.buyer_id}`}><ExternalLink className="w-3.5 h-3.5" /></Link>
                 </Button>
                 {isDraft && (
                   <Button size="icon" variant="ghost" className="h-7 w-7 text-muted-foreground hover:text-destructive" onClick={() => setDeleteTarget(m)} aria-label="Remove member"><Trash2 className="w-3.5 h-3.5" /></Button>

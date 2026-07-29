@@ -7,7 +7,7 @@ export const METRICS = [
   { key: 'lowest_cpl', label: 'Lowest CPL' },
 ];
 
-export const CLIENT_TYPES = ['Law Firm', 'Aggregator', 'Reseller', 'Network'];
+export const CLIENT_TYPES = ['Law Firm', 'Aggregator', 'Reseller', 'Network', 'Test'];
 
 // Tier -> token colour. Positive token for Law Firm, teal for Aggregator,
 // warning token for Reseller and Network, muted grey for inactive.

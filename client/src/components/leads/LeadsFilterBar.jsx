@@ -35,6 +35,7 @@ export default function LeadsFilterBar({
   resultCount,
   statusFilter, setStatusFilter, statusOptions,
   supplierFilter, setSupplierFilter, supplierOptions,
+  buyerFilter, setBuyerFilter, buyerOptions = [],
   sourceFilter, setSourceFilter, sourceOptions,
   verticalFilter, setVerticalFilter, verticalOptions = [],
 }) {
@@ -63,6 +64,7 @@ export default function LeadsFilterBar({
     setActiveSetId('');
     if (setStatusFilter) setStatusFilter([]);
     if (setSupplierFilter) setSupplierFilter([]);
+    if (setBuyerFilter) setBuyerFilter([]);
     if (setSourceFilter) setSourceFilter([]);
   };
 
@@ -91,12 +93,13 @@ export default function LeadsFilterBar({
 
   const statusCount = Array.isArray(statusFilter) ? statusFilter.length : 0;
   const supplierCount = Array.isArray(supplierFilter) ? supplierFilter.length : 0;
+  const buyerCount = Array.isArray(buyerFilter) ? buyerFilter.length : 0;
   const sourceCount = Array.isArray(sourceFilter) ? sourceFilter.length : 0;
-  const hasActiveFilters = search || period !== 'this_month' || customFilters.length > 0 || statusCount || supplierCount || sourceCount;
+  const hasActiveFilters = search || period !== 'this_month' || customFilters.length > 0 || statusCount || supplierCount || buyerCount || sourceCount;
 
   // Count active filters for the mobile Filters badge (search is separate).
   const activeCount = (period !== 'this_month' ? 1 : 0) + customFilters.length +
-    statusCount + supplierCount + sourceCount;
+    statusCount + supplierCount + buyerCount + sourceCount;
 
   // Status / Suppliers / Sources / Time / Filters / Save controls. Rendered
   // inline on desktop and inside the mobile sheet. Identical markup either way.
@@ -115,6 +118,13 @@ export default function LeadsFilterBar({
         className="w-full lg:w-[180px] bg-card border-border"
         options={supplierOptions}
         placeholder="All Suppliers"
+      />
+      <MultiSelect
+        value={Array.isArray(buyerFilter) ? buyerFilter : []}
+        onValueChange={setBuyerFilter}
+        className="w-full lg:w-[170px] bg-card border-border"
+        options={buyerOptions}
+        placeholder="All Buyers"
       />
       <MultiSelect
         value={Array.isArray(verticalFilter) ? verticalFilter : []}

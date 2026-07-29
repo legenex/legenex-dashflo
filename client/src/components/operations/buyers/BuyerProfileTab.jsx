@@ -16,8 +16,9 @@ import { useRecomputeCoverage } from './useRecomputeCoverage';
 import RecomputingIndicator from './RecomputingIndicator';
 import BuyerOnboardingLink from './BuyerOnboardingLink';
 import { BILLING_TYPE_OPTIONS as BILLING_TYPES } from '@/lib/billingTypes';
+import { BUYER_TYPES } from '@/lib/buyerTypes';
 
-const CLIENT_TYPES = ['Law Firm', 'Aggregator', 'Reseller', 'Network'];
+
 
 // Editable form over a single Buyer record. buyer_code and status are shown
 // read only. Save writes only the fields on this form.
@@ -112,12 +113,12 @@ export default function BuyerProfileTab({ buyer, verticals }) {
       </Field>
 
       <div className="grid grid-cols-2 gap-4">
-        <Field label="Client Type">
+        <Field label="Buyer Type">
           <Select value={form.client_type || 'none'} onValueChange={(v) => set('client_type', v === 'none' ? '' : v)}>
             <SelectTrigger className="bg-background"><SelectValue /></SelectTrigger>
             <SelectContent>
               <SelectItem value="none">Unclassified</SelectItem>
-              {CLIENT_TYPES.map((t) => <SelectItem key={t} value={t}>{t}</SelectItem>)}
+              {BUYER_TYPES.map((t) => <SelectItem key={t} value={t}>{t}</SelectItem>)}
             </SelectContent>
           </Select>
         </Field>

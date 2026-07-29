@@ -21,15 +21,17 @@ function render(path = '/distribution') {
 const PRESENT = [
   ['Dashboard', '/distribution'],
   ['Campaigns', '/campaigns'],
-  ['Buyers', '/distribution/buyers'],
   ['Webhooks', '/deliveries'],
   ['Conversion Events', '/conversion-events'],
 ];
-const ABSENT_LABELS = ['Verticals', 'Brands', 'Suppliers', 'Deliveries', 'Route Groups', 'Simulator'];
-const ABSENT_ROUTES = ['/campaigns/deliveries', '/distribution/routes', '/distribution/simulator', 'tab=verticals', 'tab=brands', 'tab=suppliers'];
+// Buyers is deliberately absent: buyers are managed in Operations and their
+// deliveries are configured in the campaign, so a second buyer list here was a
+// duplicate editor for the same records.
+const ABSENT_LABELS = ['Verticals', 'Brands', 'Suppliers', 'Deliveries', 'Route Groups', 'Simulator', 'Buyers'];
+const ABSENT_ROUTES = ['/campaigns/deliveries', '/distribution/buyers', '/distribution/routes', '/distribution/simulator', 'tab=verticals', 'tab=brands', 'tab=suppliers'];
 
 describe('DistributionNav pins the buyer-centric IA', () => {
-  it('expanded column shows exactly the five sections with their routes', () => {
+  it('expanded column shows exactly the four sections with their routes', () => {
     const html = render();
     for (const [label, route] of PRESENT) {
       expect(html).toContain(`href="${route}"`);
@@ -43,12 +45,12 @@ describe('DistributionNav pins the buyer-centric IA', () => {
     for (const route of ABSENT_ROUTES) expect(html).not.toContain(route);
   });
 
-  it('the Buyers section links to /distribution/buyers', () => {
+  it('does not surface a second Buyers list under Distribution', () => {
     const html = render();
-    expect(html).toContain('href="/distribution/buyers"');
+    expect(html).not.toContain('href="/distribution/buyers"');
   });
 
-  it('all five sections appear in the collapsed rail with icons (reachable when collapsed)', () => {
+  it('all four sections appear in the collapsed rail with icons (reachable when collapsed)', () => {
     storeValue = 'true'; // legenex_subnav_collapsed = true -> collapsed rail renders
     const html = render();
     for (const [, route] of PRESENT) expect(html).toContain(`href="${route}"`);

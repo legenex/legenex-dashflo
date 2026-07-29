@@ -36,7 +36,6 @@ import Reports from '@/pages/Reports';
 import Finances from '@/pages/Finances';
 
 import Deliveries from '@/pages/Deliveries';
-import DistributionBuyers from '@/pages/distribution/DistributionBuyers';
 import ConversionEvents from '@/pages/ConversionEvents';
 import RouteSimulator from '@/pages/RouteSimulator';
 import RouteGroups from '@/pages/RouteGroups';
@@ -222,11 +221,11 @@ const AuthenticatedApp = () => {
           <Route element={<DistributionLayout />}>
             <Route path="/distribution" element={<DistributionDashboard />} />
             <Route path="/campaigns" element={<Campaigns />} />
-            {/* Buyer-centric IA: buyers list + per-buyer detail (Routing / Deliveries / Summary tabs). */}
-            <Route path="/distribution/buyers" element={<DistributionBuyers />} />
-            <Route path="/distribution/buyers/:id" element={<DistributionBuyers />} />
-            {/* Deliveries are now a per-buyer tab; the old standalone page redirects there. */}
-            <Route path="/campaigns/deliveries" element={<Navigate to="/distribution/buyers" replace />} />
+            {/* Buyers live in Operations only. These paths are kept as redirects so
+                existing bookmarks and cross-links do not 404. */}
+            <Route path="/distribution/buyers" element={<Navigate to="/operations/buyers" replace />} />
+            <Route path="/distribution/buyers/:id" element={<Navigate to="/operations/buyers" replace />} />
+            <Route path="/campaigns/deliveries" element={<Navigate to="/campaigns" replace />} />
             {/* Nick's live rename: /deliveries stays and renders the Webhooks page. */}
             <Route path="/deliveries" element={<Deliveries />} />
             <Route path="/conversion-events" element={<ConversionEvents />} />

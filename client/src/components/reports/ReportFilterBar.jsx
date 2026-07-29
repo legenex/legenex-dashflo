@@ -9,6 +9,7 @@ import MobileFilterSheet from '@/components/shared/MobileFilterSheet';
 import { Filter, Plus, X } from 'lucide-react';
 import { formatInTimeZone } from 'date-fns-tz';
 import { STANDARD_PERIODS, resolvePeriod, APP_TZ } from '@/lib/periodRange';
+import { verticalFilterOptions } from '@/lib/verticalOptions';
 
 const OPTIONAL_FILTERS = [
   { key: 'utm_source', label: 'UTM Source' },
@@ -117,7 +118,7 @@ export default function ReportFilterBar({ value, onChange, options, hide = [] })
 
             All of these are multi-select: clicking an option toggles it, so a
             second click deselects. Several selections mean "any of these". */}
-        <MultiSelect value={asArray(value.vertical)} onValueChange={v => set('vertical', v)} className="w-full lg:w-[150px] bg-card border-border" placeholder="Vertical: All" options={verticals.map(v => ({ value: v.code, label: v.name }))} />
+        <MultiSelect value={asArray(value.vertical)} onValueChange={v => set('vertical', v)} className="w-full lg:w-[150px] bg-card border-border" placeholder="Vertical: All" options={verticalFilterOptions(verticals)} />
         {shows('supplier_name') && <MultiSelect value={asArray(value.supplier_name)} onValueChange={v => set('supplier_name', v)} className="w-full lg:w-[150px] bg-card border-border" placeholder="Supplier: All" options={suppliers.map(s => ({ value: s.name, label: s.name }))} />}
         {shows('buyer') && <MultiSelect value={asArray(value.buyer)} onValueChange={v => set('buyer', v)} className="w-full lg:w-[150px] bg-card border-border" placeholder="Buyer: All" options={buyers.map(b => ({ value: b.company_name, label: b.company_name }))} />}
         <MultiSelect value={asArray(value.brand)} onValueChange={v => set('brand', v)} className="w-full lg:w-[140px] bg-card border-border" placeholder="Brand: All" options={brands.map(b => ({ value: b.brand_code, label: b.brand_name }))} />

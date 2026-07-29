@@ -26,6 +26,7 @@ import { toast } from 'sonner';
 import ImportExportDialog from '@/components/shared/ImportExportDialog';
 import { motion } from 'framer-motion';
 import { Panel, rise } from '@/components/campaigns/campaignTable';
+import { verticalFilterOptions } from '@/lib/verticalOptions';
 
 const DEFAULT_TEST_PAYLOAD = {
   campid: "LEGAL-MVA-USA",
@@ -228,7 +229,7 @@ export default function SettingsLeadByte() {
     queryKey: ['verticals'],
     queryFn: () => api.entities.Vertical.list(),
   });
-  const verticalFilterOptions = verticalList.map(v => ({ value: v.code, label: v.name }));
+  const verticalFilterOpts = verticalFilterOptions(verticalList);
   const supplierOptions = suppliers.map(s => ({ value: s.name, label: s.name }));
   const supplierTypeOptions = [
     { value: 'Internal', label: 'Internal' },
@@ -448,7 +449,7 @@ export default function SettingsLeadByte() {
                         onValueChange={v => setF('filter_verticals', v ? JSON.stringify([v]) : '[]')}
                         className="mt-1 bg-background"
                         placeholder="All verticals"
-                        options={[{ value: '', label: 'All verticals' }, ...verticalFilterOptions]}
+                        options={[{ value: '', label: 'All verticals' }, ...verticalFilterOpts]}
                       />
                     </div>
                   </div>
@@ -652,7 +653,7 @@ export default function SettingsLeadByte() {
                 value={verticalFilter}
                 onValueChange={setVerticalFilter}
                 className="w-[200px] bg-background"
-                options={[{ value: 'all', label: 'All Verticals' }, ...verticalFilterOptions]}
+                options={[{ value: 'all', label: 'All Verticals' }, ...verticalFilterOpts]}
               />
             </div>
             <div className="flex items-center gap-2">

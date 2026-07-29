@@ -2,14 +2,14 @@ import { requireUser, HttpError } from './_runtime.js';
 
 // Caller model: SUPPLIER-SCOPED. Authenticated supplier-portal data endpoint.
 // Returns everything the supplier portal needs, strictly scoped to a single
-// Supplier record. Reads Lead with full (admin) visibility but never returns
-// another supplier's data, another supplier's leads, buyer identities, buyer
-// revenue or internal cost, raw payloads, routing traces, or the raw API key
-// (prefix + metadata only). Deny-by-default field allowlist.
+// Supplier record. Reads Lead directly but never returns another supplier's
+// data, another supplier's leads, buyer identities, buyer revenue or internal
+// cost, raw payloads, routing traces, or the raw API key (prefix + metadata
+// only). Deny-by-default field allowlist.
 //
 // Scoping rules:
 // - A supplier-role user is scoped to their own user.linked_supplier_id.
-// - An operator (admin) may pass supplier_id to PREVIEW a supplier's portal.
+// - An operator (admin) may pass ?supplier_id= to PREVIEW a supplier's portal.
 //   Non-admin callers cannot override their linked supplier.
 
 async function resolveSupplierScope(db, user, requestedSupplierId, previewRole) {
@@ -32,10 +32,10 @@ function parseArr(raw) {
 }
 
 export default async function supplierPortalData(ctx) {
-  const user = requireUser(ctx);
-  const db = ctx.db;
-
   try {
+    const db = ctx.db;
+    const user = requireUser(ctx);
+
     const body = ctx.body || {};
     const requestedSupplierId = body.supplier_id || null;
     const previewRole = !!body.preview_role;
@@ -59,8 +59,13 @@ export default async function supplierPortalData(ctx) {
       returns = allReturns.filter((r) => leadIds.has(r.lead_id));
     } catch { returns = []; }
 
-    // Trim lead payloads to supplier-safe fields. Never expose buyer identity,
-    // other suppliers' data, raw payloads, or operator-only traces.
+    // Trim lead payloads to supplier-safe fields.
+    //
+    // BUYER IDENTITY: the buyer CODE is exposed, the buyer NAME never is. A
+    // supplier needs a stable handle to dispute or reconcile a specific lead
+    // ("the one you sold to T2"), but the company name would let them approach
+    // our client directly. Never add buyer_name, and never derive the name from
+    // the code on this projection.
     const safeLeads = leads.map((l) => ({
       id: l.id,
       lead_id: l.lead_id,
@@ -70,6 +75,7 @@ export default async function supplierPortalData(ctx) {
       email: l.email,
       final_status: l.final_status,
       response_reason: l.response_reason,
+      buyer_id: l.buyer_id || null,
       created_date: l.created_date,
     }));
 

@@ -36,7 +36,8 @@
         "Law Firm",
         "Aggregator",
         "Reseller",
-        "Network"
+        "Network",
+        "Test"
       ],
       "description": "Client classification. Nullable, no default. Null means unclassified. Drives the buyer_code prefix (Law Firm LF, Aggregator AG, Reseller RS, Network NW)."
     },

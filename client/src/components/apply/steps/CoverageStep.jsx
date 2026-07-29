@@ -63,7 +63,7 @@ export default function CoverageStep({ form, set, errors, locked }) {
       </div>
 
       <ApplySelect
-        label="Client Type"
+        label="Buyer Type"
         value={form.client_type}
         onChange={pickClientType}
         error={errors.client_type}

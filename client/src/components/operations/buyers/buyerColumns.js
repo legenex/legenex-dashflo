@@ -24,9 +24,12 @@ export const BUYER_COLUMNS = [
     className: 'font-mono text-[11px] text-muted-foreground',
   },
   {
-    key: 'client_type', header: 'Client Type', sortable: true,
+    key: 'client_type', header: 'Buyer Type', sortable: true,
     sortValue: (b) => b.client_type || 'zzz',
-    accessor: (b) => b.client_type || 'Unclassified',
+    // Unclassified is not a neutral state here: a buyer with no type came from a
+    // lead payload and cannot be routed or billed until it is finished, so the
+    // cell says so rather than leaving a quiet dash.
+    accessor: (b) => (b.client_type ? b.client_type : 'Unclassified, needs setup'),
     className: 'text-[12px]',
   },
   {

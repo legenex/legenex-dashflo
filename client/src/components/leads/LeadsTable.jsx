@@ -219,6 +219,7 @@ export default function LeadsTable({ view }) {
   const [columnConfig, setColumnConfig] = useState(() => loadColumnConfig(view));
   const [statusFilter, setStatusFilter] = useState([]);
   const [supplierFilter, setSupplierFilter] = useState([]);
+  const [buyerFilter, setBuyerFilter] = useState([]);
   const [sourceFilter, setSourceFilter] = useState([]);
   const [verticalFilter, setVerticalFilter] = useState([]);
   const [page, setPage] = useState(1);
@@ -352,6 +353,18 @@ export default function LeadsTable({ view }) {
     return Array.from(set).sort().map(v => ({ value: v, label: v }));
   }, [scoped]);
 
+  // Buyer options come from the buyer CODE, which is what the table column and
+  // the supplier portal both show. Column first, bag as fallback, so a resold
+  // lead offers its current buyer and not the previous one.
+  const buyerOptions = useMemo(() => {
+    const set = new Set();
+    scoped.forEach(l => {
+      const b = l.buyer_id || l.buyer_name || leadField(l, 'buyer_id') || leadField(l, 'buyer');
+      if (b) set.add(String(b));
+    });
+    return Array.from(set).sort().map(b => ({ value: b, label: b }));
+  }, [scoped]);
+
   const sourceOptions = useMemo(() => {
     const set = new Set();
     scoped.forEach(l => {
@@ -397,6 +410,10 @@ export default function LeadsTable({ view }) {
     // Only the two multi-selects remain.
     const result = scoped.filter(lead => {
       if (supplierFilter.length > 0 && !supplierFilter.includes(lead.supplier_name)) return false;
+      if (buyerFilter.length > 0) {
+        const b = lead.buyer_id || lead.buyer_name || leadField(lead, 'buyer_id') || leadField(lead, 'buyer');
+        if (!buyerFilter.includes(String(b ?? ''))) return false;
+      }
       if (sourceFilter.length > 0 && !sourceFilter.includes(getSource(lead))) return false;
       if (verticalFilter.length > 0 && !verticalFilter.includes(String(leadField(lead, 'vertical') ?? ''))) return false;
       return true;
@@ -422,7 +439,7 @@ export default function LeadsTable({ view }) {
     [filtered, safePage, pageSize]
   );
   // Reset to page 1 whenever the view, search, or any filter changes.
-  useEffect(() => { setPage(1); }, [view, search, period, customPeriod, customFilters, statusFilter, supplierFilter, sourceFilter, verticalFilter, pageSize]);
+  useEffect(() => { setPage(1); }, [view, search, period, customPeriod, customFilters, statusFilter, supplierFilter, buyerFilter, sourceFilter, verticalFilter, pageSize]);
 
   // Real telemetry for the shell footer.
   //
@@ -641,6 +658,9 @@ export default function LeadsTable({ view }) {
         supplierFilter={supplierFilter}
         setSupplierFilter={setSupplierFilter}
         supplierOptions={supplierOptions}
+        buyerFilter={buyerFilter}
+        setBuyerFilter={setBuyerFilter}
+        buyerOptions={buyerOptions}
         sourceFilter={sourceFilter}
         verticalFilter={verticalFilter}
         setVerticalFilter={setVerticalFilter}
