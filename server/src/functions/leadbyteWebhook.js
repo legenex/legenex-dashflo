@@ -1,7 +1,10 @@
-// Public endpoint authenticated only by a route token (query `token` or the
-// `X-Webhook-Token` header), SHA-256 hashed and matched against an enabled
-// leadbyte InboundWebhookRoute. Reads and writes Lead directly (no RLS at the
-// function layer).
+// Caller model: public with key.
+//
+// This endpoint is unauthenticated and must be invocable without a logged-in
+// user. It authenticates ONLY by a route token, read from the query param
+// `token` or the `X-Webhook-Token` header, SHA-256 hashed and matched against
+// an enabled leadbyte InboundWebhookRoute. It looks up the route and reads and
+// writes Lead at the function layer (no RLS).
 //
 // This function only RECORDS LeadByte sold/unsold/return/conversion outcome
 // data onto the matching Lead. It never calls processLead or any routing,
@@ -65,66 +68,84 @@ function setIf(out, key, value) {
 // raw LeadByte bucket value), never to the Calculated accident_date field.
 // supplier_source maps into the "Supplier Source" canonical field like any
 // other mapped field and no longer feeds supplier_name.
+// Payload key -> canonical field.
+//
+// Each canonical field lists EVERY payload key that can carry it, because two
+// payload styles are in use: the original prefixed one (contact_email,
+// supplier_sid, geo_state) and the flat one (email, sid, geoip_state). A
+// webhook rebuilt with flat keys previously matched nothing at all, since the
+// handler could not find an email or phone to match on and silently dropped
+// most of the record. First present key wins.
 const CANONICAL_MAP = {
-  contact_first_name: 'first_name',
-  contact_last_name: 'last_name',
-  contact_email: 'email',
-  contact_phone: 'mobile',
-  contact_zip: 'zip',
-  contact_phone_verified: 'phone_verified',
-  contact_jornaya_token: 'jornaya_token',
-  contact_optin_url: 'optin_url',
-  contact_user_agent: 'user_agent',
-  geo_country: 'geoip_country',
-  geo_state: 'geoip_state',
-  geo_city: 'geoip_city',
-  geo_zip: 'geoip_zip',
-  geo_ip: 'ip_address',
-  geo_language: 'geo_language',
-  utm_source: 'utm_source',
-  utm_campaign: 'utm_campaign',
-  utm_medium: 'utm_medium',
-  utm_content: 'utm_content',
-  utm_terms: 'utm_terms',
-  utm_ad_label: 'ad_label',
-  supplier_sid: 'sid',
-  supplier_ssid: 'ssid',
-  supplier_s1: 's1',
-  supplier_s2: 's2',
-  supplier_s3: 's3',
-  supplier_brand: 'supplier_brand',
-  supplier_source: 'Supplier Source',
-  tc_id: 'tc_id',
-  leadshook_id: 'leadshook_id',
-  accident_state: 'accident_state',
-  accident_type: 'accident_type',
-  accident_details: 'accident_details',
-  incident_date: 'incident_date',
-  injured: 'injured',
-  injury_type: 'injury_type',
-  treatment: 'treatment',
-  treatment_type: 'treatment_type',
-  treatment_time: 'treatment_time',
-  fault: 'fault',
-  attorney: 'attorney',
-  attorney_change: 'attorney_change',
-  insurance: 'insurance',
-  police_report_filed: 'police_report',
-  accident_date: 'accident_timeframe',
-  lead_status: 'lead_status',
-  lead_revenue: 'revenue',
-  lead_vertical: 'vertical',
-  leadbyte_id: 'lead_id',
-  date_created: 'timestamp',
+  first_name: ['contact_first_name', 'first_name', 'firstname'],
+  last_name: ['contact_last_name', 'last_name', 'lastname'],
+  email: ['contact_email', 'email'],
+  mobile: ['contact_phone', 'mobile', 'phone', 'phone1'],
+  zip: ['contact_zip', 'zip', 'postcode'],
+  phone_verified: ['contact_phone_verified', 'phone_verified'],
+  jornaya_token: ['contact_jornaya_token', 'jornaya_token'],
+  optin_url: ['contact_optin_url', 'optin_url', 'optinurl'],
+  user_agent: ['contact_user_agent', 'user_agent'],
+  trustedform_url: ['contact_trustedform_url', 'trustedform_url'],
+  geoip_country: ['geo_country', 'geoip_country', 'country'],
+  geoip_state: ['geo_state', 'geoip_state'],
+  geoip_city: ['geo_city', 'geoip_city'],
+  geoip_zip: ['geo_zip', 'geoip_zip'],
+  ip_address: ['geo_ip', 'ip_address', 'ipaddress'],
+  geo_language: ['geo_language'],
+  utm_source: ['utm_source'],
+  utm_campaign: ['utm_campaign'],
+  utm_medium: ['utm_medium'],
+  utm_content: ['utm_content'],
+  utm_terms: ['utm_terms'],
+  ad_label: ['utm_ad_label', 'ad_label'],
+  sid: ['supplier_sid', 'sid'],
+  ssid: ['supplier_ssid', 'ssid'],
+  s1: ['supplier_s1', 's1'],
+  s2: ['supplier_s2', 's2'],
+  s3: ['supplier_s3', 's3'],
+  supplier_brand: ['supplier_brand'],
+  'Supplier Source': ['supplier_source', 'source'],
+  supplier_payout: ['supplier_payout'],
+  tc_id: ['tc_id'],
+  leadshook_id: ['leadshook_id'],
+  accident_state: ['accident_state'],
+  accident_type: ['accident_type'],
+  accident_details: ['accident_details'],
+  incident_date: ['incident_date'],
+  injured: ['injured'],
+  injury_type: ['injury_type'],
+  treatment: ['treatment'],
+  treatment_type: ['treatment_type'],
+  treatment_time: ['treatment_time'],
+  fault: ['fault'],
+  attorney: ['attorney'],
+  attorney_change: ['attorney_change'],
+  insurance: ['insurance'],
+  police_report: ['police_report_filed', 'police_report'],
+  accident_timeframe: ['accident_date'],
+  lead_status: ['lead_status'],
+  revenue: ['lead_revenue', 'revenue'],
+  vertical: ['lead_vertical', 'vertical'],
+  lead_tier: ['lead_tier'],
+  buyer_name: ['buyer_name', 'buyername'],
+  buyer_id: ['buyer_id', 'buyer'],
+  buyer_feedback: ['buyer_feedback'],
+  returned: ['buyer_returned'],
+  returned_reason: ['buyer_return_reason'],
+  lead_id: ['leadbyte_id', 'lead_id', 'leadid'],
+  timestamp: ['date_created', 'received', 'timestamp'],
 };
 
 // Build the canonical object from the payload, keeping only cleaned present
 // values (clean skips null/empty/single-dash).
 function buildCanonical(body) {
   const out = {};
-  for (const [payloadKey, canonicalKey] of Object.entries(CANONICAL_MAP)) {
-    const value = clean(body[payloadKey]);
-    if (value !== null) out[canonicalKey] = value;
+  for (const [canonicalKey, payloadKeys] of Object.entries(CANONICAL_MAP)) {
+    for (const k of payloadKeys) {
+      const value = clean(body[k]);
+      if (value !== null) { out[canonicalKey] = value; break; }
+    }
   }
   return out;
 }
@@ -153,9 +174,7 @@ export default async function leadbyteWebhook(ctx) {
   const db = ctx.db;
 
   // ── Auth gate: route token only, before any Lead access ─────────────────
-  const headerToken =
-    (ctx.req.headers && (ctx.req.headers['x-webhook-token'] || ctx.req.headers['X-Webhook-Token'])) || '';
-  const token = String((ctx.req.query && ctx.req.query.token) || headerToken || '').trim();
+  const token = (ctx.req.query?.token || ctx.req.headers?.['x-webhook-token'] || '').trim();
   if (!token) return ctx.json({ error: 'Unauthorized' }, 401);
 
   let route = null;
@@ -177,35 +196,44 @@ export default async function leadbyteWebhook(ctx) {
   if (!body || typeof body !== 'object' || Array.isArray(body)) {
     return ctx.json({ error: 'Invalid JSON' }, 400);
   }
-  const rawBody = JSON.stringify(body);
+  // Preserve the exact raw payload for leadbyte_outcome_payload when the
+  // transport captured it; otherwise reconstruct from the parsed body.
+  const rawBody = typeof ctx.req?.rawBody === 'string' ? ctx.req.rawBody : JSON.stringify(body);
 
   try {
-    const leadbyteId = num(body.leadbyte_id);
+    const leadbyteId = num(body.leadbyte_id ?? body.lead_id ?? body.leadid);
     const finalStatus = mapFinalStatus(body.lead_status);
     const canonical = buildCanonical(body);
 
     // Outcome fields shared by update and create.
+    //
+    // Read from `canonical`, not the raw body, so both payload styles work.
+    // Reading body.lead_revenue directly meant a flat-key webhook sending
+    // "revenue" recorded no revenue at all.
     const outcome = {};
-    setIf(outcome, 'revenue', num(body.lead_revenue));
-    setIf(outcome, 'supplier_payout', num(body.supplier_payout));
-    setIf(outcome, 'buyer_id', clean(body.buyer_id));
-    setIf(outcome, 'buyer_name', clean(body.buyer_name));
+    setIf(outcome, 'revenue', num(canonical.revenue));
+    setIf(outcome, 'supplier_payout', num(canonical.supplier_payout));
+    setIf(outcome, 'buyer_id', canonical.buyer_id ?? null);
+    setIf(outcome, 'buyer_name', canonical.buyer_name ?? null);
     setIf(outcome, 'buyer_conversion', clean(body.buyer_conversion));
-    setIf(outcome, 'buyer_feedback', clean(body.buyer_feedback));
-    outcome.buyer_returned = toBool(body.buyer_returned);
-    setIf(outcome, 'buyer_return_reason', clean(body.buyer_return_reason));
-    setIf(outcome, 'lead_tier', clean(body.lead_tier));
+    setIf(outcome, 'buyer_feedback', canonical.buyer_feedback ?? null);
+    outcome.buyer_returned = toBool(body.buyer_returned ?? canonical.returned);
+    setIf(outcome, 'buyer_return_reason', canonical.returned_reason ?? null);
+    setIf(outcome, 'lead_tier', canonical.lead_tier ?? null);
     setIf(outcome, 'lead_score', num(body.lead_score));
-    setIf(outcome, 'lead_vertical', clean(body.lead_vertical));
+    setIf(outcome, 'lead_vertical', canonical.vertical ?? null);
     if (finalStatus !== null) outcome.final_status = finalStatus;
     outcome.leadbyte_outcome_at = new Date().toISOString();
     outcome.leadbyte_outcome_payload = rawBody;
 
     // Contact fields (used to fill blanks on update, and to seed a create).
-    const contactFirst = clean(body.contact_first_name);
-    const contactLast = clean(body.contact_last_name);
-    const contactEmail = clean(body.contact_email);
-    const contactPhone = clean(body.contact_phone);
+    const contactFirst = canonical.first_name || null;
+    const contactLast = canonical.last_name || null;
+    // Identity fields, read from the canonical object rather than the raw body
+    // so both payload styles work. Reading body.contact_email directly is why a
+    // flat-key webhook matched nothing.
+    const contactEmail = canonical.email || null;
+    const contactPhone = canonical.mobile || null;
 
     let matched = false;
     let leadId = null;
@@ -259,66 +287,100 @@ export default async function leadbyteWebhook(ctx) {
       await db.entities.Lead.update(existing.id, patch);
       resultStatus = patch.final_status || existing.final_status || null;
     } else {
-      // No matching lead. This is an outcome/postback webhook: it records the
-      // buyer outcome onto a lead that already exists in our system. It must
-      // NEVER create a new lead, because doing so produced phantom "Processing"
-      // duplicates for direct-route leads.
+      // No matching lead: CREATE it.
       //
-      // But it must not vanish either. Returning a bare 200 told LeadByte the
-      // outcome was accepted, so it never retried, and the Sold status was
-      // dropped on the floor with nothing on screen to show for it. That is the
-      // slippage: LeadByte reports a lead as Sold, this system never hears it,
-      // and the counts drift apart with no trace of why.
+      // Not every lead reaches this system through processLead. Inbounds and
+      // other affiliates post straight into LeadByte, so the first this system
+      // ever hears of those leads is this webhook. Refusing to create them, and
+      // merely logging the outcome, meant real sold leads never appeared here
+      // at all and the counts drifted from LeadByte permanently.
       //
-      // Record it as a resolvable error instead. It surfaces on the Settings
-      // dashboard with an unresolved count, carries the whole payload so the
-      // lead can be reconciled by hand, and is idempotent on repeat delivery.
-      const identity = [
-        leadbyteId ? `leadbyte_id=${leadbyteId}` : null,
-        contactEmail ? `email=${contactEmail}` : null,
-        contactPhone ? `phone=${contactPhone}` : null,
-      ].filter(Boolean).join(' ') || 'no identifying fields on payload';
-
-      try {
-        // Do not pile up a new row every time LeadByte re-sends the same
-        // outcome: look for an open one first.
-        const priorArr = await db.entities.ErrorLog.filter({
-          stage: 'leadbyte',
-          resolved: false,
-          message: `Unmatched outcome: ${identity}`,
-        });
-        const prior = (Array.isArray(priorArr) ? priorArr : [])[0] || null;
-        if (!prior) {
+      // The earlier no-create rule existed to stop phantom "Processing"
+      // duplicates for leads already in flight through processLead. That is
+      // handled properly now: the match above checks leadbyte id, then email,
+      // then mobile before we get here, so anything reaching this branch is a
+      // lead this system genuinely has not seen.
+      if (!contactEmail && !contactPhone && leadbyteId === null) {
+        // Nothing to identify it by, so creating would guarantee an
+        // unmergeable orphan. Record for reconciliation instead.
+        try {
           await db.entities.ErrorLog.create({
             stage: 'leadbyte',
             severity: 'warning',
-            message: `Unmatched outcome: ${identity}`,
-            supplier_name: clean(body.supplier_sid) || null,
+            message: 'Unmatched outcome: no identifying fields on payload',
+            supplier_name: canonical.sid || null,
             detail: JSON.stringify({
-              reason: 'Outcome webhook arrived for a lead that is not in this system.',
-              consequence: 'Status was NOT applied. This lead will read differently here than in LeadByte until reconciled.',
-              lead_status: clean(body.lead_status) || null,
-              lead_revenue: body.lead_revenue ?? null,
-              buyer_name: clean(body.buyer_name) || null,
-              received_at: new Date().toISOString(),
+              reason: 'Outcome webhook carried no email, phone or leadbyte id, so no lead could be created or matched.',
+              consequence: 'Nothing was written. Check the webhook payload mapping in LeadByte.',
               payload: body,
             }),
           });
-        }
-      } catch {
-        // Never let the audit write mask the acknowledgement below.
+        } catch { /* audit write must never mask the response */ }
+
+        await db.entities.InboundWebhookRoute.update(route.id, {
+          receipt_count: (Number(route.receipt_count) || 0) + 1,
+          last_received_at: new Date().toISOString(),
+        });
+        return ctx.json({
+          ok: true, matched: false, created: false, lead_id: null, final_status: null,
+          message: 'No identifying fields on payload (email, phone or lead id); nothing written.',
+        }, 200);
       }
+
+      // lead_type is derived from the supplier id, matching backfillLeadType:
+      // LEADFLOW and LGNX are Quiz leads, every other sid is Affiliate.
+      // It lives INSIDE mapped_fields, not as a Lead column, so setting it
+      // top-level would be silently dropped.
+      const sidUpper = String(canonical.sid || '').trim().toUpperCase();
+      const leadType = (sidUpper === 'LEADFLOW' || sidUpper === 'LGNX') ? 'Quiz' : 'Affiliate';
+
+      // Resolve the supplier by matching the sid against the Supplier records,
+      // loosely, because a sid (LEADFLOW, INBNDS-SURVEY) and a supplier name
+      // (LeadFlow, Inbounds) differ in case and suffix. Falls back to the raw
+      // sid so the lead is still attributed to something searchable.
+      let supplierName = canonical.sid || null;
+      try {
+        const sups = await db.entities.Supplier.list();
+        const norm = (v) => String(v ?? '').trim().toLowerCase();
+        const s = norm(canonical.sid);
+        const hit = (Array.isArray(sups) ? sups : []).find((x) => {
+          const n = norm(x.name);
+          return n && s && (n === s || s.includes(n) || n.includes(s));
+        });
+        if (hit?.name) supplierName = hit.name;
+      } catch { /* keep the sid fallback */ }
+
+      const created = await db.entities.Lead.create({
+        ...outcome,
+        archived: false,
+        first_name: contactFirst || undefined,
+        last_name: contactLast || undefined,
+        email: contactEmail || undefined,
+        mobile: contactPhone || undefined,
+        supplier_name: supplierName || undefined,
+        // The whole canonical payload, plus lead_type and a provenance marker so
+        // a lead that arrived this way is identifiable later.
+        mapped_fields: JSON.stringify({
+          ...canonical,
+          lead_type: leadType,
+          ingest_channel: 'leadbyte_webhook',
+        }),
+      });
+
+      leadId = created?.id || null;
 
       await db.entities.InboundWebhookRoute.update(route.id, {
         receipt_count: (Number(route.receipt_count) || 0) + 1,
         last_received_at: new Date().toISOString(),
       });
+
       return ctx.json({
         ok: true,
         matched: false,
-        lead_id: null,
-        final_status: null,
-        message: 'No matching lead found; outcome recorded for reconciliation (no lead created).',
+        created: true,
+        lead_id: leadId,
+        final_status: finalStatus,
+        message: 'Lead did not exist in this system and was created from the outcome payload.',
       }, 200);
     }
 
@@ -338,7 +400,7 @@ export default async function leadbyteWebhook(ctx) {
     try {
       await db.entities.InboundWebhookRoute.update(route.id, {
         error_count: (Number(route.error_count) || 0) + 1,
-        last_error: (err && err.message) || 'Unexpected processing error',
+        last_error: err?.message || 'Unexpected processing error',
       });
     } catch {
       // Telemetry write must not mask the original error.
