@@ -10,6 +10,7 @@ import StatCard from '@/components/overview/StatCard';
 import ActionQueueCard from '@/components/overview/ActionQueueCard';
 import DataConfidenceCard from '@/components/overview/DataConfidenceCard';
 import AiAnalystBand from '@/components/overview/AiAnalystBand';
+import { openDataBotWithQuestion } from '@/lib/chatBotBridge';
 import ActivityStreamBar from '@/components/overview/ActivityStreamBar';
 import StatusStripBar from '@/components/overview/StatusStripBar';
 import Reveal from '@/components/overview/Reveal';
@@ -461,6 +462,8 @@ export default function Overview() {
             riskNote={riskNote}
             topRecommendation={topRecommendation}
             feedCount={feedCount}
+            onAskAi={() => openDataBotWithQuestion('Give me a summary of the current state of the business: revenue, lead flow, and any risks I should act on now.')}
+            onExplainVariance={() => openDataBotWithQuestion('Explain the variance between booked and verified revenue this period. What is causing the gap and which suppliers or buyers are driving it?')}
           />
         </AnimatedPanel>
       </Reveal>

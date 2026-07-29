@@ -12,6 +12,7 @@ import { useSidebarWidth } from '@/hooks/useSidebarWidth';
 import { useCollapsible } from '@/hooks/useCollapsible';
 import ResizeHandle from './ResizeHandle';
 import SystemClock from './SystemClock';
+import NotificationBell from './NotificationBell';
 import { navGroups, filterNav } from './navConfig';
 
 const COLLAPSED_WIDTH = 68;
@@ -362,6 +363,7 @@ export default function Sidebar() {
         <ViewAsSwitcher />
         <SidebarProfile />
         <div className="flex items-center justify-between gap-2">
+          <NotificationBell />
           <div className="flex-1 min-w-0"><SystemClock /></div>
           <button
             onClick={toggle}

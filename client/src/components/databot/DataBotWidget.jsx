@@ -8,6 +8,10 @@ import { toast } from 'sonner';
 import { verdictTagClass } from '@/lib/tagColors';
 import ReactMarkdown from 'react-markdown';
 
+// Track the current conversation ID per bot mode so the backend can persist
+// messages into the right ChatConversation thread.
+const conversationIds = { data: null, build: null };
+
 function BuildCard({ build }) {
   const copy = () => { navigator.clipboard.writeText(build.ready_prompt || ''); toast.success('Build request copied'); };
   const riskVerdict = build.risk === 'red' ? 'fail' : build.risk === 'amber' ? 'warn' : 'pass';
@@ -65,6 +69,12 @@ export default function DataBotWidget() {
   const [busy, setBusy] = useState(false);
   const [threads, setThreads] = useState({ data: [], build: [] });
   const scrollRef = useRef(null);
+  // Ref mirror so the bridge event handler (which captures a stale closure)
+  // always sees the latest threads instead of wiping history.
+  const threadsRef = useRef(threads);
+  threadsRef.current = threads;
+  const busyRef = useRef(busy);
+  busyRef.current = busy;
 
   const messages = activeBot ? threads[activeBot] : [];
   const cfg = activeBot ? BOTS[activeBot] : null;
@@ -73,6 +83,24 @@ export default function DataBotWidget() {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
   }, [threads, activeBot, open]);
 
+  // Listen for cross-component "Ask AI" requests (e.g. from the AI Analyst band).
+  useEffect(() => {
+    const handler = (e) => {
+      const question = e?.detail?.question;
+      if (!question) return;
+      setOpen(true);
+      // Always route to DataBot for analytics questions.
+      const bot = showData ? 'data' : (showBuild ? 'build' : null);
+      if (!bot) return;
+      setActiveBot(bot);
+      setThreads((t) => (t[bot].length ? t : { ...t, [bot]: [{ role: 'assistant', content: BOTS[bot].greeting }] }));
+      // Defer the send so state updates (open + activeBot) settle first.
+      setTimeout(() => sendToBot(bot, question), 50);
+    };
+    window.addEventListener('databot-open', handler);
+    return () => window.removeEventListener('databot-open', handler);
+  }, [showData, showBuild]);
+
   if (!showData && !showBuild) return null;
 
   const openBot = (bot) => {
@@ -80,17 +108,19 @@ export default function DataBotWidget() {
     setThreads((t) => (t[bot].length ? t : { ...t, [bot]: [{ role: 'assistant', content: BOTS[bot].greeting }] }));
   };
 
-  const send = async (text) => {
+  const sendToBot = async (bot, text) => {
     const question = (text ?? input).trim();
-    if (!question || busy || !activeBot) return;
-    const bot = activeBot;
-    const next = [...threads[bot], { role: 'user', content: question }];
+    if (!question || busyRef.current || !bot) return;
+    const current = threadsRef.current[bot] || [];
+    const next = [...current, { role: 'user', content: question }];
     setThreads((t) => ({ ...t, [bot]: next }));
-    setInput('');
+    if (bot === activeBot) setInput('');
     setBusy(true);
+    busyRef.current = true;
     try {
-      const res = await dataBot({ question, history: next.slice(-8), mode: bot });
+      const res = await dataBot({ question, history: next.slice(-8), mode: bot, conversation_id: conversationIds[bot] });
       const data = res?.data || {};
+      if (data.conversation_id) conversationIds[bot] = data.conversation_id;
       const msg = (data.type === 'build_request' && data.build_request)
         ? { role: 'assistant', type: 'build_request', build: data.build_request }
         : { role: 'assistant', content: data.answer || data.error || 'Sorry, I could not answer that.' };
@@ -99,7 +129,10 @@ export default function DataBotWidget() {
       setThreads((t) => ({ ...t, [bot]: [...t[bot], { role: 'assistant', content: 'Something went wrong reaching the assistant. Please try again.' }] }));
     }
     setBusy(false);
+    busyRef.current = false;
   };
+
+  const send = (text) => sendToBot(activeBot, text);
 
   return (
     <div className="fixed bottom-[calc(72px+env(safe-area-inset-bottom))] right-5 lg:bottom-5 z-[60]">

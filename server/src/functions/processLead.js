@@ -951,18 +951,37 @@ function applyOperator(actual, operator, expected) {
   if (typeof act === 'object') act = JSON.stringify(act);
   else act = String(act);
   const exp = expected || '';
+  // Case-insensitive comparison for all string operators. This ensures
+  // delivery/connector conditions match regardless of how the supplier
+  // formatted the value (e.g. "yes" matches "Yes", "loss of life" matches
+  // "Loss Of Life"). Numeric operators (gt, lt) are unaffected.
+  const actLower = act.trim().toLowerCase();
+  const expLower = exp.trim().toLowerCase();
   switch (operator) {
-    case 'equals': return act === exp;
-    case 'not_equals': return act !== exp;
-    case 'contains': return act.includes(exp);
-    case 'not_contains': return !act.includes(exp);
-    case 'starts_with': return act.startsWith(exp);
-    case 'ends_with': return act.endsWith(exp);
+    case 'equals':
+      if (actLower === expLower) return true;
+      // For non-trivial values (> 3 chars), allow bidirectional contains so
+      // "Loss of Life." matches "Loss Of Life" etc. Skip for very short
+      // values to avoid false positives like "No" matching "Not at all".
+      if (expLower.length > 3 && actLower.length > 3) {
+        return actLower.includes(expLower) || expLower.includes(actLower);
+      }
+      return false;
+    case 'not_equals':
+      if (actLower === expLower) return false;
+      if (expLower.length > 3 && actLower.length > 3) {
+        return !(actLower.includes(expLower) || expLower.includes(actLower));
+      }
+      return true;
+    case 'contains': return actLower.includes(expLower);
+    case 'not_contains': return !actLower.includes(expLower);
+    case 'starts_with': return actLower.startsWith(expLower);
+    case 'ends_with': return actLower.endsWith(expLower);
     case 'is_empty': return act === '';
     case 'is_not_empty': return act !== '';
     case 'gt': return parseFloat(act) > parseFloat(exp);
     case 'lt': return parseFloat(act) < parseFloat(exp);
-    default: return act.includes(exp);
+    default: return actLower.includes(expLower);
   }
 }
 
@@ -1015,6 +1034,66 @@ function checkRequiredFields(customFields, leadData) {
     }
   }
   return missing;
+}
+
+// Normalize incoming dropdown field values to their canonical option labels.
+// Progressive matching: case-insensitive exact → bidirectional contains →
+// token overlap. Prevents leads from being rejected by LeadByte or missing
+// delivery conditions just because a supplier sent "yes" instead of "Yes" or
+// "Loss of Life" instead of "Loss Of Life".
+function normalizeDropdownValues(customFields, leadData) {
+  const enriched = { ...leadData };
+  for (const f of customFields) {
+    if (!['system', 'dropdown'].includes(f.field_type)) continue;
+    if (f.system_role) continue; // skip HLR/email-derived system fields
+    let opts = [];
+    if (Array.isArray(f.options)) opts = f.options;
+    else if (typeof f.options === 'string') {
+      try { const p = JSON.parse(f.options); if (Array.isArray(p)) opts = p; } catch {}
+    }
+    if (opts.length === 0) continue;
+
+    const raw = enriched[f.field_name];
+    if (raw === undefined || raw === null || String(raw).trim() === '') continue;
+
+    const incoming = String(raw).trim().toLowerCase().replace(/[.\,!;:]+$/, '');
+    if (!incoming) continue;
+
+    // 1. Case-insensitive exact match (handles "yes" → "Yes", "loss of life" → "Loss Of Life")
+    let match = opts.find(opt => String(opt).trim().toLowerCase().replace(/[.\,!;:]+$/, '') === incoming);
+
+    // 2. Bidirectional contains: option contains incoming OR incoming contains option
+    //    (handles "Loss of Life." → "Loss Of Life", "broken bones fracture" → "Broken Bones")
+    if (!match) {
+      match = opts.find(opt => {
+        const optNorm = String(opt).trim().toLowerCase().replace(/[.\,!;:]+$/, '');
+        if (optNorm.length < 2) return false;
+        return optNorm.includes(incoming) || incoming.includes(optNorm);
+      });
+    }
+
+    // 3. Token overlap: split both into word tokens, check if any token from
+    //    the incoming value appears in any option (handles "bone fracture" → "Broken Bones"
+    //    via the shared "bone" token, "spine injury" → "Back Or Neck Pain" won't match but
+    //    "back pain" → "Back Or Neck Pain" will via "back" + "pain").
+    if (!match) {
+      const incomingTokens = incoming.split(/[\s,\/\-|]+/).filter(t => t.length > 2);
+      if (incomingTokens.length > 0) {
+        match = opts.find(opt => {
+          const optTokens = String(opt).trim().toLowerCase().replace(/[.\,!;:]+$/, '')
+            .split(/[\s,\/\-|]+/).filter(t => t.length > 2);
+          return optTokens.some(ot => incomingTokens.some(it =>
+            it === ot || it.includes(ot) || ot.includes(it)
+          ));
+        });
+      }
+    }
+
+    if (match) {
+      enriched[f.field_name] = String(match).trim();
+    }
+  }
+  return enriched;
 }
 
 // Evaluate a single dry-run qualification condition (advisory only). Supports a
@@ -1139,7 +1218,7 @@ function bypassLeadStatus(finalForBypass) {
 
 export default async function processLead(ctx) {
   const db = ctx.db;
-  const method = ctx.req?.method;
+  const method = ctx.req.method;
 
   if (method === 'GET') return ctx.json({ status: 'ok' }, 200);
 
@@ -1161,25 +1240,16 @@ export default async function processLead(ctx) {
     const body = ctx.body || {};
     const payload = body.payload || body;
 
-    const rawHeaders = ctx.req?.headers || {};
-    const getHeader = (name) => {
-      const target = String(name).toLowerCase();
-      for (const k of Object.keys(rawHeaders)) {
-        if (k.toLowerCase() === target) return rawHeaders[k];
-      }
-      return null;
-    };
+    const h = ctx.req.headers || {};
     let supplierKeyRaw =
-      getHeader('X-API-KEY') ||
-      getHeader('X_KEY') ||
-      getHeader('x-api-key') ||
-      getHeader('x_key') ||
+      h['x-api-key'] ||
+      h['x_key'] ||
       payload['X-API-KEY'] ||
       payload['X_KEY'] ||
       payload._supplier_key ||
       null;
     if (!supplierKeyRaw) {
-      const authHeader = getHeader('Authorization') || '';
+      const authHeader = h['authorization'] || '';
       if (authHeader.startsWith('Basic ')) {
         const decoded = atob(authHeader.slice(6));
         supplierKeyRaw = decoded.split(':')[0] || null;
@@ -1316,8 +1386,7 @@ export default async function processLead(ctx) {
     // writes ONLY a RouteDecisionTrace. It sends/reserves/bills nothing and is
     // fully isolated: the dynamic import runs only when enabled (so production on
     // legacy_only never loads it), and any error is caught so it can never alter
-    // the legacy outcome or the supplier response envelope. Deployment of
-    // the generated bundle to the function runtime is verified in staging (CAP-2).
+    // the legacy outcome or the supplier response envelope.
     if (distributionMode !== 'legacy_only') {
       try {
         const leadDist = await import('./routingEngine.generated.js');
@@ -1378,11 +1447,61 @@ export default async function processLead(ctx) {
       first_name: firstName, last_name: lastName, mobile: mobile, email: email,
     });
 
-    // ── UNKNOWN INBOUND FIELDS ─────────────────────────────────────────
-    // Fields not defined as CustomFields are NOT auto-created. The lead still
-    // processes normally: every inbound key is preserved in raw_payload and
-    // mapped_fields, and forwarding pulls from those. Unknown fields simply
-    // aren't persisted as CustomField records (no auto-detection).
+    // ── AUTO-DETECT UNKNOWN INBOUND FIELDS ──────────────────────────────
+    // When adaptive_fields_enabled is true (default), inbound payload keys that
+    // aren't in the CustomField catalog and aren't on the ignore list are
+    // auto-created as CustomField records with auto_created=true. They appear in
+    // the "X fields auto-detected" banner on the Custom Fields settings page for
+    // the operator to review and confirm (Add) or delete (Ignore).
+    //
+    // Required fields gate the lead (checkRequiredFields below); non-required
+    // fields accept any value. Auto-detected fields default to non-required,
+    // include_in_leadbyte=false, so they never block or forward until confirmed.
+    if (appSettings.adaptive_fields_enabled !== false) {
+      const ignoreList = parseJsonArray(appSettings.adaptive_fields_ignore_list)
+        .map(s => String(s).toLowerCase());
+      const existingNames = new Set(customFields.map(f => (f.field_name || '').toLowerCase()));
+      // System/routing keys that must never be cataloged as custom fields.
+      const SYSTEM_KEYS = new Set([
+        'lead_route', 'lead_status', 'lead_id', 'lead_type',
+        'trustedform_url', 'trustedform_cert', 'jornaya_token', 'jornaya_leadid',
+        'ssid', 'supplier_brand', 'brand', 'supplier_name',
+        'ip_address', 'ipaddress', 'optin_url', 'optinurl',
+        'utm_ad_label', 'utm_source', 'utm_medium', 'utm_campaign',
+        'user_agent', 'browser', 'resolution', 'device',
+      ]);
+      let autoAdded = 0;
+      for (const [key, value] of Object.entries(leadPayload)) {
+        if (autoAdded >= 10) break; // cap per lead to prevent flooding
+        const keyLower = key.toLowerCase();
+        if (existingNames.has(keyLower)) continue;
+        if (SYSTEM_KEYS.has(keyLower)) continue;
+        if (ignoreList.includes(keyLower)) continue;
+        // Skip PII fields that are already Lead entity columns.
+        if (['first_name', 'firstname', 'last_name', 'lastname', 'mobile', 'phone', 'phone1', 'phone_number', 'email'].includes(keyLower)) continue;
+        const sample = value == null ? '' : (typeof value === 'object' ? JSON.stringify(value) : String(value)).trim();
+        if (!sample) continue;
+        let guessedType = 'string';
+        if (typeof value === 'boolean') guessedType = 'boolean';
+        else if (typeof value === 'number') guessedType = 'number';
+        try {
+          const newField = await db.entities.CustomField.create({
+            field_name: key,
+            label: key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()),
+            field_type: guessedType,
+            source: 'inbound',
+            include_in_leadbyte: false,
+            leadbyte_field_name: key,
+            auto_created: true,
+            sample_value: sample.slice(0, 200),
+            sort_order: customFields.length,
+          });
+          customFields.push(newField);
+          existingNames.add(keyLower);
+          autoAdded++;
+        } catch {}
+      }
+    }
 
     // ── ROUTE: lead_route (case-insensitive contains) ────────────────────
     const leadRouteRaw = String(leadPayload.lead_route || 'standard').trim().toLowerCase();
@@ -1666,7 +1785,7 @@ export default async function processLead(ctx) {
 
     // ── Run custom calculations ──────────────────────────────────────────
     const phoneVerifiedSource = hlrSettings?.phone_verified_source || 'lh_hlr_response';
-    const enrichedData = runCalculations(calcs, leadPayload, hlrResult, phoneVerifiedSource, phoneVerifiedFieldName, supplierRecord?.supplier_type);
+    let enrichedData = runCalculations(calcs, leadPayload, hlrResult, phoneVerifiedSource, phoneVerifiedFieldName, supplierRecord?.supplier_type);
     if (hlrResult) {
       enrichedData.hlr_status = hlrResult.lh_hlr_response || '';
       enrichedData.hlr_score = hlrResult.summary_score != null ? String(hlrResult.summary_score) : '';
@@ -1683,6 +1802,12 @@ export default async function processLead(ctx) {
     if (emailValidResult !== null) {
       enrichedData[emailValidFieldName] = emailValidResult;
     }
+
+    // Normalize dropdown field values to their canonical option labels so
+    // downstream systems (LeadByte, deliveries, conditions) receive the exact
+    // values defined in the Custom Fields catalog, preventing rejections from
+    // case differences, extra punctuation, or phrasing variations.
+    enrichedData = normalizeDropdownValues(customFields, enrichedData);
 
     // Persist the enriched payload back to mapped_fields so calculated fields
     // (lead_type, Supplier Source, accident_date buckets, state maps, etc.) are

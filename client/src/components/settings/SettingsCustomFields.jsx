@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { Link } from 'react-router-dom';
 import { api } from '@/api/client';
 import { renameField } from '@/functions/renameField';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -579,6 +580,13 @@ export default function SettingsCustomFields() {
                 </div>
               </div>
             </div>
+            {form.field_type === 'Calculated' && (
+              <div className="p-2.5 rounded-lg bg-primary/10 border border-primary/30 text-[12px] text-foreground">
+                This creates the field, but the calculation logic (buckets, value maps, etc.) is configured on the{' '}
+                <Link to="/calculated-fields" className="text-primary font-medium underline underline-offset-2">Calculated Fields</Link>{' '}
+                page. Save here, then set up the transform there.
+              </div>
+            )}
             {showValues && (
               <div className="space-y-2 pt-2 border-t border-border">
                 <Label className="text-[12px]">Dropdown Values <span className="text-muted-foreground text-[11px]">(also used as Triggers on Deliveries & Conversion Events)</span></Label>

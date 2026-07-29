@@ -117,13 +117,17 @@ export const SearchableSelect = React.forwardRef(function SearchableSelect(
     );
   }
 
-  // Desktop: untouched popover behaviour.
+  // Desktop: popover with collision padding so it never extends beyond the
+  // viewport (and never gets clipped by a parent Dialog). The list scrolls
+  // internally with overscroll containment so wheel events don't chain.
   return (
     <Popover open={open} onOpenChange={(o) => { setOpen(o); if (!o) setSearch(""); }}>
       <PopoverTrigger asChild>{trigger}</PopoverTrigger>
       <PopoverContent
-        className={cn("p-0", popoverClassName)}
+        className={cn("p-0 max-h-[60vh] overflow-y-auto", popoverClassName)}
         align="start"
+        sideOffset={4}
+        collisionPadding={8}
         style={{ width: "var(--radix-popover-trigger-width)", minWidth: "12rem" }}
       >
         <Command shouldFilter={true}>
@@ -133,7 +137,7 @@ export const SearchableSelect = React.forwardRef(function SearchableSelect(
             onValueChange={setSearch}
             className="h-9"
           />
-          <CommandList className="max-h-[260px] overflow-y-auto">
+          <CommandList className="max-h-[220px] overflow-y-auto overscroll-contain">
             <CommandEmpty>{emptyText}</CommandEmpty>
             <CommandGroup>
               {options.map((opt) => {

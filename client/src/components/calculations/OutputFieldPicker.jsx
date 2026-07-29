@@ -24,7 +24,8 @@ export function OutputFieldPicker({ value, onValueChange, fields = [], placehold
   const qc = useQueryClient();
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState('');
-  const [creating, setCreating] = useState(false);
+  const [showCreate, setShowCreate] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [newFieldName, setNewFieldName] = useState('');
   const [newFieldLabel, setNewFieldLabel] = useState('');
 
@@ -32,13 +33,25 @@ export function OutputFieldPicker({ value, onValueChange, fields = [], placehold
 
   const display = selected ? (selected.label || selected.field_name) : (value || placeholder);
 
-  const resetCreate = () => { setNewFieldName(''); setNewFieldLabel(''); setCreating(false); };
+  // Default label template: replace _ with space and Title Case each word.
+  const toLabel = (name) => name.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+
+  const resetCreate = () => { setNewFieldName(''); setNewFieldLabel(''); setShowCreate(false); setSaving(false); };
 
   const close = () => { setOpen(false); setSearch(''); resetCreate(); };
 
+  // Open the create form, prefilling the token from the search text and the
+  // label from the default template so the user need not retype them.
+  const openCreate = () => {
+    const name = search.trim().replace(/\s/g, '_');
+    setNewFieldName(name);
+    setNewFieldLabel(name ? toLabel(name) : '');
+    setShowCreate(true);
+  };
+
   const handleCreate = async () => {
     const name = newFieldName.trim().replace(/\s/g, '_');
-    if (!name) { toast.error('Field name required'); setCreating(false); return; }
+    if (!name) { toast.error('Field name required'); return; }
     const existing = fields.find(f => f.field_name === name);
     if (existing) {
       onValueChange({ field_name: existing.field_name, label: existing.label || existing.field_name });
@@ -47,8 +60,8 @@ export function OutputFieldPicker({ value, onValueChange, fields = [], placehold
       return;
     }
     try {
-      setCreating(true);
-      const label = newFieldLabel.trim() || name.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+      setSaving(true);
+      const label = newFieldLabel.trim() || toLabel(name);
       const created = await api.entities.CustomField.create({
         field_name: name,
         label,
@@ -66,7 +79,7 @@ export function OutputFieldPicker({ value, onValueChange, fields = [], placehold
     } catch (e) {
       toast.error('Failed to create field: ' + (e?.message || 'Unknown error'));
     } finally {
-      setCreating(false);
+      setSaving(false);
     }
   };
 
@@ -89,13 +102,15 @@ export function OutputFieldPicker({ value, onValueChange, fields = [], placehold
       </PopoverTrigger>
       <PopoverContent
         align="start"
-        className="p-0"
+        sideOffset={4}
+        collisionPadding={8}
+        className="p-0 max-h-[60vh] overflow-y-auto"
         style={{ width: 'var(--radix-popover-trigger-width)', minWidth: '16rem' }}
         onOpenAutoFocus={(e) => { /* keep focus on input via Command */ }}
       >
         <Command shouldFilter={true}>
           <CommandInput placeholder="Search fields…" value={search} onValueChange={setSearch} className="h-9" />
-          <CommandList className="max-h-[260px] overflow-y-auto">
+          <CommandList className="max-h-[220px] overflow-y-auto overscroll-contain">
             <CommandEmpty>No fields found.</CommandEmpty>
             <CommandGroup>
               {fields.map((f) => (
@@ -116,7 +131,7 @@ export function OutputFieldPicker({ value, onValueChange, fields = [], placehold
             <CommandSeparator />
             <CommandGroup>
               <CommandItem
-                onSelect={() => { setCreating(true); }}
+                onSelect={openCreate}
                 className="gap-2 text-primary"
                 value={`__create_${search}`}
               >
@@ -127,7 +142,7 @@ export function OutputFieldPicker({ value, onValueChange, fields = [], placehold
           </CommandList>
         </Command>
 
-        {creating && (
+        {showCreate && (
           <div className="border-t border-border p-3 space-y-2 bg-muted/30">
             <div className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">New Calculated Field</div>
             <div>
@@ -135,7 +150,13 @@ export function OutputFieldPicker({ value, onValueChange, fields = [], placehold
               <Input
                 autoFocus
                 value={newFieldName}
-                onChange={e => setNewFieldName(e.target.value.replace(/\s/g, '_'))}
+                onChange={e => {
+                  const next = e.target.value.replace(/\s/g, '_');
+                  // Keep the label mirroring the token until the user has typed
+                  // their own label.
+                  if (newFieldLabel === toLabel(newFieldName)) setNewFieldLabel(toLabel(next));
+                  setNewFieldName(next);
+                }}
                 placeholder="calculated_field"
                 className="mt-1 bg-background font-mono text-[12px] h-8"
                 onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); handleCreate(); } }}
@@ -153,8 +174,8 @@ export function OutputFieldPicker({ value, onValueChange, fields = [], placehold
             </div>
             <div className="flex justify-end gap-2 pt-1">
               <Button size="sm" variant="ghost" onClick={resetCreate}>Cancel</Button>
-              <Button size="sm" onClick={handleCreate} disabled={creating} className="gap-1.5">
-                {creating ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
+              <Button size="sm" onClick={handleCreate} disabled={saving || !newFieldName.trim()} className="gap-1.5">
+                {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
                 Create & Select
               </Button>
             </div>

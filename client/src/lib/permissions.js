@@ -56,7 +56,6 @@ export const PERMISSION_GROUPS = [
       { key: 'set_api_keys', label: 'API Keys' },
       { key: 'set_inbound_webhooks', label: 'Inbound Webhooks' },
       { key: 'set_error_logs', label: 'Error Logs' },
-      { key: 'set_knowledge_base', label: 'Knowledge Base' },
       { key: 'set_users', label: 'Users and Roles' },
       { key: 'set_billing', label: 'Billing' },
     ],
@@ -147,7 +146,7 @@ export const SETTINGS_TAB_KEYS = {
   apikeys: 'set_api_keys',
   'inbound-webhooks': 'set_inbound_webhooks',
   errors: 'set_error_logs',
-  knowledge: 'set_knowledge_base',
+  chatbot: null,
   billing: 'set_billing',
 };
 

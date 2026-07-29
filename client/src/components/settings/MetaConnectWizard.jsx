@@ -67,7 +67,7 @@ export default function MetaConnectWizard({ open, onOpenChange, supplier = null,
     setConnectionId('');
     setNewLabel(''); setNewToken('');
     setAssets(null); setChosen([]); setSearch('');
-    setBackfillDays(30); setConflicts([]); setError('');
+    setBackfillMode('30'); setBackfillSince(''); setConflicts([]); setError('');
     setOauthPending(false); setShowTokenPaste(false);
   };
 

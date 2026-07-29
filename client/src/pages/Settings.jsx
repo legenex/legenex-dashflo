@@ -13,7 +13,7 @@ import SettingsCustomFields from '@/components/settings/SettingsCustomFields';
 import SettingsFieldMapping from '@/components/settings/SettingsFieldMapping';
 import SettingsApiKeys from '@/components/settings/SettingsApiKeys';
 import SettingsInboundWebhooks from '@/components/settings/SettingsInboundWebhooks';
-import SettingsKnowledgeBase from '@/components/settings/SettingsKnowledgeBase';
+import SettingsChatBot from '@/components/settings/SettingsChatBot';
 import SettingsBilling from '@/components/settings/SettingsBilling';
 import SettingsIgnoreList from '@/components/settings/SettingsIgnoreList';
 import SettingsProfile from '@/components/settings/SettingsProfile';
@@ -41,7 +41,7 @@ function buildNav(isAdmin, can) {
     ...(isAdmin ? [{ key: 'inbound-webhooks', label: 'Inbound Webhooks' }] : []),
     { key: 'errors', label: 'Error Logs', perm: 'set_error_logs' },
     { key: 'audits', label: 'Audits', perm: 'set_integrations' },
-    { key: 'knowledge', label: 'Knowledge Base', perm: 'set_knowledge_base' },
+    { key: 'chatbot', label: 'ChatBot', perm: null },
     { key: 'billing', label: 'Billing and Plan', perm: 'set_billing' },
   ].filter((i) => allow(i.perm));
 
@@ -65,7 +65,7 @@ const PANELS = {
   'inbound-webhooks': { title: 'Inbound Webhooks', subtitle: 'LeadByte outcome webhook routes.', node: <SettingsInboundWebhooks />, adminOnly: true },
   errors: { title: 'Error Logs', subtitle: 'Pipeline failures and reasons.', node: <ErrorLogs embedded /> },
   audits: { title: 'Audits', subtitle: 'Read-only evaluation harness: runtime probes and findings.', node: <SettingsAudits /> },
-  knowledge: { title: 'Knowledge Base', subtitle: 'Docs the AI assistant reads.', node: <SettingsKnowledgeBase /> },
+  chatbot: { title: 'ChatBot', subtitle: 'AI assistant conversations, memories, and knowledge base.', node: <SettingsChatBot /> },
   billing: { title: 'Billing and Plan', subtitle: 'Plan and billing.', node: <SettingsBilling /> },
   adaptive: { title: 'Ignore List', subtitle: 'Fields excluded from cataloging.', node: <SettingsIgnoreList /> },
 };
@@ -85,7 +85,7 @@ const TAB_PERMS = {
   apikeys: 'set_api_keys',
   errors: 'set_error_logs',
   audits: 'set_integrations',
-  knowledge: 'set_knowledge_base',
+  chatbot: null,
   billing: 'set_billing',
   adaptive: 'set_custom_fields',
 };
