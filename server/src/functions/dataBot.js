@@ -4,41 +4,30 @@ import { callLLM, invokeLLM } from '../integrations/llm.js';
 // DataBot: answers questions about the app's own data + a curated Knowledge Base.
 // Remembers past conversations and learns facts from each exchange.
 
-const NOT_CONFIGURED_MSG =
-  'This assistant is not configured yet: the language model is not available. An admin can add the LLM credentials in the app settings, then I can answer.';
-
-function isConfigError(e) {
-  const m = (e && e.message ? e.message : String(e || '')).toLowerCase();
-  return (
-    m.includes('not configured') ||
-    m.includes('not set') ||
-    m.includes('api key') ||
-    m.includes('apikey') ||
-    m.includes('no llm') ||
-    m.includes('missing')
-  );
-}
-
-// Structured-output call: fold system into the prompt and request a JSON schema.
-async function askJson({ system, prompt, temperature = 0.4, jsonSchema }) {
-  const fullPrompt = system ? `${system}\n\n${prompt}` : prompt;
-  const result = await invokeLLM({ prompt: fullPrompt, response_json_schema: jsonSchema, temperature });
-  if (result && typeof result === 'object') return result;
-  if (typeof result === 'string') {
-    try { return JSON.parse(result); } catch { return result; }
+// Single entry point to the LLM integration. When a JSON schema is supplied we
+// route through invokeLLM (structured output); otherwise a plain text answer
+// from callLLM.
+async function callModel({ prompt, system, model, temperature = 0.4, jsonSchema = null }) {
+  if (jsonSchema) {
+    const fullPrompt = system ? `${system}\n\n${prompt}` : prompt;
+    const result = await invokeLLM({
+      prompt: fullPrompt,
+      response_json_schema: jsonSchema,
+      temperature,
+      model,
+    });
+    if (result == null) return '';
+    if (typeof result === 'string') {
+      try { return JSON.parse(result); } catch { return result; }
+    }
+    return result;
   }
-  return result;
-}
-
-// Free-text call.
-async function askText({ system, prompt, temperature = 0.4 }) {
-  const out = await callLLM({ prompt, system, temperature });
-  if (typeof out === 'string') return out;
-  return out?.content ?? out?.text ?? String(out ?? '');
+  const text = await callLLM({ prompt, system: system || undefined, temperature, model });
+  return typeof text === 'string' ? text : (text?.content ?? String(text ?? ''));
 }
 
 // Scope a change request into a single-concern build prompt for the CONTROLLED
-// channel (Claude via connector, the app builder, or Claude Code). Never executes.
+// channel (Claude via the connector, the app builder, or Claude Code). Never executes.
 async function draftBuildRequest(question, history) {
   const schema = {
     type: 'object',
@@ -56,7 +45,7 @@ async function draftBuildRequest(question, history) {
   const convo = history.map((m) => `${m.role === 'user' ? 'User' : 'BuildBot'}: ${m.content}`).join('\n');
   const system = `You scope change requests for the Legenex app so they can be handed to a controlled build channel (Claude via the app connector, the app builder, or Claude Code). You NEVER execute changes yourself. If the user's message is actually an analytics or data question rather than a request to change the app, set is_build=false and leave the other fields empty.\n\nBake these conventions into ready_prompt so it is safe to run:\n- One concern per change, with an explicit do-not-touch list.\n- Follow DESIGN-SYSTEM.md: semantic tokens only, never raw hex/hsl or raw palette utilities.\n- RED surfaces that need explicit human approval and must not be edited casually: processLead, the four LeadByteConnectors and their enabled states, Conversion Events, distribution_mode (only via distributionSetMode), credentials, live endpoints, billing records, buyer pricing and state coverage.\n- Additive schema only. No em dashes anywhere. Checkpoint before any schema or destructive change. Verify with the design-token gate and lint.\n\nready_prompt must be a complete, copy-pasteable instruction a builder can act on: the target area, the exact change, the do-not-touch list, and the verification step. Set risk=red if the request touches any RED surface, amber if it touches shared or data surfaces, green for isolated UI or docs.`;
   const prompt = `Conversation so far:\n${convo || '(none)'}\n\nUser request: ${question}\n\nReturn JSON only.`;
-  return await askJson({ system, prompt, jsonSchema: schema, temperature: 0.2 });
+  return await callModel({ system, prompt, jsonSchema: schema, temperature: 0.2 });
 }
 
 // Extract learnable facts from a conversation exchange. Returns up to 3 facts.
@@ -78,20 +67,20 @@ async function extractMemories(question, answer, existingMemory) {
     },
     required: ['memories'],
   };
-  const existingStr = existingMemory.slice(0, 20).map((m) => `- ${m.fact}`).join('\n');
+  const existingStr = existingMemory.slice(0, 20).map(m => `- ${m.fact}`).join('\n');
   const system = `You extract durable, reusable facts and preferences from a conversation between a user and an analytics assistant. Only extract facts that will be useful in future conversations: business rules, user preferences, recurring data insights, or definitions the user provided. Do NOT extract transient questions or answers. Do NOT duplicate facts already known.\n\nKnown memories:\n${existingStr || '(none)'}`;
   const prompt = `User asked: ${question}\nAssistant answered: ${answer}\n\nExtract up to 3 new memories. Return JSON only.`;
   try {
-    const result = await askJson({ system, prompt, jsonSchema: schema, temperature: 0.2 });
-    return Array.isArray(result?.memories) ? result.memories.filter((m) => m.fact && m.fact.length > 5).slice(0, 3) : [];
+    const result = await callModel({ system, prompt, jsonSchema: schema, temperature: 0.2 });
+    return Array.isArray(result?.memories) ? result.memories.filter(m => m.fact && m.fact.length > 5).slice(0, 3) : [];
   } catch { return []; }
 }
 
 export default async function dataBot(ctx) {
   const user = requireUser(ctx);
-  try {
-    const db = ctx.db;
+  const db = ctx.db;
 
+  try {
     const body = ctx.body || {};
     const question = (body.question || '').toString().trim();
     const history = Array.isArray(body.history) ? body.history.slice(-8) : [];
@@ -104,33 +93,77 @@ export default async function dataBot(ctx) {
     // when the user has any stored, otherwise the role default. Owner always
     // has all permissions (mirrors the frontend usePermissions hook).
     const resolvePerms = (u) => {
-      if (u.role === 'owner') return { databot: true, buildbot: true };
+      const role = u.base_role || u.role;
       let p = {};
       try { p = u.permissions ? (typeof u.permissions === 'string' ? JSON.parse(u.permissions) : u.permissions) : {}; } catch { p = {}; }
-      if (p && Object.keys(p).length) return p;
-      return { databot: true, buildbot: u.role === 'owner' || u.role === 'admin' };
+      // databot is on by default for all roles; only off if explicitly set to false
+      const databot = p.databot === false ? false : true;
+      // buildbot: on for owner/admin by default, off for partners
+      const buildbotDefault = (role === 'owner' || role === 'admin');
+      const buildbot = p.buildbot !== undefined ? !!p.buildbot : buildbotDefault;
+      return { databot, buildbot };
     };
     const isPartner = user.base_role === 'supplier' || user.base_role === 'buyer' || !!user.linked_supplier_id || !!user.linked_buyer_id;
     const perms = resolvePerms(user);
+    // Baseline permission gate. The per-bot allow list is applied further down.
     const canData = !!perms.databot;
     const canBuild = !isPartner && !!perms.buildbot;
+
+    // Friendly, actionable message instead of a silent 500 when the key is unset.
+    const llmConfigured = !!(ctx.config?.integrations?.openaiApiKey || ctx.env?.OPENAI_API_KEY);
+    if (!llmConfigured) {
+      return ctx.json({ type: 'answer', answer: 'This assistant is not configured yet: the OPENAI_API_KEY secret is missing. An admin can add it in the app secrets, then I can answer.' });
+    }
 
     // BuildBot: draft a single-concern build request for the controlled channel.
     if (mode === 'build') {
       if (!canBuild) {
-        return { type: 'answer', answer: 'BuildBot is not enabled for your account. An admin can grant the BuildBot permission in Users and Roles.' };
+        return ctx.json({ type: 'answer', answer: 'BuildBot is not enabled for your account. An admin can grant the BuildBot permission in Users and Roles.' });
       }
       try {
         const draft = await draftBuildRequest(question, history);
-        if (draft && draft.is_build) return { type: 'build_request', build_request: draft };
-      } catch (e) {
-        if (isConfigError(e)) return { type: 'answer', answer: NOT_CONFIGURED_MSG };
-        /* not a build, or draft failed: fall through to an answer */
-      }
+        if (draft && draft.is_build) return ctx.json({ type: 'build_request', build_request: draft });
+      } catch (_) { /* not a build, or draft failed: fall through to an answer */ }
     }
 
     if (!canData) {
-      return { type: 'answer', answer: 'DataBot access is turned off for your account. An admin can enable it in Users and Roles.' };
+      return ctx.json({ type: 'answer', answer: 'DataBot access is turned off for your account. An admin can enable it in Users and Roles.' });
+    }
+
+    // Per-bot allow list, configured on the bot itself in Settings > ChatBot.
+    //
+    // When allowed_roles or allowed_user_ids is set, the bot is restricted to
+    // exactly those and nothing else grants access. When both are empty the bot
+    // falls back to the permission flag resolved above, which is how it behaved
+    // before, so an unconfigured bot keeps working for owners and admins.
+    //
+    // Enforced here, server side. The UI hides the launcher too, but hiding a
+    // button is not access control.
+    const botAllows = async (botKey, u) => {
+      try {
+        const cfgs = await db.entities.BotConfig.filter({ bot_key: botKey });
+        const cfg = (Array.isArray(cfgs) ? cfgs : [])[0] || null;
+        if (!cfg) return null;
+        const roles = Array.isArray(cfg.allowed_roles) ? cfg.allowed_roles.filter(Boolean) : [];
+        const ids = Array.isArray(cfg.allowed_user_ids) ? cfg.allowed_user_ids.filter(Boolean) : [];
+        if (roles.length === 0 && ids.length === 0) return null; // not configured
+        const role = String(u.base_role || u.role || '').toLowerCase();
+        return roles.map((r) => String(r).toLowerCase()).includes(role) || ids.includes(u.id);
+      } catch {
+        return null; // never lock an operator out because a lookup failed
+      }
+    };
+
+    if (mode === 'build') {
+      const buildAllowList = await botAllows('build', user);
+      if (buildAllowList === false) {
+        return ctx.json({ type: 'answer', answer: 'BuildBot is restricted to specific roles or people, and your account is not on that list. An admin can change this in Settings > ChatBot > BuildBot.' });
+      }
+    } else {
+      const dataAllowList = await botAllows('data', user);
+      if (dataAllowList === false) {
+        return ctx.json({ type: 'answer', answer: 'DataBot is restricted to specific roles or people, and your account is not on that list. An admin can change this in Settings > ChatBot > DataBot.' });
+      }
     }
 
     // --- Load conversation history and memories for context ---
@@ -149,11 +182,11 @@ export default async function dataBot(ctx) {
         { user_id: user.id, mode, active: true },
         '-last_message_at', 5
       ).catch(() => []);
-      pastConversations = recentConvs.map((c) => {
+      pastConversations = recentConvs.map(c => {
         let msgs = [];
         try { msgs = JSON.parse(c.messages || '[]'); } catch {}
         const lastMsgs = msgs.slice(-4);
-        return { title: c.title, recent: lastMsgs.map((m) => `${m.role}: ${typeof m.content === 'string' ? m.content : ''}`) };
+        return { title: c.title, recent: lastMsgs.map(m => `${m.role}: ${typeof m.content === 'string' ? m.content : ''}`) };
       });
     } catch { /* memory entities may not exist yet */ }
 
@@ -166,13 +199,129 @@ export default async function dataBot(ctx) {
     const sum = (a, f) => a.reduce((acc, x) => acc + (Number(f(x)) || 0), 0);
     const statusMap = (rows) => { const m = {}; for (const l of rows) m[l.final_status] = (m[l.final_status] || 0) + 1; return m; };
 
+    // ---- Accurate, date-aware lead facts -------------------------------------
+    //
+    // The bot used to be handed a 500-row slice and 25 recent rows with no date
+    // buckets at all, then asked questions like "how many sold yesterday". It
+    // could not know, so it answered zero while the Leads page showed 15.
+    //
+    // Counting is done here, not by the model. Three rules matter and all three
+    // match what the UI does:
+    //   1. Archived leads are excluded. They are retired duplicates.
+    //   2. The event date is the supplier's own timestamp where present, NOT
+    //      created_date. created_date is when the row was written, so every
+    //      lead from a bulk import carries the import date.
+    //   3. Days are bucketed in America/Regina, the operating timezone, so
+    //      "yesterday" means yesterday here rather than in UTC.
+    const APP_TZ = 'America/Regina';
+    const dayFmt = new Intl.DateTimeFormat('en-CA', {
+      timeZone: APP_TZ, year: 'numeric', month: '2-digit', day: '2-digit',
+    });
+
+    const parseBag = (l) => {
+      try { return JSON.parse(l?.mapped_fields || '{}') || {}; } catch { return {}; }
+    };
+
+    // Mirrors leadEventInstant in src/lib/reportMetrics.js.
+    const eventDayKey = (l) => {
+      const bag = parseBag(l);
+      const raw = bag.timestamp || bag.received || bag.date_created || null;
+      let d = null;
+      if (raw) {
+        const s = String(raw).trim().replace(' ', 'T');
+        d = new Date(/(Z|[+-]\d{2}:?\d{2})$/.test(s) ? s : `${s}Z`);
+      }
+      if (!d || isNaN(d.getTime())) {
+        const c = l?.created_date;
+        if (!c) return null;
+        const s = String(c).trim();
+        d = new Date(/(Z|[+-]\d{2}:?\d{2})$/.test(s) ? s : `${s}Z`);
+      }
+      return isNaN(d.getTime()) ? null : dayFmt.format(d);
+    };
+
+    const todayKey = dayFmt.format(new Date());
+    const dayKeyOffset = (n) => dayFmt.format(new Date(Date.now() - n * 86400000));
+    const yesterdayKey = dayKeyOffset(1);
+
+    // Page past the 500-row cap so totals are real totals.
+    const loadAllLeads = async () => {
+      const out = [];
+      const seen = new Set();
+      const pageSize = 500;
+      for (let p = 0; p < 200; p += 1) {
+        const batch = await db.entities.Lead
+          .filter({ archived: false }, '-created_date', pageSize, p * pageSize)
+          .catch(() => []);
+        if (!batch || batch.length === 0) break;
+        let added = 0;
+        for (const l of batch) {
+          if (l && l.id != null && !seen.has(l.id)) { seen.add(l.id); out.push(l); added += 1; }
+        }
+        if (added === 0) break; // offset not honored or set exhausted
+        if (batch.length < pageSize) break;
+      }
+      return out;
+    };
+
+    // Counts by status for an arbitrary set of day keys.
+    const countsForDays = (allLeads, dayKeys) => {
+      const want = new Set(dayKeys);
+      const rows = allLeads.filter((l) => { const k = eventDayKey(l); return k && want.has(k); });
+      const byStatus = statusMap(rows);
+      return {
+        total: rows.length,
+        sold: byStatus.Sold || 0,
+        unsold: byStatus.Unsold || 0,
+        disqualified: byStatus.Disqualified || 0,
+        returned: byStatus.Returned || 0,
+        rejected: byStatus.Rejected || 0,
+        duplicate: byStatus.Duplicate || 0,
+        revenue: Math.round(sum(rows, (l) => l.revenue)),
+      };
+    };
+
+    const buildLeadFacts = (allLeads) => {
+      const last7 = Array.from({ length: 7 }, (_, i) => dayKeyOffset(i));
+      const last30 = Array.from({ length: 30 }, (_, i) => dayKeyOffset(i));
+      const thisMonthPrefix = todayKey.slice(0, 7);
+      const allKeys = allLeads.map(eventDayKey).filter(Boolean);
+      const thisMonthKeys = [...new Set(allKeys.filter((k) => k.startsWith(thisMonthPrefix)))];
+      const lastMonthDate = new Date();
+      lastMonthDate.setDate(1);
+      lastMonthDate.setMonth(lastMonthDate.getMonth() - 1);
+      const lastMonthPrefix = dayFmt.format(lastMonthDate).slice(0, 7);
+      const lastMonthKeys = [...new Set(allKeys.filter((k) => k.startsWith(lastMonthPrefix)))];
+
+      // Per-day series so the model can answer "which day was best" without
+      // inventing anything.
+      const perDay = {};
+      for (const k of last30) perDay[k] = countsForDays(allLeads, [k]);
+
+      return {
+        _note: 'Counts are authoritative. They exclude archived leads and bucket by the supplier event timestamp in America/Regina, matching the dashboard. Use these numbers directly; do not recount from recent_leads.',
+        timezone: APP_TZ,
+        today_date: todayKey,
+        yesterday_date: yesterdayKey,
+        all_time_total: allLeads.length,
+        all_time_by_status: statusMap(allLeads),
+        today: countsForDays(allLeads, [todayKey]),
+        yesterday: countsForDays(allLeads, [yesterdayKey]),
+        last_7_days: countsForDays(allLeads, last7),
+        last_30_days: countsForDays(allLeads, last30),
+        this_month: countsForDays(allLeads, thisMonthKeys),
+        last_month: countsForDays(allLeads, lastMonthKeys),
+        per_day_last_30: perDay,
+      };
+    };
+
     let dataSummary = {};
     let kbContext = '';
     let scopeNote = '';
 
     if (scope.kind === 'operator') {
       const [leads, suppliers, buyers, adSpend, txns, kbDocs] = await Promise.all([
-        db.entities.Lead.list('-created_date', 500).catch(() => []),
+        loadAllLeads(),
         db.entities.Supplier.list().catch(() => []),
         db.entities.Buyer.list().catch(() => []),
         db.entities.AdSpend.list('-date', 500).catch(() => []),
@@ -180,6 +329,8 @@ export default async function dataBot(ctx) {
         db.entities.KnowledgeDoc.filter({ active: true }, 'sort_order').catch(() => []),
       ]);
       dataSummary = {
+        // Authoritative, date-bucketed counts. Answer date questions from here.
+        lead_facts: buildLeadFacts(leads),
         leads_total: leads.length,
         leads_by_status: statusMap(leads),
         revenue_total: Math.round(sum(leads, (l) => l.revenue)),
@@ -196,7 +347,7 @@ export default async function dataBot(ctx) {
         bank_money_in: Math.round(sum(txns.filter((t) => t.amount > 0), (t) => t.amount)),
         bank_money_out: Math.round(sum(txns.filter((t) => t.amount < 0), (t) => t.amount)),
         bank_unmatched: txns.filter((t) => !t.reconciled).length,
-        recent_leads: leads.slice(0, 25).map((l) => ({ supplier: l.supplier_name, status: l.final_status, revenue: l.revenue, email_valid: l.email_valid, created: l.created_date })),
+        recent_leads: leads.slice(0, 25).map((l) => ({ supplier: l.supplier_name, status: l.final_status, revenue: l.revenue, email_valid: l.email_valid, created: l.created_date, event_day: eventDayKey(l) })),
       };
       kbContext = kbDocs.map((d) => { const head = d.kind === 'glossary' ? `${d.term || d.title}` : d.title; return `[${d.kind}] ${head}: ${d.content || ''}`; }).join('\n');
     } else if (scope.kind === 'supplier') {
@@ -249,18 +400,30 @@ export default async function dataBot(ctx) {
 
     // Format memories for context
     const memoryContext = memories.length
-      ? memories.map((m) => `- [${m.category}] ${m.fact}`).join('\n')
+      ? memories.map(m => `- [${m.category}] ${m.fact}`).join('\n')
       : '(none yet)';
 
     // Format past conversations for continuity
     const pastConvContext = pastConversations.length
-      ? pastConversations.map((c) => `Conversation "${c.title}":\n${c.recent.join('\n')}`).join('\n\n')
+      ? pastConversations.map(c => `Conversation "${c.title}":\n${c.recent.join('\n')}`).join('\n\n')
       : '(none)';
 
-    const botName = mode === 'build' ? 'BuildBot' : 'DataBot';
+    // Load bot config for model, temperature, instructions
+    const botKey = mode === 'build' ? 'build' : 'data';
+    let botConfig = {};
+    try {
+      const configs = await db.entities.BotConfig.filter({ bot_key: botKey }).catch(() => []);
+      if (configs.length) botConfig = configs[0];
+    } catch {}
+    const botModel = botConfig.model || 'gpt-4o-mini';
+    const botTemp = botConfig.temperature ?? 0.4;
+    const botInstructions = botConfig.instructions || '';
+    const botName = botConfig.name || (mode === 'build' ? 'BuildBot' : 'DataBot');
     const prompt = `You are ${botName}, an analytics assistant embedded in the Legenex lead-management platform.
 Answer the user's question using ONLY the data and knowledge base below. Be concise, specific, and use numbers from the data. If the data does not contain the answer, say so plainly.
-${scopeNote ? `SCOPE (strict): ${scopeNote}\n` : ''}When asked where a figure comes from, trace it through any ad_spend breakdowns present and name the date, supplier and account; a number that does not match a total may match a single day. If ad_spend_date_range shows the latest date is well before today, say the spend looks stale and give that date.
+${scopeNote ? `SCOPE (strict): ${scopeNote}\n` : ''}
+COUNTING LEADS: when the question involves a date or period (today, yesterday, this week, this month, a named day), read the answer from lead_facts. It is pre-computed and authoritative: it excludes archived duplicates, buckets by the supplier's own event timestamp rather than the row's created_date, and uses the America/Regina operating timezone. lead_facts.yesterday.sold is the number of leads sold yesterday. lead_facts.per_day_last_30 is keyed by date for single-day questions. NEVER count rows in recent_leads to answer these: it is a 25-row sample for context only, and answering from it is how this assistant previously reported zero sold leads on a day with fifteen. If lead_facts does not cover the period asked about, say which periods you do have rather than estimating.
+When asked where a figure comes from, trace it through any ad_spend breakdowns present and name the date, supplier and account; a number that does not match a total may match a single day. If ad_spend_date_range shows the latest date is well before today, say the spend looks stale and give that date.
 
 === LEARNED MEMORIES (facts you've learned from past conversations) ===
 ${memoryContext}
@@ -280,13 +443,7 @@ ${convo || '(none)'}
 User: ${question}
 ${botName}:`;
 
-    let answer;
-    try {
-      answer = await askText({ prompt });
-    } catch (e) {
-      if (isConfigError(e)) return { type: 'answer', answer: NOT_CONFIGURED_MSG };
-      throw e;
-    }
+    const answer = await callModel({ prompt, model: botModel, temperature: botTemp, system: botInstructions || undefined });
 
     const answerStr = typeof answer === 'string' ? answer : JSON.stringify(answer);
 
@@ -344,7 +501,7 @@ ${botName}:`;
       }
     } catch { /* conversation persistence is best-effort */ }
 
-    return { type: 'answer', answer: answerStr, conversation_id: conversationId };
+    return ctx.json({ type: 'answer', answer: answerStr, conversation_id: conversationId });
   } catch (error) {
     if (error instanceof HttpError) throw error;
     return ctx.json({ error: error.message }, 500);

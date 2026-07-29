@@ -33,7 +33,11 @@ function useBelowLg() {
  *  - emptyText: text when no options match
  */
 export const SearchableSelect = React.forwardRef(function SearchableSelect(
-  { value, onValueChange, options = [], placeholder = "Select…", className, popoverClassName, disabled, emptyText = "No results found.", renderLabel },
+  // `portal` false renders the dropdown inline instead of in document.body.
+  // Needed when this select sits inside a Dialog: the dialog's scroll lock
+  // cancels wheel events outside its own DOM subtree, so a portalled list can
+  // be dragged by its scrollbar but ignores mouse wheel and trackpad.
+  { value, onValueChange, options = [], placeholder = "Select…", className, popoverClassName, disabled, emptyText = "No results found.", renderLabel, renderItem, portal = true },
   ref
 ) {
   const [open, setOpen] = React.useState(false);
@@ -106,7 +110,7 @@ export const SearchableSelect = React.forwardRef(function SearchableSelect(
                     className="tap-target w-full flex items-center gap-2 rounded-md px-3 min-h-[44px] text-[15px] text-left active:bg-accent"
                   >
                     <Check className={cn("h-4 w-4 shrink-0", value === opt.value ? "opacity-100" : "opacity-0")} />
-                    <span className="truncate">{label}</span>
+                    {typeof renderItem === "function" ? renderItem(opt) : <span className="truncate">{label}</span>}
                   </button>
                 );
               })}
@@ -124,20 +128,21 @@ export const SearchableSelect = React.forwardRef(function SearchableSelect(
     <Popover open={open} onOpenChange={(o) => { setOpen(o); if (!o) setSearch(""); }}>
       <PopoverTrigger asChild>{trigger}</PopoverTrigger>
       <PopoverContent
-        className={cn("p-0 max-h-[60vh] overflow-y-auto", popoverClassName)}
+        portal={portal}
+        className={cn("p-0", popoverClassName)}
         align="start"
         sideOffset={4}
         collisionPadding={8}
         style={{ width: "var(--radix-popover-trigger-width)", minWidth: "12rem" }}
       >
-        <Command shouldFilter={true}>
+        <Command shouldFilter={true} className="h-auto overflow-visible">
           <CommandInput
             placeholder="Search…"
             value={search}
             onValueChange={setSearch}
             className="h-9"
           />
-          <CommandList className="max-h-[220px] overflow-y-auto overscroll-contain">
+          <CommandList className="max-h-[300px] overflow-y-auto overscroll-contain">
             <CommandEmpty>{emptyText}</CommandEmpty>
             <CommandGroup>
               {options.map((opt) => {
@@ -149,8 +154,8 @@ export const SearchableSelect = React.forwardRef(function SearchableSelect(
                     onSelect={() => { onValueChange(opt.value); setOpen(false); setSearch(""); }}
                     className="gap-2"
                   >
-                    <Check className={cn("h-4 w-4", value === opt.value ? "opacity-100" : "opacity-0")} />
-                    <span className="truncate">{label}</span>
+                    <Check className={cn("h-4 w-4 shrink-0", value === opt.value ? "opacity-100" : "opacity-0")} />
+                    {typeof renderItem === "function" ? renderItem(opt) : <span className="truncate">{label}</span>}
                   </CommandItem>
                 );
               })}

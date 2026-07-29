@@ -29,6 +29,7 @@ export function OutputFieldPicker({ value, onValueChange, fields = [], placehold
   const [newFieldName, setNewFieldName] = useState('');
   const [newFieldLabel, setNewFieldLabel] = useState('');
 
+  const selectableFields = fields.filter(f => f.field_type !== 'Calculated');
   const selected = fields.find(f => f.field_name === value);
 
   const display = selected ? (selected.label || selected.field_name) : (value || placeholder);
@@ -104,27 +105,35 @@ export function OutputFieldPicker({ value, onValueChange, fields = [], placehold
         align="start"
         sideOffset={4}
         collisionPadding={8}
-        className="p-0 max-h-[60vh] overflow-y-auto"
+        className="p-0"
+        // Rendered inline rather than portalled to document.body. This picker
+        // opens from inside a Dialog, and the dialog's scroll lock cancels
+        // wheel events outside its own DOM subtree, which left this list
+        // draggable by the scrollbar grip but dead to mouse wheel and trackpad.
+        portal={false}
         style={{ width: 'var(--radix-popover-trigger-width)', minWidth: '16rem' }}
         onOpenAutoFocus={(e) => { /* keep focus on input via Command */ }}
       >
-        <Command shouldFilter={true}>
+        <Command shouldFilter={true} className="h-auto overflow-visible">
           <CommandInput placeholder="Search fields…" value={search} onValueChange={setSearch} className="h-9" />
-          <CommandList className="max-h-[220px] overflow-y-auto overscroll-contain">
+          <CommandList className="max-h-[300px] overflow-y-auto overscroll-contain">
             <CommandEmpty>No fields found.</CommandEmpty>
             <CommandGroup>
-              {fields.map((f) => (
+              {selectableFields.map((f) => (
                 <CommandItem
                   key={f.id || f.field_name}
                   value={f.label || f.field_name}
                   onSelect={() => { onValueChange({ field_name: f.field_name, label: f.label || f.field_name }); close(); }}
                   className="gap-2"
                 >
-                  <Check className={cn('h-4 w-4', value === f.field_name ? 'opacity-100' : 'opacity-0')} />
+                  <Check className={cn('h-4 w-4 shrink-0', value === f.field_name ? 'opacity-100' : 'opacity-0')} />
                   <span className="truncate">{f.label || f.field_name}</span>
-                  {f.field_type === 'Calculated' && (
-                    <span className="ml-auto text-[10px] text-primary bg-primary/10 px-1.5 py-0.5 rounded">calc</span>
-                  )}
+                  <span className="ml-auto flex items-center gap-1 shrink-0">
+                    {f.required && (
+                      <span className="text-[9px] font-semibold text-primary bg-primary/10 px-1 py-0.5 rounded">req</span>
+                    )}
+                    <span className="text-[9px] text-muted-foreground bg-muted px-1 py-0.5 rounded">{f.field_type || 'string'}</span>
+                  </span>
                 </CommandItem>
               ))}
             </CommandGroup>

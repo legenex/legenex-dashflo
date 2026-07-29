@@ -1,4 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { api } from '@/api/client';
 import { dataBot } from '@/functions/dataBot';
 import { usePermissions } from '@/lib/AuthContext';
 import { Button } from '@/components/ui/button';
@@ -68,6 +70,7 @@ export default function DataBotWidget() {
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
   const [threads, setThreads] = useState({ data: [], build: [] });
+  const { data: configs = [] } = useQuery({ queryKey: ['bot-configs'], queryFn: () => api.entities.BotConfig.list(), staleTime: 60000 });
   const scrollRef = useRef(null);
   // Ref mirror so the bridge event handler (which captures a stale closure)
   // always sees the latest threads instead of wiping history.
@@ -77,7 +80,17 @@ export default function DataBotWidget() {
   busyRef.current = busy;
 
   const messages = activeBot ? threads[activeBot] : [];
-  const cfg = activeBot ? BOTS[activeBot] : null;
+  const cfg = activeBot ? (() => {
+    const dbCfg = configs.find(c => c.bot_key === activeBot);
+    const base = BOTS[activeBot];
+    if (!dbCfg) return base;
+    return {
+      ...base,
+      name: dbCfg.name || base.name,
+      tagline: dbCfg.tagline || base.tagline,
+      greeting: dbCfg.greeting || base.greeting,
+    };
+  })() : null;
 
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;

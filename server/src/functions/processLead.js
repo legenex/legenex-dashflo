@@ -1219,6 +1219,8 @@ function bypassLeadStatus(finalForBypass) {
 export default async function processLead(ctx) {
   const db = ctx.db;
   const method = ctx.req.method;
+  const headers = ctx.req.headers || {};
+  const getHeader = (name) => headers[name] ?? headers[name.toLowerCase()] ?? null;
 
   if (method === 'GET') return ctx.json({ status: 'ok' }, 200);
 
@@ -1240,16 +1242,19 @@ export default async function processLead(ctx) {
     const body = ctx.body || {};
     const payload = body.payload || body;
 
-    const h = ctx.req.headers || {};
     let supplierKeyRaw =
-      h['x-api-key'] ||
-      h['x_key'] ||
+      getHeader('X-API-KEY') ||
+      getHeader('X_KEY') ||
+      getHeader('x-api-key') ||
+      getHeader('x_key') ||
       payload['X-API-KEY'] ||
       payload['X_KEY'] ||
       payload._supplier_key ||
+      payload.api_key ||
+      payload.apiKey ||
       null;
     if (!supplierKeyRaw) {
-      const authHeader = h['authorization'] || '';
+      const authHeader = getHeader('Authorization') || '';
       if (authHeader.startsWith('Basic ')) {
         const decoded = atob(authHeader.slice(6));
         supplierKeyRaw = decoded.split(':')[0] || null;
@@ -1265,6 +1270,8 @@ export default async function processLead(ctx) {
     delete leadPayload._dry_run;
     delete leadPayload._campaign;
     delete leadPayload.phone_verified;
+    delete leadPayload.api_key;
+    delete leadPayload.apiKey;
 
     // ── a. AUTH ──────────────────────────────────────────────────────────
     let apiKeyRecord = null;
@@ -1386,7 +1393,8 @@ export default async function processLead(ctx) {
     // writes ONLY a RouteDecisionTrace. It sends/reserves/bills nothing and is
     // fully isolated: the dynamic import runs only when enabled (so production on
     // legacy_only never loads it), and any error is caught so it can never alter
-    // the legacy outcome or the supplier response envelope.
+    // the legacy outcome or the supplier response envelope. Deployment of the
+    // generated bundle to the function runtime is verified in staging (CAP-2).
     if (distributionMode !== 'legacy_only') {
       try {
         const leadDist = await import('./routingEngine.generated.js');

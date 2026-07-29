@@ -13,7 +13,9 @@ import { Check, ChevronDown, X } from "lucide-react";
  *  - placeholder: string
  */
 export const MultiSelect = React.forwardRef(function MultiSelect(
-  { value = [], onValueChange, options = [], placeholder = "Select…", className, emptyText = "No results found." },
+  // `portal` false renders the dropdown inline instead of in document.body, so
+  // it stays scrollable by wheel when opened from inside a Dialog.
+  { value = [], onValueChange, options = [], placeholder = "Select…", className, emptyText = "No results found.", portal = true },
   ref
 ) {
   const [open, setOpen] = React.useState(false);
@@ -64,6 +66,7 @@ export const MultiSelect = React.forwardRef(function MultiSelect(
         </button>
       </PopoverTrigger>
       <PopoverContent
+        portal={portal}
         align="start"
         style={{ width: "var(--radix-popover-trigger-width)", minWidth: "12rem" }}
       >

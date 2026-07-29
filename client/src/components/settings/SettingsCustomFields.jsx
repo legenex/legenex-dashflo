@@ -612,7 +612,7 @@ export default function SettingsCustomFields() {
                                     next[i] = e.target.value;
                                     return { ...p, options: next };
                                   })}
-                                  placeholder="e.g. Survey, Quiz, Call"
+                                  placeholder={`Enter ${form.field_name ? form.field_name.replace(/_/g, ' ') : 'field'} value ${i + 1}`}
                                   className="bg-background font-mono text-[12px]"
                                 />
                                 <Button size="icon" variant="ghost" className="h-8 w-8 p-0 text-destructive shrink-0" onClick={() => setForm(p => ({ ...p, options: p.options.filter((_, idx) => idx !== i) }))}>

@@ -23,16 +23,31 @@
     },
     "content": {
       "type": "string",
-      "description": "Body text / definition / template content that DataBot reads as context"
+      "description": "Body text / definition / template content that the bots read as context"
     },
     "active": {
       "type": "boolean",
       "default": true,
-      "description": "When true, DataBot includes this item in its context"
+      "description": "When true, bots include this item in their context"
     },
     "sort_order": {
       "type": "number",
       "default": 0
+    },
+    "file_url": {
+      "type": "string",
+      "description": "URL of an uploaded source file (image, doc, spreadsheet). Nullable."
+    },
+    "source_type": {
+      "type": "string",
+      "enum": [
+        "manual",
+        "file_upload",
+        "json_upload",
+        "ai_generated"
+      ],
+      "default": "manual",
+      "description": "How this knowledge item was created"
     }
   },
   "required": [

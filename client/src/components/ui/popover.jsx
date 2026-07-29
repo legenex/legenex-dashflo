@@ -9,8 +9,18 @@ const PopoverTrigger = PopoverPrimitive.Trigger
 
 const PopoverAnchor = PopoverPrimitive.Anchor
 
-const PopoverContent = React.forwardRef(({ className, align = "center", sideOffset = 4, ...props }, ref) => (
-  <PopoverPrimitive.Portal>
+// `portal` controls whether the content renders in document.body (the default)
+// or inline where it is declared.
+//
+// Inline matters when the popover is opened from inside a Dialog. Radix locks
+// scrolling while a dialog is open using react-remove-scroll, which cancels
+// wheel events whose target is outside the dialog's DOM subtree. A portalled
+// popover lands in document.body, so it is outside that subtree and the wheel
+// is swallowed: the list looks scrollable, the scrollbar grip drags fine, but
+// mouse wheel and trackpad do nothing. Rendering inline keeps it inside the
+// dialog, and scrolling works normally.
+const PopoverContent = React.forwardRef(({ className, align = "center", sideOffset = 4, portal = true, ...props }, ref) => {
+  const content = (
     <PopoverPrimitive.Content
       ref={ref}
       align={align}
@@ -20,8 +30,9 @@ const PopoverContent = React.forwardRef(({ className, align = "center", sideOffs
         className
       )}
       {...props} />
-  </PopoverPrimitive.Portal>
-))
+  );
+  return portal ? <PopoverPrimitive.Portal>{content}</PopoverPrimitive.Portal> : content;
+})
 PopoverContent.displayName = PopoverPrimitive.Content.displayName
 
 export { Popover, PopoverTrigger, PopoverContent, PopoverAnchor }

@@ -15,7 +15,7 @@ import { sendPayloadTest } from '@/functions/sendPayloadTest';
 const LEADS_ENDPOINT = 'https://api.legenex.com/functions/leads';
 
 const SAMPLE_LEAD = `{
-  "api_key": "YOUR_SUPPLIER_KEY",
+  "api_key": "PASTE_A_REAL_API_KEY_HERE",
   "firstName": "John",
   "lastName": "Smith",
   "email": "john.smith@example.com",
