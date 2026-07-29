@@ -20,6 +20,7 @@ import { loadColumnConfig, saveColumnConfig, getColumnDef, buildAvailableColumns
 import { leadEventInstant, leadField } from '@/lib/reportMetrics';
 import { invalidateLeadCaches } from '@/lib/leadCaches';
 import { resolvePeriod } from '@/lib/periodRange';
+import LeadCountsStrip, { leadCounts } from '@/components/shared/LeadCountsStrip';
 
 function getFieldValue(lead, field) {
   if (lead[field] != null && lead[field] !== '') return String(lead[field]);
@@ -441,6 +442,12 @@ export default function LeadsTable({ view }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [leads, period, customPeriod.from, customPeriod.to]);
 
+  // Counts for the strip above the table. Derived from `filtered`, which has
+  // had EVERY filter applied (period, view, search, status, supplier, source,
+  // vertical and any custom filters), so the numbers always describe exactly
+  // the rows on screen.
+  const counts = useMemo(() => leadCounts(filtered), [filtered]);
+
   const telemetry = useMemo(() => ({
     total: periodLeads.length,
     sold: periodLeads.filter(l => l.final_status === 'Sold').length,
@@ -641,6 +648,14 @@ export default function LeadsTable({ view }) {
         setSourceFilter={setSourceFilter}
         sourceOptions={sourceOptions}
       />
+
+      {/* Lead counts, directly under the filters that drive them.
+
+          This used to be a footer under the table showing only Total and Sold,
+          and it counted the whole period regardless of the status, supplier,
+          buyer or source filters above, so changing a filter moved the rows and
+          left the numbers alone. It is fed `filtered`, the exact set on screen. */}
+      <LeadCountsStrip counts={counts} className="mt-3" />
 
       <BulkActionBar
         selectedCount={selectedIds.size}
