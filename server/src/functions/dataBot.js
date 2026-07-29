@@ -1,77 +1,51 @@
 import { requireUser, HttpError } from './_runtime.js';
-import { callLLM, invokeLLM } from '../integrations/llm.js';
+import { callLLM } from '../integrations/llm.js';
 
 // DataBot: answers questions about the app's own data + a curated Knowledge Base.
-// Remembers past conversations and learns facts from each exchange.
+// Uses the shared LLM integration. Remembers past conversations and learns facts
+// from each exchange.
 
-// Single entry point to the LLM integration. When a JSON schema is supplied we
-// route through invokeLLM (structured output); otherwise a plain text answer
-// from callLLM.
-async function callModel({ prompt, system, model, temperature = 0.4, jsonSchema = null }) {
-  if (jsonSchema) {
-    const fullPrompt = system ? `${system}\n\n${prompt}` : prompt;
-    const result = await invokeLLM({
-      prompt: fullPrompt,
-      response_json_schema: jsonSchema,
-      temperature,
-      model,
-    });
-    if (result == null) return '';
-    if (typeof result === 'string') {
-      try { return JSON.parse(result); } catch { return result; }
-    }
-    return result;
+// Extract a JSON value from a model response that may be fenced or padded with prose.
+function parseJsonLoose(text) {
+  if (text && typeof text === 'object') return text;
+  const s = String(text ?? '').trim();
+  const unfenced = s.replace(/^(?:json)?\s*/i, '').replace(/\s*$/, '').trim();
+  try { return JSON.parse(unfenced); } catch {}
+  const start = unfenced.indexOf('{');
+  const end = unfenced.lastIndexOf('}');
+  if (start !== -1 && end > start) {
+    try { return JSON.parse(unfenced.slice(start, end + 1)); } catch {}
   }
-  const text = await callLLM({ prompt, system: system || undefined, temperature, model });
-  return typeof text === 'string' ? text : (text?.content ?? String(text ?? ''));
+  return unfenced;
+}
+
+async function callText({ prompt, system, temperature = 0.4 }) {
+  const out = await callLLM({ prompt, system, temperature });
+  if (typeof out === 'string') return out;
+  return out?.content ?? out?.text ?? out?.answer ?? String(out ?? '');
+}
+
+async function callJson({ prompt, system, temperature = 0.2 }) {
+  const raw = await callText({ prompt, system, temperature });
+  return parseJsonLoose(raw);
 }
 
 // Scope a change request into a single-concern build prompt for the CONTROLLED
-// channel (Claude via the connector, the app builder, or Claude Code). Never executes.
+// channel (Claude via connector, the builder, or Claude Code). Never executes.
 async function draftBuildRequest(question, history) {
-  const schema = {
-    type: 'object',
-    properties: {
-      is_build: { type: 'boolean' },
-      title: { type: 'string' },
-      summary: { type: 'string' },
-      target_files: { type: 'array', items: { type: 'string' } },
-      do_not_touch: { type: 'array', items: { type: 'string' } },
-      risk: { type: 'string', enum: ['green', 'amber', 'red'] },
-      ready_prompt: { type: 'string' },
-    },
-    required: ['is_build', 'title', 'summary', 'ready_prompt'],
-  };
   const convo = history.map((m) => `${m.role === 'user' ? 'User' : 'BuildBot'}: ${m.content}`).join('\n');
-  const system = `You scope change requests for the Legenex app so they can be handed to a controlled build channel (Claude via the app connector, the app builder, or Claude Code). You NEVER execute changes yourself. If the user's message is actually an analytics or data question rather than a request to change the app, set is_build=false and leave the other fields empty.\n\nBake these conventions into ready_prompt so it is safe to run:\n- One concern per change, with an explicit do-not-touch list.\n- Follow DESIGN-SYSTEM.md: semantic tokens only, never raw hex/hsl or raw palette utilities.\n- RED surfaces that need explicit human approval and must not be edited casually: processLead, the four LeadByteConnectors and their enabled states, Conversion Events, distribution_mode (only via distributionSetMode), credentials, live endpoints, billing records, buyer pricing and state coverage.\n- Additive schema only. No em dashes anywhere. Checkpoint before any schema or destructive change. Verify with the design-token gate and lint.\n\nready_prompt must be a complete, copy-pasteable instruction a builder can act on: the target area, the exact change, the do-not-touch list, and the verification step. Set risk=red if the request touches any RED surface, amber if it touches shared or data surfaces, green for isolated UI or docs.`;
-  const prompt = `Conversation so far:\n${convo || '(none)'}\n\nUser request: ${question}\n\nReturn JSON only.`;
-  return await callModel({ system, prompt, jsonSchema: schema, temperature: 0.2 });
+  const system = `You scope change requests for the Legenex app so they can be handed to a controlled build channel (Claude via the connector, the builder, or Claude Code). You NEVER execute changes yourself. If the user's message is actually an analytics or data question rather than a request to change the app, set is_build=false and leave the other fields empty.\n\nBake these conventions into ready_prompt so it is safe to run:\n- One concern per change, with an explicit do-not-touch list.\n- Follow DESIGN-SYSTEM.md: semantic tokens only, never raw hex/hsl or raw palette utilities.\n- RED surfaces that need explicit human approval and must not be edited casually: processLead, the four LeadByteConnectors and their enabled states, Conversion Events, distribution_mode (only via distributionSetMode), credentials, live endpoints, billing records, buyer pricing and state coverage.\n- Additive schema only. No em dashes anywhere. Checkpoint before any schema or destructive change. Verify with the design-token gate and lint.\n\nready_prompt must be a complete, copy-pasteable instruction a builder can act on: the target area, the exact change, the do-not-touch list, and the verification step. Set risk=red if the request touches any RED surface, amber if it touches shared or data surfaces, green for isolated UI or docs.`;
+  const prompt = `Conversation so far:\n${convo || '(none)'}\n\nUser request: ${question}\n\nReturn a JSON object only, with keys: is_build (boolean), title (string), summary (string), target_files (array of strings), do_not_touch (array of strings), risk (one of "green", "amber", "red"), ready_prompt (string). Required: is_build, title, summary, ready_prompt.`;
+  return await callJson({ system, prompt, temperature: 0.2 });
 }
 
 // Extract learnable facts from a conversation exchange. Returns up to 3 facts.
 async function extractMemories(question, answer, existingMemory) {
-  const schema = {
-    type: 'object',
-    properties: {
-      memories: {
-        type: 'array',
-        items: {
-          type: 'object',
-          properties: {
-            fact: { type: 'string', description: 'A concise, durable fact or preference learned from this exchange' },
-            category: { type: 'string', enum: ['preference', 'business_rule', 'data_insight', 'definition', 'other'] },
-          },
-          required: ['fact', 'category'],
-        },
-      },
-    },
-    required: ['memories'],
-  };
   const existingStr = existingMemory.slice(0, 20).map(m => `- ${m.fact}`).join('\n');
   const system = `You extract durable, reusable facts and preferences from a conversation between a user and an analytics assistant. Only extract facts that will be useful in future conversations: business rules, user preferences, recurring data insights, or definitions the user provided. Do NOT extract transient questions or answers. Do NOT duplicate facts already known.\n\nKnown memories:\n${existingStr || '(none)'}`;
-  const prompt = `User asked: ${question}\nAssistant answered: ${answer}\n\nExtract up to 3 new memories. Return JSON only.`;
+  const prompt = `User asked: ${question}\nAssistant answered: ${answer}\n\nExtract up to 3 new memories. Return a JSON object only, of the form { "memories": [ { "fact": string, "category": one of "preference" | "business_rule" | "data_insight" | "definition" | "other" } ] }.`;
   try {
-    const result = await callModel({ system, prompt, jsonSchema: schema, temperature: 0.2 });
+    const result = await callJson({ system, prompt, temperature: 0.2 });
     return Array.isArray(result?.memories) ? result.memories.filter(m => m.fact && m.fact.length > 5).slice(0, 3) : [];
   } catch { return []; }
 }
@@ -79,7 +53,6 @@ async function extractMemories(question, answer, existingMemory) {
 export default async function dataBot(ctx) {
   const user = requireUser(ctx);
   const db = ctx.db;
-
   try {
     const body = ctx.body || {};
     const question = (body.question || '').toString().trim();
@@ -105,40 +78,16 @@ export default async function dataBot(ctx) {
     };
     const isPartner = user.base_role === 'supplier' || user.base_role === 'buyer' || !!user.linked_supplier_id || !!user.linked_buyer_id;
     const perms = resolvePerms(user);
-    // Baseline permission gate. The per-bot allow list is applied further down.
-    const canData = !!perms.databot;
-    const canBuild = !isPartner && !!perms.buildbot;
-
-    // Friendly, actionable message instead of a silent 500 when the key is unset.
-    const llmConfigured = !!(ctx.config?.integrations?.openaiApiKey || ctx.env?.OPENAI_API_KEY);
-    if (!llmConfigured) {
-      return ctx.json({ type: 'answer', answer: 'This assistant is not configured yet: the OPENAI_API_KEY secret is missing. An admin can add it in the app secrets, then I can answer.' });
-    }
-
-    // BuildBot: draft a single-concern build request for the controlled channel.
-    if (mode === 'build') {
-      if (!canBuild) {
-        return ctx.json({ type: 'answer', answer: 'BuildBot is not enabled for your account. An admin can grant the BuildBot permission in Users and Roles.' });
-      }
-      try {
-        const draft = await draftBuildRequest(question, history);
-        if (draft && draft.is_build) return ctx.json({ type: 'build_request', build_request: draft });
-      } catch (_) { /* not a build, or draft failed: fall through to an answer */ }
-    }
-
-    if (!canData) {
-      return ctx.json({ type: 'answer', answer: 'DataBot access is turned off for your account. An admin can enable it in Users and Roles.' });
-    }
 
     // Per-bot allow list, configured on the bot itself in Settings > ChatBot.
     //
     // When allowed_roles or allowed_user_ids is set, the bot is restricted to
-    // exactly those and nothing else grants access. When both are empty the bot
-    // falls back to the permission flag resolved above, which is how it behaved
-    // before, so an unconfigured bot keeps working for owners and admins.
+    // exactly those and nothing else grants access. When both are empty it
+    // returns null and the permission flag below decides, which is how it
+    // behaved before, so an unconfigured bot keeps working for owners/admins.
     //
-    // Enforced here, server side. The UI hides the launcher too, but hiding a
-    // button is not access control.
+    // Resolved BEFORE any work happens. Enforced server side: the UI hides the
+    // launcher too, but hiding a button is not access control.
     const botAllows = async (botKey, u) => {
       try {
         const cfgs = await db.entities.BotConfig.filter({ bot_key: botKey });
@@ -154,16 +103,42 @@ export default async function dataBot(ctx) {
       }
     };
 
+    const buildAllow = await botAllows('build', user);
+    const dataAllow = await botAllows('data', user);
+
+    // An explicit allow list overrides the permission flag in both directions.
+    const canData = dataAllow === null ? !!perms.databot : dataAllow;
+    const canBuild = !isPartner && (buildAllow === null ? !!perms.buildbot : buildAllow);
+
+    // Friendly, actionable message instead of a silent 500 when the key is unset.
+    const llmKey = ctx.config?.integrations?.openaiApiKey || ctx.env?.OPENAI_API_KEY;
+    if (!llmKey) {
+      return { type: 'answer', answer: 'This assistant is not configured yet: the language model API key is missing. An admin can add it in the app secrets, then I can answer.' };
+    }
+
+    // BuildBot: draft a single-concern build request for the controlled channel.
     if (mode === 'build') {
-      const buildAllowList = await botAllows('build', user);
-      if (buildAllowList === false) {
-        return ctx.json({ type: 'answer', answer: 'BuildBot is restricted to specific roles or people, and your account is not on that list. An admin can change this in Settings > ChatBot > BuildBot.' });
+      if (!canBuild) {
+        return {
+          type: 'answer',
+          answer: buildAllow === false
+            ? 'BuildBot is restricted to specific roles or people, and your account is not on that list. An admin can change this in Settings > ChatBot > BuildBot.'
+            : 'BuildBot is not enabled for your account. An admin can grant the BuildBot permission in Users and Roles.',
+        };
       }
-    } else {
-      const dataAllowList = await botAllows('data', user);
-      if (dataAllowList === false) {
-        return ctx.json({ type: 'answer', answer: 'DataBot is restricted to specific roles or people, and your account is not on that list. An admin can change this in Settings > ChatBot > DataBot.' });
-      }
+      try {
+        const draft = await draftBuildRequest(question, history);
+        if (draft && draft.is_build) return { type: 'build_request', build_request: draft };
+      } catch (_) { /* not a build, or draft failed: fall through to an answer */ }
+    }
+
+    if (!canData) {
+      return {
+        type: 'answer',
+        answer: dataAllow === false
+          ? 'DataBot is restricted to specific roles or people, and your account is not on that list. An admin can change this in Settings > ChatBot > DataBot.'
+          : 'DataBot access is turned off for your account. An admin can enable it in Users and Roles.',
+      };
     }
 
     // --- Load conversation history and memories for context ---
@@ -247,18 +222,13 @@ export default async function dataBot(ctx) {
     // Page past the 500-row cap so totals are real totals.
     const loadAllLeads = async () => {
       const out = [];
-      const seen = new Set();
       const pageSize = 500;
       for (let p = 0; p < 200; p += 1) {
         const batch = await db.entities.Lead
           .filter({ archived: false }, '-created_date', pageSize, p * pageSize)
           .catch(() => []);
         if (!batch || batch.length === 0) break;
-        let added = 0;
-        for (const l of batch) {
-          if (l && l.id != null && !seen.has(l.id)) { seen.add(l.id); out.push(l); added += 1; }
-        }
-        if (added === 0) break; // offset not honored or set exhausted
+        out.push(...batch);
         if (batch.length < pageSize) break;
       }
       return out;
@@ -415,7 +385,6 @@ export default async function dataBot(ctx) {
       const configs = await db.entities.BotConfig.filter({ bot_key: botKey }).catch(() => []);
       if (configs.length) botConfig = configs[0];
     } catch {}
-    const botModel = botConfig.model || 'gpt-4o-mini';
     const botTemp = botConfig.temperature ?? 0.4;
     const botInstructions = botConfig.instructions || '';
     const botName = botConfig.name || (mode === 'build' ? 'BuildBot' : 'DataBot');
@@ -443,11 +412,11 @@ ${convo || '(none)'}
 User: ${question}
 ${botName}:`;
 
-    const answer = await callModel({ prompt, model: botModel, temperature: botTemp, system: botInstructions || undefined });
+    const answer = await callText({ prompt, temperature: botTemp, system: botInstructions || undefined });
 
     const answerStr = typeof answer === 'string' ? answer : JSON.stringify(answer);
 
-    // --- Persist the conversation and extract memories (best-effort) ---
+    // --- Persist the conversation and extract memories (async, non-blocking) ---
     try {
       const now = new Date().toISOString();
       // Find or create a conversation for this user + mode
@@ -501,7 +470,7 @@ ${botName}:`;
       }
     } catch { /* conversation persistence is best-effort */ }
 
-    return ctx.json({ type: 'answer', answer: answerStr, conversation_id: conversationId });
+    return { type: 'answer', answer: answerStr, conversation_id: conversationId };
   } catch (error) {
     if (error instanceof HttpError) throw error;
     return ctx.json({ error: error.message }, 500);

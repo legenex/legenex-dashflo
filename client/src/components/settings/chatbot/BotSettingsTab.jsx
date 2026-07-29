@@ -7,6 +7,7 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Switch } from '@/components/ui/switch';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { MultiSelect } from '@/components/ui/multi-select';
 import { Loader2, Upload, Sparkles, Save } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -57,6 +58,39 @@ export default function BotSettingsTab({ botKey }) {
     setSaving(false);
   };
 
+  // ---- Access control -------------------------------------------------------
+  //
+  // Roles and named people share one searchable list. Each option is prefixed
+  // so the two namespaces cannot collide (a person could be called "Manager"),
+  // and the prefix is stripped again when splitting back into the two stored
+  // arrays.
+  const { data: users = [] } = useQuery({
+    queryKey: ['users'],
+    queryFn: () => api.entities.User.list(),
+    staleTime: 60_000,
+  });
+
+  const ROLES = ['owner', 'admin', 'manager', 'analyst', 'viewer'];
+
+  const accessOptions = React.useMemo(() => ([
+    ...ROLES.map((r) => ({ value: `role:${r}`, label: `Role: ${r.charAt(0).toUpperCase()}${r.slice(1)}` })),
+    ...users.map((u) => ({
+      value: `user:${u.id}`,
+      label: `${u.full_name || u.email || 'Unnamed user'}${u.email && u.full_name ? ` (${u.email})` : ''}`,
+    })),
+  ]), [users]);
+
+  const accessValue = React.useMemo(() => ([
+    ...(Array.isArray(form?.allowed_roles) ? form.allowed_roles : []).map((r) => `role:${r}`),
+    ...(Array.isArray(form?.allowed_user_ids) ? form.allowed_user_ids : []).map((i) => `user:${i}`),
+  ]), [form?.allowed_roles, form?.allowed_user_ids]);
+
+  const onAccessChange = (next) => {
+    const list = Array.isArray(next) ? next : [];
+    setF('allowed_roles', list.filter((v) => v.startsWith('role:')).map((v) => v.slice(5)));
+    setF('allowed_user_ids', list.filter((v) => v.startsWith('user:')).map((v) => v.slice(5)));
+  };
+
   const uploadAvatar = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -88,6 +122,43 @@ export default function BotSettingsTab({ botKey }) {
           <Label className="text-[12px] text-muted-foreground">Enabled</Label>
           <Switch checked={form.enabled} onCheckedChange={v => setF('enabled', v)} />
         </div>
+      </div>
+
+      {/* Access control, directly under the master switch: who may use this bot
+          at all is a more consequential setting than its name or tone.
+
+          Roles and named people are one combined searchable list. Leaving it
+          empty falls back to the per-user permission flag in Users and Roles,
+          which is the existing behaviour, so an unconfigured bot keeps working
+          for owners and admins. Enforcement is server side in the dataBot
+          function; this only configures it. */}
+      <div className="rounded-[10px] border border-border bg-card p-4 space-y-3">
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <div className="min-w-0">
+            <div className="text-[13px] font-semibold text-foreground">Who can use this bot</div>
+            <div className="text-[12px] text-muted-foreground mt-0.5">
+              {accessValue.length === 0
+                ? 'Anyone whose role permits it in Users and Roles.'
+                : `Restricted to ${accessValue.length} selected role${accessValue.length === 1 ? '' : 's'} or person.`}
+            </div>
+          </div>
+          {accessValue.length > 0 && (
+            <button
+              type="button"
+              onClick={() => { setF('allowed_roles', []); setF('allowed_user_ids', []); }}
+              className="text-[12px] text-muted-foreground hover:text-foreground"
+            >
+              Clear restriction
+            </button>
+          )}
+        </div>
+        <MultiSelect
+          value={accessValue}
+          onValueChange={onAccessChange}
+          options={accessOptions}
+          placeholder="Search roles and people…"
+          className="w-full bg-background border-border"
+        />
       </div>
 
       <div className="rounded-[10px] border border-border bg-card p-4 space-y-3">
