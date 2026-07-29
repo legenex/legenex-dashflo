@@ -1,10 +1,7 @@
-// Caller model: public with key.
-//
-// This endpoint is unauthenticated at the app layer and must be invocable
-// without a logged-in user. It authenticates ONLY by a route token, read from
-// the query param `token` or the `X-Webhook-Token` header, SHA-256 hashed and
-// matched against an enabled leadbyte InboundWebhookRoute. It looks up the
-// route and reads and writes Lead directly (no RLS at the function layer).
+// Public endpoint authenticated only by a route token (query `token` or the
+// `X-Webhook-Token` header), SHA-256 hashed and matched against an enabled
+// leadbyte InboundWebhookRoute. Reads and writes Lead directly (no RLS at the
+// function layer).
 //
 // This function only RECORDS LeadByte sold/unsold/return/conversion outcome
 // data onto the matching Lead. It never calls processLead or any routing,
@@ -153,21 +150,18 @@ async function sha256Hex(input) {
 }
 
 export default async function leadbyteWebhook(ctx) {
-  const svc = ctx.db;
+  const db = ctx.db;
 
   // ── Auth gate: route token only, before any Lead access ─────────────────
   const headerToken =
-    (ctx.req && typeof ctx.req.get === 'function' && ctx.req.get('X-Webhook-Token')) ||
-    (ctx.req && ctx.req.headers && ctx.req.headers['x-webhook-token']) ||
-    '';
-  const queryToken = (ctx.req && ctx.req.query && ctx.req.query.token) || '';
-  const token = String(queryToken || headerToken || '').trim();
+    (ctx.req.headers && (ctx.req.headers['x-webhook-token'] || ctx.req.headers['X-Webhook-Token'])) || '';
+  const token = String((ctx.req.query && ctx.req.query.token) || headerToken || '').trim();
   if (!token) return ctx.json({ error: 'Unauthorized' }, 401);
 
   let route = null;
   try {
     const tokenHash = await sha256Hex(token);
-    const routes = await svc.entities.InboundWebhookRoute.filter({
+    const routes = await db.entities.InboundWebhookRoute.filter({
       token_hash: tokenHash,
       enabled: true,
       provider: 'leadbyte',
@@ -220,18 +214,18 @@ export default async function leadbyteWebhook(ctx) {
     let existing = null;
     // 1. Primary match: the LeadByte lead id.
     if (leadbyteId !== null) {
-      const found = await svc.entities.Lead.filter({ leadbyte_lead_id: leadbyteId });
+      const found = await db.entities.Lead.filter({ leadbyte_lead_id: leadbyteId });
       existing = (Array.isArray(found) ? found : [])[0] || null;
     }
     // 2. Fallback match: email, then phone. Outcome webhooks for direct-route
     //    leads carry no leadbyte_lead_id (those leads never went to LeadByte),
     //    so match them on contact identity instead of creating a phantom lead.
     if (!existing && contactEmail) {
-      const found = await svc.entities.Lead.filter({ email: contactEmail });
+      const found = await db.entities.Lead.filter({ email: contactEmail });
       existing = (Array.isArray(found) ? found : [])[0] || null;
     }
     if (!existing && contactPhone) {
-      const found = await svc.entities.Lead.filter({ mobile: contactPhone });
+      const found = await db.entities.Lead.filter({ mobile: contactPhone });
       existing = (Array.isArray(found) ? found : [])[0] || null;
     }
 
@@ -262,14 +256,60 @@ export default async function leadbyteWebhook(ctx) {
         if (clean(mergedMapped[key]) === null) mergedMapped[key] = value;
       }
       patch.mapped_fields = JSON.stringify(mergedMapped);
-      await svc.entities.Lead.update(existing.id, patch);
+      await db.entities.Lead.update(existing.id, patch);
       resultStatus = patch.final_status || existing.final_status || null;
     } else {
       // No matching lead. This is an outcome/postback webhook: it records the
       // buyer outcome onto a lead that already exists in our system. It must
-      // NEVER create a new lead — doing so produced phantom "Processing"
-      // duplicates for direct-route leads. Acknowledge and skip.
-      await svc.entities.InboundWebhookRoute.update(route.id, {
+      // NEVER create a new lead, because doing so produced phantom "Processing"
+      // duplicates for direct-route leads.
+      //
+      // But it must not vanish either. Returning a bare 200 told LeadByte the
+      // outcome was accepted, so it never retried, and the Sold status was
+      // dropped on the floor with nothing on screen to show for it. That is the
+      // slippage: LeadByte reports a lead as Sold, this system never hears it,
+      // and the counts drift apart with no trace of why.
+      //
+      // Record it as a resolvable error instead. It surfaces on the Settings
+      // dashboard with an unresolved count, carries the whole payload so the
+      // lead can be reconciled by hand, and is idempotent on repeat delivery.
+      const identity = [
+        leadbyteId ? `leadbyte_id=${leadbyteId}` : null,
+        contactEmail ? `email=${contactEmail}` : null,
+        contactPhone ? `phone=${contactPhone}` : null,
+      ].filter(Boolean).join(' ') || 'no identifying fields on payload';
+
+      try {
+        // Do not pile up a new row every time LeadByte re-sends the same
+        // outcome: look for an open one first.
+        const priorArr = await db.entities.ErrorLog.filter({
+          stage: 'leadbyte',
+          resolved: false,
+          message: `Unmatched outcome: ${identity}`,
+        });
+        const prior = (Array.isArray(priorArr) ? priorArr : [])[0] || null;
+        if (!prior) {
+          await db.entities.ErrorLog.create({
+            stage: 'leadbyte',
+            severity: 'warning',
+            message: `Unmatched outcome: ${identity}`,
+            supplier_name: clean(body.supplier_sid) || null,
+            detail: JSON.stringify({
+              reason: 'Outcome webhook arrived for a lead that is not in this system.',
+              consequence: 'Status was NOT applied. This lead will read differently here than in LeadByte until reconciled.',
+              lead_status: clean(body.lead_status) || null,
+              lead_revenue: body.lead_revenue ?? null,
+              buyer_name: clean(body.buyer_name) || null,
+              received_at: new Date().toISOString(),
+              payload: body,
+            }),
+          });
+        }
+      } catch {
+        // Never let the audit write mask the acknowledgement below.
+      }
+
+      await db.entities.InboundWebhookRoute.update(route.id, {
         receipt_count: (Number(route.receipt_count) || 0) + 1,
         last_received_at: new Date().toISOString(),
       });
@@ -278,12 +318,12 @@ export default async function leadbyteWebhook(ctx) {
         matched: false,
         lead_id: null,
         final_status: null,
-        message: 'No matching lead found; outcome ignored (no lead created).',
+        message: 'No matching lead found; outcome recorded for reconciliation (no lead created).',
       }, 200);
     }
 
     // On success, bump receipt telemetry on the route.
-    await svc.entities.InboundWebhookRoute.update(route.id, {
+    await db.entities.InboundWebhookRoute.update(route.id, {
       receipt_count: (Number(route.receipt_count) || 0) + 1,
       last_received_at: new Date().toISOString(),
     });
@@ -296,7 +336,7 @@ export default async function leadbyteWebhook(ctx) {
     }, 200);
   } catch (err) {
     try {
-      await svc.entities.InboundWebhookRoute.update(route.id, {
+      await db.entities.InboundWebhookRoute.update(route.id, {
         error_count: (Number(route.error_count) || 0) + 1,
         last_error: (err && err.message) || 'Unexpected processing error',
       });
