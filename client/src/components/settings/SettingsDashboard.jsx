@@ -1,23 +1,57 @@
 import React from 'react';
+import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '@/api/client';
+import { usePermissions } from '@/lib/AuthContext';
 import {
   Plug, KeyRound, Users, Database, ListTree, Shuffle,
-  Webhook, AlertTriangle, ShieldCheck, BookOpen,
+  Webhook, AlertTriangle, ShieldCheck, BookOpen, CreditCard, UserCircle, Cog,
 } from 'lucide-react';
-import ToolTile from '@/components/tools/ToolTile';
 
-// Settings landing page: a status board rather than a wall of links.
+// Settings landing page: a compact status board.
 //
 // Every other section (Operations, Tools, Lead Distribution) opens on a
-// dashboard that answers "what is connected and what needs attention" before
-// asking you to pick a sub-page. Settings opened straight onto a form, so
-// nothing surfaced a disconnected integration or a pile of unresolved errors
+// dashboard answering "what is connected and what needs attention" before
+// asking you to pick a sub-page. Settings opened straight onto a form, so a
+// disconnected integration or a pile of unresolved errors stayed invisible
 // until you happened to click into it.
 //
-// Counts are real, loaded from the same entities the panels themselves use.
-export default function SettingsDashboard({ onSelect, isAdmin }) {
+// Tiles are deliberately dense. A settings board is scanned, not read, so each
+// tile is one label, one number and one hint. Only tiles the current user has
+// permission for are rendered, so an operator never sees a door they cannot
+// open.
+
+// Compact stat tile. Two across on a phone, four on a wide screen.
+function StatTile({ to, icon: Icon, label, value, hint, tone = 'ok' }) {
+  const dot =
+    tone === 'error' ? 'bg-destructive'
+      : tone === 'warn' ? 'bg-status-unsold'
+        : 'bg-status-sold';
+
+  return (
+    <Link
+      to={to}
+      className="group rounded-[10px] border border-border bg-card p-3 flex flex-col gap-1.5 hover:border-primary/40 transition-colors min-w-0"
+    >
+      <div className="flex items-center gap-2 min-w-0">
+        <Icon className="w-4 h-4 text-primary shrink-0" />
+        <span className="text-[12px] font-medium text-foreground truncate group-hover:text-primary transition-colors">
+          {label}
+        </span>
+        <span className={`w-1.5 h-1.5 rounded-full shrink-0 ml-auto ${dot}`} />
+      </div>
+      <div className="text-[19px] sm:text-[21px] font-bold font-mono tabular-nums text-foreground truncate leading-tight">
+        {value}
+      </div>
+      <p className="text-[10.5px] text-muted-foreground truncate">{hint}</p>
+    </Link>
+  );
+}
+
+export default function SettingsDashboard({ isAdmin }) {
+  const { can } = usePermissions();
   const opts = { staleTime: 60_000 };
+
   const { data: users = [] } = useQuery({ queryKey: ['users'], queryFn: () => api.entities.User.list(), ...opts });
   const { data: apiKeys = [] } = useQuery({ queryKey: ['api-keys'], queryFn: () => api.entities.ApiKey.list('-created_date', 200), ...opts });
   const { data: integrations = [] } = useQuery({ queryKey: ['integration-configs'], queryFn: () => api.entities.IntegrationConfig.list(), ...opts });
@@ -29,150 +63,102 @@ export default function SettingsDashboard({ onSelect, isAdmin }) {
   const { data: audits = [] } = useQuery({ queryKey: ['audit-runs'], queryFn: () => api.entities.AuditRun.list('-created_date', 20), ...opts });
 
   const isConnected = (i) => i.connected || i.enabled || i.status === 'connected';
-  const connected = integrations.filter(isConnected);
-  const disconnected = integrations.length - connected.length;
+  const connected = integrations.filter(isConnected).length;
+  const notConnected = integrations.length - connected;
   const unresolved = errors.filter((e) => !e.resolved).length;
   const activeSuppliers = suppliers.filter((s) => s.active).length;
-  const lastAudit = audits[0];
 
-  // A tile turns amber when it needs attention, red when something is broken.
+  // perm null means always visible: your own profile, workspace defaults, and
+  // the admin-only webhook route which is gated separately.
   const tiles = [
-    {
-      key: 'integrations', icon: Plug, title: 'Integrations',
-      description: 'Connected services and providers.',
-      stats: [
-        { label: 'Connected', value: `${connected.length} of ${integrations.length}` },
-        { label: 'Hint', value: disconnected > 0 ? `${disconnected} not connected` : 'all live' },
-      ],
-      status: integrations.length === 0 ? 'warn' : disconnected > 0 ? 'warn' : 'ok',
-    },
-    {
-      key: 'data-sources', icon: Database, title: 'Data Sources',
-      description: 'Inbound lead sources and CSV import.',
-      stats: [
-        { label: 'Suppliers', value: String(suppliers.length) },
-        { label: 'Hint', value: `${activeSuppliers} active` },
-      ],
-      status: activeSuppliers === 0 ? 'warn' : 'ok',
-    },
-    {
-      key: 'apikeys', icon: KeyRound, title: 'API Keys',
-      description: 'Gateway and supplier keys.',
-      stats: [
-        { label: 'Keys', value: String(apiKeys.length) },
-        { label: 'Hint', value: apiKeys.length === 0 ? 'no keys issued' : 'gateway live' },
-      ],
-      status: apiKeys.length === 0 ? 'warn' : 'ok',
-    },
-    {
-      key: 'users', icon: Users, title: 'Users and Roles',
-      description: 'Team members and permissions.',
-      stats: [
-        { label: 'Users', value: String(users.length) },
-        { label: 'Hint', value: users.length === 1 ? 'single operator' : 'team access' },
-      ],
-      status: 'ok',
-    },
-    {
-      key: 'fields', icon: ListTree, title: 'Custom Fields',
-      description: 'The lead field catalog.',
-      stats: [
-        { label: 'Fields', value: String(customFields.length) },
-        { label: 'Hint', value: customFields.length === 0 ? 'nothing catalogued' : 'catalogued' },
-      ],
-      status: 'ok',
-    },
-    {
-      key: 'field-mapping', icon: Shuffle, title: 'Field Mapping',
-      description: 'Incoming key to field mapping.',
-      stats: [
-        { label: 'Mappings', value: String(mappings.length) },
-        { label: 'Hint', value: mappings.length === 0 ? 'unmapped intake' : 'mapped' },
-      ],
-      status: mappings.length === 0 ? 'warn' : 'ok',
-    },
-    {
-      key: 'errors', icon: AlertTriangle, title: 'Error Logs',
-      description: 'Pipeline failures and reasons.',
-      stats: [
-        { label: 'Unresolved', value: String(unresolved) },
-        { label: 'Hint', value: unresolved > 0 ? 'needs review' : 'clean' },
-      ],
-      status: unresolved > 0 ? 'error' : 'ok',
-    },
-    {
-      key: 'audits', icon: ShieldCheck, title: 'Audits',
-      description: 'Runtime probes and findings.',
-      stats: [
-        { label: 'Runs', value: String(audits.length) },
-        { label: 'Hint', value: lastAudit ? 'last run recorded' : 'never run' },
-      ],
-      status: lastAudit ? 'ok' : 'warn',
-    },
-    {
-      key: 'knowledge', icon: BookOpen, title: 'Knowledge Base',
-      description: 'Docs the AI assistant reads.',
-      stats: [
-        { label: 'Docs', value: String(docs.length) },
-        { label: 'Hint', value: docs.length === 0 ? 'assistant unfed' : 'indexed' },
-      ],
-      status: docs.length === 0 ? 'warn' : 'ok',
-    },
-    ...(isAdmin ? [{
-      key: 'inbound-webhooks', icon: Webhook, title: 'Inbound Webhooks',
-      description: 'LeadByte outcome webhook routes.',
-      stats: [
-        { label: 'Access', value: 'Admin' },
-        { label: 'Hint', value: 'outcome routing' },
-      ],
-      status: 'ok',
-    }] : []),
-  ];
+    { perm: 'set_integrations', tab: 'integrations', icon: Plug, label: 'Integrations',
+      value: `${connected} of ${integrations.length}`,
+      hint: notConnected > 0 ? `${notConnected} not connected` : 'all connected',
+      tone: notConnected > 0 ? 'warn' : 'ok' },
+
+    { perm: 'set_data_sources', tab: 'data-sources', icon: Database, label: 'Data Sources',
+      value: suppliers.length, hint: `${activeSuppliers} active`,
+      tone: activeSuppliers === 0 ? 'warn' : 'ok' },
+
+    { perm: 'set_api_keys', tab: 'apikeys', icon: KeyRound, label: 'API Keys',
+      value: apiKeys.length, hint: apiKeys.length === 0 ? 'none issued' : 'gateway live',
+      tone: apiKeys.length === 0 ? 'warn' : 'ok' },
+
+    { perm: 'set_users', tab: 'users', icon: Users, label: 'Users and Roles',
+      value: users.length, hint: users.length === 1 ? 'single operator' : 'team access' },
+
+    { perm: 'set_custom_fields', tab: 'fields', icon: ListTree, label: 'Custom Fields',
+      value: customFields.length, hint: customFields.length === 0 ? 'none catalogued' : 'catalogued' },
+
+    { perm: 'set_field_mapping', tab: 'field-mapping', icon: Shuffle, label: 'Field Mapping',
+      value: mappings.length, hint: mappings.length === 0 ? 'unmapped intake' : 'mapped',
+      tone: mappings.length === 0 ? 'warn' : 'ok' },
+
+    { perm: 'set_error_logs', tab: 'errors', icon: AlertTriangle, label: 'Error Logs',
+      value: unresolved, hint: unresolved > 0 ? 'needs review' : 'clean',
+      tone: unresolved > 0 ? 'error' : 'ok' },
+
+    { perm: 'set_integrations', tab: 'audits', icon: ShieldCheck, label: 'Audits',
+      value: audits.length, hint: audits.length ? 'last run recorded' : 'never run',
+      tone: audits.length ? 'ok' : 'warn' },
+
+    { perm: 'set_knowledge_base', tab: 'knowledge', icon: BookOpen, label: 'Knowledge Base',
+      value: docs.length, hint: docs.length === 0 ? 'assistant unfed' : 'indexed',
+      tone: docs.length === 0 ? 'warn' : 'ok' },
+
+    { perm: null, tab: 'general', icon: Cog, label: 'General',
+      value: '\u2014', hint: 'workspace defaults' },
+
+    { perm: null, tab: 'profile', icon: UserCircle, label: 'Profile',
+      value: '\u2014', hint: 'your account' },
+
+    { perm: 'set_billing', tab: 'billing', icon: CreditCard, label: 'Billing and Plan',
+      value: '\u2014', hint: 'plan and invoices' },
+
+    ...(isAdmin ? [{ perm: null, tab: 'inbound-webhooks', icon: Webhook, label: 'Inbound Webhooks',
+      value: '\u2014', hint: 'outcome routing' }] : []),
+  ].filter((t) => t.perm === null || can(t.perm));
+
+  // Only surface problems this user can actually act on.
+  const alerts = [
+    unresolved > 0 && can('set_error_logs') && { tab: 'errors', text: `${unresolved} unresolved pipeline error${unresolved === 1 ? '' : 's'}` },
+    notConnected > 0 && can('set_integrations') && { tab: 'integrations', text: `${notConnected} integration${notConnected === 1 ? '' : 's'} not connected` },
+  ].filter(Boolean);
 
   return (
     <div>
-      {/* Attention strip: only shown when something actually needs doing, so it
-          stays meaningful rather than becoming decoration. */}
-      {(unresolved > 0 || disconnected > 0) && (
-        <div className="mb-5 rounded-[10px] border border-status-unsold bg-status-unsold p-4">
+      {alerts.length > 0 && (
+        <div className="mb-4 rounded-[10px] border border-status-unsold bg-status-unsold px-3.5 py-3">
           <div className="flex items-start gap-2.5">
-            <AlertTriangle className="w-4 h-4 status-unsold shrink-0 mt-0.5" />
-            <div className="text-[13px] text-muted-foreground">
-              <p className="font-semibold text-foreground">Needs attention</p>
-              <ul className="mt-1 space-y-0.5">
-                {unresolved > 0 && (
-                  <li>
-                    <button onClick={() => onSelect('errors')} className="underline underline-offset-2 hover:text-foreground">
-                      {unresolved} unresolved pipeline error{unresolved === 1 ? '' : 's'}
-                    </button>
-                  </li>
-                )}
-                {disconnected > 0 && (
-                  <li>
-                    <button onClick={() => onSelect('integrations')} className="underline underline-offset-2 hover:text-foreground">
-                      {disconnected} integration{disconnected === 1 ? '' : 's'} not connected
-                    </button>
-                  </li>
-                )}
-              </ul>
+            <AlertTriangle className="w-4 h-4 status-unsold shrink-0 mt-px" />
+            <div className="min-w-0">
+              <p className="text-[12px] font-semibold text-foreground">Needs attention</p>
+              <div className="flex flex-wrap gap-x-4 gap-y-1 mt-1">
+                {alerts.map((a) => (
+                  <Link
+                    key={a.tab}
+                    to={`/settings?tab=${a.tab}`}
+                    className="text-[12px] text-muted-foreground underline underline-offset-2 hover:text-foreground"
+                  >
+                    {a.text}
+                  </Link>
+                ))}
+              </div>
             </div>
           </div>
         </div>
       )}
 
-      {/* ToolTile is a Link. It navigates to /settings?tab=..., which the page
-          reads, so no click handler is needed and we avoid nesting a link
-          inside a button. */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2.5">
         {tiles.map((t) => (
-          <ToolTile
-            key={t.key}
-            to={`/settings?tab=${t.key}`}
+          <StatTile
+            key={t.tab}
+            to={`/settings?tab=${t.tab}`}
             icon={t.icon}
-            title={t.title}
-            description={t.description}
-            stats={t.stats}
-            status={t.status}
+            label={t.label}
+            value={t.value}
+            hint={t.hint}
+            tone={t.tone}
           />
         ))}
       </div>

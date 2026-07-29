@@ -225,11 +225,26 @@ export default function Overview() {
   const campaigns = useMemo(() => topCampaigns(truth.wLeads), [truth]);
   const risk = useMemo(() => buyerRisk(truth.reconRows), [truth]);
 
-  // Period-filtered leads for the lead-side widgets. Respects the same window
-  // that drives the KPI cards; filters on created_date.
+  // Period-filtered leads for the lead-side widgets (Pipeline Health, volume by
+  // status, rejection reasons, supplier leaderboard).
+  //
+  // Uses fLeads so the Vertical / Buyer / Supplier / Source filters apply here
+  // too, and resolves the date with leadEventInstant rather than parsing
+  // created_date directly.
+  //
+  // Both mattered. created_date is the moment the record was WRITTEN, so every
+  // lead from the 19 July bulk import carried 19 July regardless of when it
+  // actually arrived, and it is stored without a timezone suffix so the browser
+  // read it as local time. Pipeline Health therefore counted 555 sold in a
+  // window where the KPI cards (which use leadEventInstant) correctly counted
+  // 285.
   const periodLeads = useMemo(
-    () => leads.filter(l => l.created_date && new Date(l.created_date) >= win.start && new Date(l.created_date) <= win.end),
-    [leads, win]
+    () => fLeads.filter((l) => {
+      const inst = leadEventInstant(l);
+      if (!inst) return false;
+      return inst >= win.start && inst <= win.end;
+    }),
+    [fLeads, win]
   );
 
   // Compare vs prior window of equal length.

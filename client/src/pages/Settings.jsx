@@ -21,28 +21,33 @@ import SettingsAudits from '@/components/settings/SettingsAudits';
 import SettingsDashboard from '@/components/settings/SettingsDashboard';
 import ErrorLogs from '@/pages/ErrorLogs';
 
-// NAV is built inside the component so the admin-only Inbound Webhooks item can
-// be omitted for non-admins.
-function buildNav(isAdmin) {
+// NAV is built inside the component so items the user cannot access are
+// omitted entirely rather than shown and then blocked.
+function buildNav(isAdmin, can) {
+  const allow = (key) => key == null || can(key);
+  const account = [
+    { key: 'dashboard', label: 'Dashboard' },
+    { key: 'profile', label: 'Profile' },
+    { key: 'general', label: 'General', perm: 'set_integrations' },
+    { key: 'users', label: 'Users and Roles', perm: 'set_users' },
+  ].filter((i) => allow(i.perm));
+
+  const data = [
+    { key: 'integrations', label: 'Integrations', perm: 'set_integrations' },
+    { key: 'data-sources', label: 'Data Sources', perm: 'set_data_sources' },
+    { key: 'fields', label: 'Custom Fields', perm: 'set_custom_fields' },
+    { key: 'field-mapping', label: 'Field Mapping', perm: 'set_field_mapping' },
+    { key: 'apikeys', label: 'API Keys', perm: 'set_api_keys' },
+    ...(isAdmin ? [{ key: 'inbound-webhooks', label: 'Inbound Webhooks' }] : []),
+    { key: 'errors', label: 'Error Logs', perm: 'set_error_logs' },
+    { key: 'audits', label: 'Audits', perm: 'set_integrations' },
+    { key: 'knowledge', label: 'Knowledge Base', perm: 'set_knowledge_base' },
+    { key: 'billing', label: 'Billing and Plan', perm: 'set_billing' },
+  ].filter((i) => allow(i.perm));
+
   return [
-    { group: 'Account', items: [
-      { key: 'dashboard', label: 'Dashboard' },
-      { key: 'profile', label: 'Profile' },
-      { key: 'general', label: 'General' },
-      { key: 'users', label: 'Users and Roles' },
-    ] },
-    { group: 'Data', items: [
-      { key: 'integrations', label: 'Integrations' },
-      { key: 'data-sources', label: 'Data Sources' },
-      { key: 'fields', label: 'Custom Fields' },
-      { key: 'field-mapping', label: 'Field Mapping' },
-      { key: 'apikeys', label: 'API Keys' },
-      ...(isAdmin ? [{ key: 'inbound-webhooks', label: 'Inbound Webhooks' }] : []),
-      { key: 'errors', label: 'Error Logs' },
-      { key: 'audits', label: 'Audits' },
-      { key: 'knowledge', label: 'Knowledge Base' },
-      { key: 'billing', label: 'Billing and Plan' },
-    ] },
+    { group: 'Account', items: account },
+    ...(data.length ? [{ group: 'Data', items: data }] : []),
   ];
 }
 
@@ -67,19 +72,39 @@ const PANELS = {
 
 const VALID = Object.keys(PANELS);
 
+// Permission required to view each tab. Anything absent is always viewable
+// (your own profile, the status board). Kept beside PANELS so a new tab cannot
+// be added without a conscious decision about who may see it.
+const TAB_PERMS = {
+  general: 'set_integrations',
+  users: 'set_users',
+  integrations: 'set_integrations',
+  'data-sources': 'set_data_sources',
+  fields: 'set_custom_fields',
+  'field-mapping': 'set_field_mapping',
+  apikeys: 'set_api_keys',
+  errors: 'set_error_logs',
+  audits: 'set_integrations',
+  knowledge: 'set_knowledge_base',
+  billing: 'set_billing',
+  adaptive: 'set_custom_fields',
+};
+
 export default function Settings() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const { realRole } = usePermissions();
+  const { realRole, can } = usePermissions();
   const isAdmin = realRole === 'admin' || realRole === 'owner';
   const raw = searchParams.get('tab') || 'dashboard';
   let tab = VALID.includes(raw) ? raw : 'dashboard';
-  // Fail closed: a non-admin reaching an admin-only tab directly is sent to the
-  // dashboard rather than the admin panel.
+  // Fail closed. A non-admin reaching an admin-only tab directly, or anyone
+  // reaching a tab their role does not permit, lands on the dashboard rather
+  // than on a panel they should not see.
   if (PANELS[tab]?.adminOnly && !isAdmin) tab = 'dashboard';
+  if (TAB_PERMS[tab] && !can(TAB_PERMS[tab])) tab = 'dashboard';
   const setTab = (v) => setSearchParams({ tab: v }, { replace: true });
 
   const panel = PANELS[tab];
-  const nav = buildNav(isAdmin);
+  const nav = buildNav(isAdmin, can);
 
   return (
     <SectionShell nav={<SettingsNav groups={nav} active={tab} onSelect={setTab} />}>
@@ -88,7 +113,7 @@ export default function Settings() {
           {/* The dashboard needs isAdmin and the tab setter, so it is rendered
               here rather than held as a static node in PANELS. */}
           {tab === 'dashboard'
-            ? <SettingsDashboard onSelect={setTab} isAdmin={isAdmin} />
+            ? <SettingsDashboard isAdmin={isAdmin} />
             : panel.node}
         </SettingsErrorBoundary>
       </SettingsShell>
