@@ -1,24 +1,26 @@
 {
   "name": "InboundWebhookRoute",
   "properties": {
+    "api_key_id": {
+      "description": "ApiKey record id this webhook is presented with. Auth is by key, so several webhooks may share one key.",
+      "type": "string"
+    },
+    "api_key_name": {
+      "description": "ApiKey friendly name, denormalized for display",
+      "type": "string"
+    },
     "enabled": {
       "default": true,
-      "description": "Whether this route accepts inbound requests",
+      "description": "Whether this webhook accepts inbound requests",
       "type": "boolean"
     },
     "error_count": {
       "default": 0,
-      "description": "Total processing errors on this route",
+      "description": "Total processing errors on this webhook",
       "type": "number"
     },
     "event_type": {
-      "description": "Lifecycle event this route represents",
-      "enum": [
-        "sold",
-        "unsold",
-        "conversion",
-        "return"
-      ],
+      "description": "Optional pinned lifecycle status for this webhook. Leave blank for dynamic: the status is then read from lead_status on the payload. Accepts Sold, Unsold, Returned, Rejected, Duplicate, Disqualified, Converted.",
       "type": "string"
     },
     "last_error": {
@@ -26,33 +28,37 @@
       "type": "string"
     },
     "last_received_at": {
-      "description": "Timestamp of the last successful receipt on this route",
+      "description": "Timestamp of the last successful receipt on this webhook",
       "format": "date-time",
       "type": "string"
     },
     "name": {
-      "description": "Display name for this inbound route, e.g. LEGAL-MVA LeadByte Sold",
+      "description": "Display name for this inbound webhook, e.g. Inbounds Webhook or Legenex Webhook",
+      "type": "string"
+    },
+    "notes": {
+      "description": "Free text note, e.g. which platform posts to this webhook",
       "type": "string"
     },
     "provider": {
-      "default": "leadbyte",
-      "description": "Source system for this route",
-      "enum": [
-        "leadbyte"
-      ],
+      "description": "DEPRECATED. Legacy source-system tag from the per-route token model. Retained for history only, no longer written or displayed.",
       "type": "string"
     },
     "receipt_count": {
       "default": 0,
-      "description": "Total successful receipts on this route",
+      "description": "Total successful receipts on this webhook",
       "type": "number"
     },
+    "supplier_name": {
+      "description": "Optional supplier attribution when the payload carries no sid. The sid on the payload always wins.",
+      "type": "string"
+    },
     "token_hash": {
-      "description": "SHA-256 hex hash of the route token. Plaintext token is shown once at creation and never stored.",
+      "description": "DEPRECATED. SHA-256 of the old per-route token. Retained so legacy leadbyteWebhook routes keep working during cutover.",
       "type": "string"
     },
     "token_hint": {
-      "description": "Last 4 characters of the token, for display only",
+      "description": "DEPRECATED. Last 4 characters of the old per-route token, display only.",
       "type": "string"
     }
   },

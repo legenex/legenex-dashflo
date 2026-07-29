@@ -113,7 +113,10 @@
         "Queued",
         "Disqualified",
         "Returned",
+        "Rejected",
         "Duplicate",
+        "Converted",
+        "Fake",
         "Error"
       ],
       "default": "Processing"
