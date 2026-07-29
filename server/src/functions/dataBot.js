@@ -1,59 +1,84 @@
 import { requireUser, HttpError } from './_runtime.js';
-import { callLLM } from '../integrations/llm.js';
 
 // DataBot: answers questions about the app's own data + a curated Knowledge Base.
-// Uses the shared LLM integration. Remembers past conversations and learns facts
-// from each exchange.
+// Remembers past conversations and learns facts from each exchange.
 
-// Extract a JSON value from a model response that may be fenced or padded with prose.
-function parseJsonLoose(text) {
-  if (text && typeof text === 'object') return text;
-  const s = String(text ?? '').trim();
-  const unfenced = s.replace(/^(?:json)?\s*/i, '').replace(/\s*$/, '').trim();
-  try { return JSON.parse(unfenced); } catch {}
-  const start = unfenced.indexOf('{');
-  const end = unfenced.lastIndexOf('}');
-  if (start !== -1 && end > start) {
-    try { return JSON.parse(unfenced.slice(start, end + 1)); } catch {}
+async function callModel({ apiKey, prompt, system, model = 'gpt-4o-mini', temperature = 0.4, jsonSchema = null }) {
+  if (!apiKey) throw new Error('OPENAI_API_KEY is not set');
+  const messages = [];
+  if (system) messages.push({ role: 'system', content: system });
+  messages.push({ role: 'user', content: prompt });
+  const payload = { model, messages, temperature };
+  if (jsonSchema) {
+    payload.response_format = { type: 'json_schema', json_schema: { name: 'response', strict: false, schema: jsonSchema } };
   }
-  return unfenced;
-}
-
-async function callText({ prompt, system, temperature = 0.4 }) {
-  const out = await callLLM({ prompt, system, temperature });
-  if (typeof out === 'string') return out;
-  return out?.content ?? out?.text ?? out?.answer ?? String(out ?? '');
-}
-
-async function callJson({ prompt, system, temperature = 0.2 }) {
-  const raw = await callText({ prompt, system, temperature });
-  return parseJsonLoose(raw);
+  const res = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(`LLM error ${res.status}: ${await res.text()}`);
+  const data = await res.json();
+  const content = data?.choices?.[0]?.message?.content ?? '';
+  if (jsonSchema) { try { return JSON.parse(content); } catch { return content; } }
+  return content;
 }
 
 // Scope a change request into a single-concern build prompt for the CONTROLLED
 // channel (Claude via connector, the builder, or Claude Code). Never executes.
-async function draftBuildRequest(question, history) {
+async function draftBuildRequest(apiKey, question, history) {
+  const schema = {
+    type: 'object',
+    properties: {
+      is_build: { type: 'boolean' },
+      title: { type: 'string' },
+      summary: { type: 'string' },
+      target_files: { type: 'array', items: { type: 'string' } },
+      do_not_touch: { type: 'array', items: { type: 'string' } },
+      risk: { type: 'string', enum: ['green', 'amber', 'red'] },
+      ready_prompt: { type: 'string' },
+    },
+    required: ['is_build', 'title', 'summary', 'ready_prompt'],
+  };
   const convo = history.map((m) => `${m.role === 'user' ? 'User' : 'BuildBot'}: ${m.content}`).join('\n');
   const system = `You scope change requests for the Legenex app so they can be handed to a controlled build channel (Claude via the connector, the builder, or Claude Code). You NEVER execute changes yourself. If the user's message is actually an analytics or data question rather than a request to change the app, set is_build=false and leave the other fields empty.\n\nBake these conventions into ready_prompt so it is safe to run:\n- One concern per change, with an explicit do-not-touch list.\n- Follow DESIGN-SYSTEM.md: semantic tokens only, never raw hex/hsl or raw palette utilities.\n- RED surfaces that need explicit human approval and must not be edited casually: processLead, the four LeadByteConnectors and their enabled states, Conversion Events, distribution_mode (only via distributionSetMode), credentials, live endpoints, billing records, buyer pricing and state coverage.\n- Additive schema only. No em dashes anywhere. Checkpoint before any schema or destructive change. Verify with the design-token gate and lint.\n\nready_prompt must be a complete, copy-pasteable instruction a builder can act on: the target area, the exact change, the do-not-touch list, and the verification step. Set risk=red if the request touches any RED surface, amber if it touches shared or data surfaces, green for isolated UI or docs.`;
-  const prompt = `Conversation so far:\n${convo || '(none)'}\n\nUser request: ${question}\n\nReturn a JSON object only, with keys: is_build (boolean), title (string), summary (string), target_files (array of strings), do_not_touch (array of strings), risk (one of "green", "amber", "red"), ready_prompt (string). Required: is_build, title, summary, ready_prompt.`;
-  return await callJson({ system, prompt, temperature: 0.2 });
+  const prompt = `Conversation so far:\n${convo || '(none)'}\n\nUser request: ${question}\n\nReturn JSON only.`;
+  return await callModel({ apiKey, system, prompt, jsonSchema: schema, temperature: 0.2 });
 }
 
 // Extract learnable facts from a conversation exchange. Returns up to 3 facts.
-async function extractMemories(question, answer, existingMemory) {
+async function extractMemories(apiKey, question, answer, existingMemory) {
+  const schema = {
+    type: 'object',
+    properties: {
+      memories: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            fact: { type: 'string', description: 'A concise, durable fact or preference learned from this exchange' },
+            category: { type: 'string', enum: ['preference', 'business_rule', 'data_insight', 'definition', 'other'] },
+          },
+          required: ['fact', 'category'],
+        },
+      },
+    },
+    required: ['memories'],
+  };
   const existingStr = existingMemory.slice(0, 20).map(m => `- ${m.fact}`).join('\n');
   const system = `You extract durable, reusable facts and preferences from a conversation between a user and an analytics assistant. Only extract facts that will be useful in future conversations: business rules, user preferences, recurring data insights, or definitions the user provided. Do NOT extract transient questions or answers. Do NOT duplicate facts already known.\n\nKnown memories:\n${existingStr || '(none)'}`;
-  const prompt = `User asked: ${question}\nAssistant answered: ${answer}\n\nExtract up to 3 new memories. Return a JSON object only, of the form { "memories": [ { "fact": string, "category": one of "preference" | "business_rule" | "data_insight" | "definition" | "other" } ] }.`;
+  const prompt = `User asked: ${question}\nAssistant answered: ${answer}\n\nExtract up to 3 new memories. Return JSON only.`;
   try {
-    const result = await callJson({ system, prompt, temperature: 0.2 });
+    const result = await callModel({ apiKey, system, prompt, jsonSchema: schema, temperature: 0.2 });
     return Array.isArray(result?.memories) ? result.memories.filter(m => m.fact && m.fact.length > 5).slice(0, 3) : [];
   } catch { return []; }
 }
 
 export default async function dataBot(ctx) {
-  const user = requireUser(ctx);
-  const db = ctx.db;
   try {
+    const user = requireUser(ctx);
+    const db = ctx.db;
+
     const body = ctx.body || {};
     const question = (body.question || '').toString().trim();
     const history = Array.isArray(body.history) ? body.history.slice(-8) : [];
@@ -61,6 +86,8 @@ export default async function dataBot(ctx) {
 
     const isAdmin = user.role === 'admin' || user.role === 'owner';
     const mode = body.mode === 'build' ? 'build' : 'data';
+
+    const openaiApiKey = ctx.config?.integrations?.openaiApiKey || ctx.env?.OPENAI_API_KEY || '';
 
     // Resolve DataBot/BuildBot access from the permission model: explicit perms
     // when the user has any stored, otherwise the role default. Owner always
@@ -111,34 +138,33 @@ export default async function dataBot(ctx) {
     const canBuild = !isPartner && (buildAllow === null ? !!perms.buildbot : buildAllow);
 
     // Friendly, actionable message instead of a silent 500 when the key is unset.
-    const llmKey = ctx.config?.integrations?.openaiApiKey || ctx.env?.OPENAI_API_KEY;
-    if (!llmKey) {
-      return { type: 'answer', answer: 'This assistant is not configured yet: the language model API key is missing. An admin can add it in the app secrets, then I can answer.' };
+    if (!openaiApiKey) {
+      return ctx.json({ type: 'answer', answer: 'This assistant is not configured yet: the OPENAI_API_KEY secret is missing. An admin can add it in the app secrets, then I can answer.' });
     }
 
     // BuildBot: draft a single-concern build request for the controlled channel.
     if (mode === 'build') {
       if (!canBuild) {
-        return {
+        return ctx.json({
           type: 'answer',
           answer: buildAllow === false
             ? 'BuildBot is restricted to specific roles or people, and your account is not on that list. An admin can change this in Settings > ChatBot > BuildBot.'
             : 'BuildBot is not enabled for your account. An admin can grant the BuildBot permission in Users and Roles.',
-        };
+        });
       }
       try {
-        const draft = await draftBuildRequest(question, history);
-        if (draft && draft.is_build) return { type: 'build_request', build_request: draft };
+        const draft = await draftBuildRequest(openaiApiKey, question, history);
+        if (draft && draft.is_build) return ctx.json({ type: 'build_request', build_request: draft });
       } catch (_) { /* not a build, or draft failed: fall through to an answer */ }
     }
 
     if (!canData) {
-      return {
+      return ctx.json({
         type: 'answer',
         answer: dataAllow === false
           ? 'DataBot is restricted to specific roles or people, and your account is not on that list. An admin can change this in Settings > ChatBot > DataBot.'
           : 'DataBot access is turned off for your account. An admin can enable it in Users and Roles.',
-      };
+      });
     }
 
     // --- Load conversation history and memories for context ---
@@ -175,10 +201,6 @@ export default async function dataBot(ctx) {
     const statusMap = (rows) => { const m = {}; for (const l of rows) m[l.final_status] = (m[l.final_status] || 0) + 1; return m; };
 
     // ---- Accurate, date-aware lead facts -------------------------------------
-    //
-    // The bot used to be handed a 500-row slice and 25 recent rows with no date
-    // buckets at all, then asked questions like "how many sold yesterday". It
-    // could not know, so it answered zero while the Leads page showed 15.
     //
     // Counting is done here, not by the model. Three rules matter and all three
     // match what the UI does:
@@ -234,6 +256,85 @@ export default async function dataBot(ctx) {
       return out;
     };
 
+    // ---- Dimension resolvers -------------------------------------------------
+    //
+    // Supplier, buyer, source and vertical all live in the mapped_fields bag
+    // rather than as lead columns (only supplier_name is a real column).
+    const dimSupplier = (l) => {
+      const bag = parseBag(l);
+      return String(l?.supplier_name || bag.supplier_name || bag.sid || '').trim() || '(unattributed)';
+    };
+    const dimSupplierId = (l) => {
+      const bag = parseBag(l);
+      return String(bag.sid || bag.ssid || '').trim() || null;
+    };
+    const dimBuyer = (l) => {
+      const bag = parseBag(l);
+      return String(bag.buyer_name || bag.buyer || l?.buyer_name || '').trim() || '(unsold or unassigned)';
+    };
+    const dimBuyerId = (l) => {
+      const bag = parseBag(l);
+      return String(bag.buyer_id || bag.buyer || '').trim() || null;
+    };
+    const dimSource = (l) => {
+      const bag = parseBag(l);
+      return String(bag.utm_source || bag.source || bag['Supplier Source'] || bag.lead_source || '').trim() || '(unknown source)';
+    };
+    const dimVertical = (l) => {
+      const bag = parseBag(l);
+      return String(bag.vertical || bag.lead_vertical || '').trim() || '(unset)';
+    };
+    const dimState = (l) => {
+      const bag = parseBag(l);
+      return String(l?.state || bag.accident_state || bag.geoip_state || '').trim().toUpperCase() || '(unknown)';
+    };
+    const leadCostOf = (l) => {
+      const bag = parseBag(l);
+      const v = bag.cpl ?? bag.cost ?? null;
+      const n = Number(v);
+      return Number.isFinite(n) ? n : 0;
+    };
+
+    // Full economics for a set of leads. Same definitions as the dashboard:
+    // CPL is cost per SOLD lead, conversion is sold over total received.
+    const econ = (rows) => {
+      const byStatus = statusMap(rows);
+      const sold = byStatus.Sold || 0;
+      const revenue = Math.round(sum(rows, (l) => l.revenue));
+      const cost = Math.round(sum(rows, leadCostOf));
+      return {
+        total: rows.length,
+        sold,
+        unsold: byStatus.Unsold || 0,
+        disqualified: byStatus.Disqualified || 0,
+        returned: byStatus.Returned || 0,
+        rejected: byStatus.Rejected || 0,
+        duplicate: byStatus.Duplicate || 0,
+        revenue,
+        lead_cost: cost,
+        profit: revenue - cost,
+        margin_pct: revenue > 0 ? Math.round(((revenue - cost) / revenue) * 1000) / 10 : 0,
+        cpl: sold > 0 ? Math.round((cost / sold) * 100) / 100 : 0,
+        rev_per_sold: sold > 0 ? Math.round((revenue / sold) * 100) / 100 : 0,
+        conv_rate_pct: rows.length > 0 ? Math.round((sold / rows.length) * 1000) / 10 : 0,
+      };
+    };
+
+    // Group a set of leads by a dimension and return economics per key, largest
+    // first, capped so the payload stays a reasonable size.
+    const groupBy = (rows, keyFn, limit = 25) => {
+      const buckets = {};
+      for (const l of rows) {
+        const k = keyFn(l);
+        if (!buckets[k]) buckets[k] = [];
+        buckets[k].push(l);
+      }
+      return Object.entries(buckets)
+        .sort((a, b) => b[1].length - a[1].length)
+        .slice(0, limit)
+        .reduce((acc, [k, v]) => { acc[k] = econ(v); return acc; }, {});
+    };
+
     // Counts by status for an arbitrary set of day keys.
     const countsForDays = (allLeads, dayKeys) => {
       const want = new Set(dayKeys);
@@ -268,19 +369,69 @@ export default async function dataBot(ctx) {
       const perDay = {};
       for (const k of last30) perDay[k] = countsForDays(allLeads, [k]);
 
+      // Rows for a period, so dimensional breakdowns can be cut per window.
+      const rowsFor = (keys) => {
+        const want = new Set(keys);
+        return allLeads.filter((l) => { const k = eventDayKey(l); return k && want.has(k); });
+      };
+      const yRows = rowsFor([yesterdayKey]);
+      const tRows = rowsFor([todayKey]);
+      const w7Rows = rowsFor(last7);
+      const mRows = rowsFor(thisMonthKeys);
+      const lmRows = rowsFor(lastMonthKeys);
+
+      // Every dimension, cut by every period that gets asked about. This is
+      // what makes "how many of yesterday's were LeadFlow" answerable.
+      const cuts = (rows) => ({
+        by_supplier: groupBy(rows, dimSupplier),
+        by_buyer: groupBy(rows, dimBuyer),
+        by_source: groupBy(rows, dimSource),
+        by_vertical: groupBy(rows, dimVertical),
+        by_state: groupBy(rows, dimState, 15),
+      });
+
+      // Name <-> code lookups so a question can use either form.
+      const supplierIdentity = {};
+      const buyerIdentity = {};
+      for (const l of allLeads) {
+        const sName = dimSupplier(l); const sId = dimSupplierId(l);
+        if (sId && !supplierIdentity[sName]) supplierIdentity[sName] = sId;
+        const bName = dimBuyer(l); const bId = dimBuyerId(l);
+        if (bId && !buyerIdentity[bName]) buyerIdentity[bName] = bId;
+      }
+
       return {
         _note: 'Counts are authoritative. They exclude archived leads and bucket by the supplier event timestamp in America/Regina, matching the dashboard. Use these numbers directly; do not recount from recent_leads.',
+        _how_to_read: 'Each period has overall figures AND breakdowns. For "how many of yesterday were LeadFlow", read yesterday_breakdown.by_supplier["LeadFlow"]. Every breakdown entry carries total, sold, unsold, disqualified, returned, revenue, lead_cost, profit, margin_pct, cpl (cost per SOLD lead), rev_per_sold and conv_rate_pct. supplier_identity and buyer_identity map names to their codes so either can be used.',
         timezone: APP_TZ,
         today_date: todayKey,
         yesterday_date: yesterdayKey,
+
+        supplier_identity: supplierIdentity,
+        buyer_identity: buyerIdentity,
+
         all_time_total: allLeads.length,
         all_time_by_status: statusMap(allLeads),
+        all_time: econ(allLeads),
+        all_time_breakdown: cuts(allLeads),
+
         today: countsForDays(allLeads, [todayKey]),
+        today_breakdown: cuts(tRows),
+
         yesterday: countsForDays(allLeads, [yesterdayKey]),
+        yesterday_breakdown: cuts(yRows),
+
         last_7_days: countsForDays(allLeads, last7),
+        last_7_days_breakdown: cuts(w7Rows),
+
         last_30_days: countsForDays(allLeads, last30),
+
         this_month: countsForDays(allLeads, thisMonthKeys),
+        this_month_breakdown: cuts(mRows),
+
         last_month: countsForDays(allLeads, lastMonthKeys),
+        last_month_breakdown: cuts(lmRows),
+
         per_day_last_30: perDay,
       };
     };
@@ -385,6 +536,7 @@ export default async function dataBot(ctx) {
       const configs = await db.entities.BotConfig.filter({ bot_key: botKey }).catch(() => []);
       if (configs.length) botConfig = configs[0];
     } catch {}
+    const botModel = botConfig.model || 'gpt-4o-mini';
     const botTemp = botConfig.temperature ?? 0.4;
     const botInstructions = botConfig.instructions || '';
     const botName = botConfig.name || (mode === 'build' ? 'BuildBot' : 'DataBot');
@@ -392,6 +544,10 @@ export default async function dataBot(ctx) {
 Answer the user's question using ONLY the data and knowledge base below. Be concise, specific, and use numbers from the data. If the data does not contain the answer, say so plainly.
 ${scopeNote ? `SCOPE (strict): ${scopeNote}\n` : ''}
 COUNTING LEADS: when the question involves a date or period (today, yesterday, this week, this month, a named day), read the answer from lead_facts. It is pre-computed and authoritative: it excludes archived duplicates, buckets by the supplier's own event timestamp rather than the row's created_date, and uses the America/Regina operating timezone. lead_facts.yesterday.sold is the number of leads sold yesterday. lead_facts.per_day_last_30 is keyed by date for single-day questions. NEVER count rows in recent_leads to answer these: it is a 25-row sample for context only, and answering from it is how this assistant previously reported zero sold leads on a day with fifteen. If lead_facts does not cover the period asked about, say which periods you do have rather than estimating.
+
+SUPPLIERS, BUYERS, SOURCES: every period in lead_facts has a matching *_breakdown with by_supplier, by_buyer, by_source, by_vertical and by_state. "How many of yesterday's leads were LeadFlow" is lead_facts.yesterday_breakdown.by_supplier["LeadFlow"]. Each entry carries total, sold, unsold, disqualified, returned, revenue, lead_cost, profit, margin_pct, cpl (cost per SOLD lead), rev_per_sold and conv_rate_pct, so questions about profitability, margin or conversion by supplier or buyer are answerable directly. supplier_identity and buyer_identity map names to codes (LEADFLOW, INBNDS, LGNX, AG1, LF3, LFWC5 and so on), so match on either and say which you used. Match names case-insensitively and tolerate close variants: "leadflow", "LeadFlow" and "LEADFLOW" are the same supplier. Only say the data does not specify after you have actually checked the relevant breakdown and the key genuinely is not there; if it is not, list the keys that ARE present so the user can see the real names.
+
+BEING USEFUL: you are expected to know this business better than the person asking. When a question has an obvious follow-on, answer it too in one short line: if a supplier's conv_rate_pct is well below the others, say so; if margin_pct is negative, lead with that. When asked how to improve profit, reason from the actual numbers present (which supplier has the worst cpl against its rev_per_sold, which state or source converts worst, where returns concentrate) and name the specific supplier, buyer or state rather than giving generic advice. Never invent a number that is not in the data.
 When asked where a figure comes from, trace it through any ad_spend breakdowns present and name the date, supplier and account; a number that does not match a total may match a single day. If ad_spend_date_range shows the latest date is well before today, say the spend looks stale and give that date.
 
 === LEARNED MEMORIES (facts you've learned from past conversations) ===
@@ -412,7 +568,7 @@ ${convo || '(none)'}
 User: ${question}
 ${botName}:`;
 
-    const answer = await callText({ prompt, temperature: botTemp, system: botInstructions || undefined });
+    const answer = await callModel({ apiKey: openaiApiKey, prompt, model: botModel, temperature: botTemp, system: botInstructions || undefined });
 
     const answerStr = typeof answer === 'string' ? answer : JSON.stringify(answer);
 
@@ -458,7 +614,7 @@ ${botName}:`;
       }
 
       // Extract and persist memories from this exchange (best-effort)
-      const newMemories = await extractMemories(question, answerStr, memories);
+      const newMemories = await extractMemories(openaiApiKey, question, answerStr, memories);
       for (const mem of newMemories) {
         await db.entities.ChatMemory.create({
           user_id: user.id,
@@ -470,7 +626,7 @@ ${botName}:`;
       }
     } catch { /* conversation persistence is best-effort */ }
 
-    return { type: 'answer', answer: answerStr, conversation_id: conversationId };
+    return ctx.json({ type: 'answer', answer: answerStr, conversation_id: conversationId });
   } catch (error) {
     if (error instanceof HttpError) throw error;
     return ctx.json({ error: error.message }, 500);
