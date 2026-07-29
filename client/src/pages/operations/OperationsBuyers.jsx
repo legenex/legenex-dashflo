@@ -22,6 +22,7 @@ import { Plus, RefreshCw } from 'lucide-react';
 import { computeBlastRadius } from '@/components/operations/buyers/buyerListModel';
 import { useRecomputeCoverage } from '@/components/operations/buyers/useRecomputeCoverage';
 import RecomputingIndicator from '@/components/operations/buyers/RecomputingIndicator';
+import AutoCreatedReviewBanner from '@/components/operations/AutoCreatedReviewBanner';
 import {
   BUYER_AVAILABLE_COLUMNS, loadBuyerColumnConfig, saveBuyerColumnConfig, getBuyerColumnDef,
 } from '@/components/operations/buyers/buyerColumns';
@@ -301,6 +302,8 @@ export default function OperationsBuyers() {
           <Plus className="w-4 h-4" /> Create Buyer
         </Button>
       </SectionHeader>
+
+      <AutoCreatedReviewBanner kind="buyer" />
 
       {buyers.length === 0 ? (
         <BuyersEmptyState onCreate={() => setCreateOpen(true)} />

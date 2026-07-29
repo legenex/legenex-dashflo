@@ -16,6 +16,16 @@ function getFromMapped(lead, keys) {
   return null;
 }
 
+// Prefer a real Lead column, then fall back to the mapped_fields bag. Outcome
+// fields (buyer, status, revenue) are written to the column, so reading the bag
+// alone showed a resold lead's PREVIOUS buyer while revenue showed the new one.
+function preferColumn(lead, columns, mappedKeys) {
+  for (const c of columns) {
+    if (lead[c] != null && lead[c] !== '') return lead[c];
+  }
+  return getFromMapped(lead, mappedKeys);
+}
+
 // Built-in system columns. Order here is only the "available" order; the
 // table's actual column order is driven by the persisted per-view config.
 export const SYSTEM_COLUMNS = [
@@ -28,11 +38,11 @@ export const SYSTEM_COLUMNS = [
   { key: 'vertical', header: 'Vertical', accessor: (l) => getFromMapped(l, ['vertical']) || '-' },
   { key: 'leadType', header: 'Lead Type', accessor: (l) => getFromMapped(l, ['lead_type']) || '-', special: 'leadType' },
   { key: 'finalStatus', header: 'Status', accessor: (l) => l.final_status || '-', special: 'status' },
-  { key: 'leadStatus', header: 'Lead Status', accessor: (l) => getFromMapped(l, ['lead_status']) || '-', special: 'leadStatus' },
+  { key: 'leadStatus', header: 'Lead Status', accessor: (l) => preferColumn(l, ['final_status'], ['lead_status']) || '-', special: 'leadStatus' },
   { key: 'revenue', header: 'Revenue', accessor: (l) => `$${Number(l.revenue || 0).toFixed(2)}`, className: 'font-mono text-[12px] status-sold' },
   { key: 'state', header: 'State', accessor: (l) => getFromMapped(l, ['accident_state', 'state', 'st', 'region', 'state_code']) || '-' },
   { key: 'supplier', header: 'Supplier', accessor: (l) => l.supplier_name || '-' },
-  { key: 'buyer', header: 'Buyer', accessor: (l) => getFromMapped(l, ['buyer', 'buyer_id', 'buyer_name']) || '' },
+  { key: 'buyer', header: 'Buyer', accessor: (l) => preferColumn(l, ['buyer_id', 'buyer_name'], ['buyer', 'buyer_id', 'buyer_name']) || '' },
   { key: 'email', header: 'Email', accessor: (l) => l.email || '-' },
   { key: 'verification', header: 'Verification', accessor: (l) => {
     const pv = getFromMapped(l, ['phone_verified']);

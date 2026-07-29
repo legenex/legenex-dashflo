@@ -8,6 +8,7 @@ import { toast } from 'sonner';
 import { Plus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import SectionHeader from '@/components/shared/SectionHeader';
+import AutoCreatedReviewBanner from '@/components/operations/AutoCreatedReviewBanner';
 import RefreshButton from '@/components/shared/RefreshButton';
 import ColumnManager from '@/components/leads/ColumnManager';
 import { PulseDot } from '@/components/settings/settingsUi';
@@ -240,6 +241,8 @@ export default function OperationsSuppliers() {
           <Plus className="w-4 h-4" /> Create Supplier
         </Button>
       </SectionHeader>
+
+      <AutoCreatedReviewBanner kind="supplier" />
 
       {suppliers.length === 0 ? (
         <SuppliersEmptyState onCreate={() => setCreateOpen(true)} />

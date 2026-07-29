@@ -118,6 +118,11 @@
       "type": "string",
       "description": "JSON array of Campaign record ids assigned to this supplier"
     },
+    "auto_created": {
+      "type": "boolean",
+      "default": false,
+      "description": "Created automatically from an inbound webhook sid that matched no supplier. Awaits operator review in Operations, Suppliers."
+    },
     "active": {
       "type": "boolean",
       "default": true

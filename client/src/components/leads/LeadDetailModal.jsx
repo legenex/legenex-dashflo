@@ -42,6 +42,14 @@ const DETAIL_FIELDS = [
     if (!inst || Number.isNaN(inst.getTime())) return null;
     return formatInTimeZone(inst, APP_TZ, 'MMM d, yyyy HH:mm');
   } },
+  { key: 'last_updated', label: 'Last Updated', value: (lead, m) => {
+    const raw = lead.leadbyte_outcome_at || ci(m, 'last_outcome_at') || lead.updated_date;
+    if (!raw) return null;
+    const s = String(raw);
+    const d = new Date(/(Z|[+-]\d{2}:?\d{2})$/.test(s) ? s : `${s}Z`);
+    if (Number.isNaN(d.getTime())) return null;
+    return formatInTimeZone(d, APP_TZ, 'MMM d, yyyy HH:mm');
+  } },
   { key: 'name', label: 'Name', value: (lead) => `${lead.first_name || ''} ${lead.last_name || ''}`.trim() || null },
   { key: 'email', label: 'Email', value: (lead) => lead.email },
   { key: 'mobile', label: 'Mobile', value: (lead) => lead.mobile },
@@ -50,13 +58,15 @@ const DETAIL_FIELDS = [
   { key: 'vertical', label: 'Vertical', value: (lead, m) => lead.lead_vertical || ci(m, 'vertical') },
   { key: 'ip_address', label: 'Ip Address', value: (lead, m) => ci(m, 'ip_address') },
   { key: 'lead_type', label: 'Lead Type', value: (lead, m) => ci(m, 'lead_type') },
-  { key: 'lead_status', label: 'Lead Status', value: (lead, m) => ci(m, 'lead_status') || lead.final_status },
+  // Column first, then the bag. The bag holds what the supplier last reported and
+  // goes stale on a resale, which showed Lead Status Sold under a Returned pill.
+  { key: 'lead_status', label: 'Lead Status', value: (lead, m) => lead.final_status || ci(m, 'lead_status') },
   { key: 'revenue', label: 'Revenue', value: (lead) => `$${Number(lead.revenue || 0).toFixed(2)}` },
   { key: 'buyer', label: 'Buyer', value: (lead, m) => lead.buyer_name || ci(m, 'buyer_name') || ci(m, 'buyer') },
   { key: 'buyer_id', label: 'Buyer ID', value: (lead, m) => lead.buyer_id || ci(m, 'buyer_id') },
   { key: 'buyer_feedback', label: 'Buyer Feedback', value: (lead, m) => lead.buyer_feedback || ci(m, 'buyer_feedback') },
   { key: 'returned', label: 'Returned', value: (lead, m) => (lead.buyer_returned === true ? 'Yes' : ci(m, 'returned') || 'No') },
-  { key: 'returned_reason', label: 'Returned Reason', value: (lead, m) => lead.buyer_return_reason || ci(m, 'returned_reason') },
+  { key: 'returned_reason', label: 'Returned Reason', value: (lead, m) => lead.buyer_return_reason || ci(m, 'returned_reason') || ci(m, 'return_reason') },
   { key: 'supplier', label: 'Supplier', value: (lead) => lead.supplier_name },
   { key: 'supplier_subid', label: 'Supplier SubID', value: (lead, m) => ci(m, 'ssid') },
   { key: 'supplier_source', label: 'Supplier Source', value: (lead, m) => ci(m, 'Supplier Source') || ci(m, 'source') || ci(m, 'utm_source') },
@@ -75,7 +85,8 @@ const CONSUMED_MAPPED_KEYS = new Set([
   // everything a DETAIL_FIELDS entry pulls from mapped_fields
   'timestamp', 'vertical', 'zip', 'geoip_zip', 'accident_state', 'geoip_state',
   'state', 'ip_address', 'lead_type', 'lead_status', 'buyer', 'buyer_name',
-  'buyer_id', 'buyer_feedback', 'returned', 'returned_reason', 'ssid',
+  'buyer_id', 'buyer_feedback', 'returned', 'returned_reason', 'return_reason',
+  'returnreason', 'last_outcome_at', 'last_outcome_status', 'ssid',
   'supplier source', 'source', 'utm_source', 'supplier_brand', 'optin_url',
   'trustedform_url', 'revenue',
 ]);
