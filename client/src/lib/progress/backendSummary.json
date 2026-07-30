@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-07-30T13:03:30.180Z",
+  "generated_at": "2026-07-30T13:42:29.888Z",
   "generator": "scripts/generate-backend-summary.mjs",
   "counts": {
     "functions": 89,
@@ -292,7 +292,7 @@
     {
       "name": "dataBot",
       "file": "base44/functions/dataBot/entry.ts",
-      "lines": 945,
+      "lines": 1065,
       "headline": "DataBot: answers questions about the app's own data + a curated Knowledge Base.",
       "detail": [
         "Uses OpenAI (OPENAI_API_KEY secret).",
@@ -327,8 +327,13 @@
       "red_surfaces": [
         "processLead",
         "leadbyte_connectors",
+        "conversion_events",
         "distribution_mode",
-        "credentials"
+        "credentials",
+        "billing",
+        "buyer_pricing",
+        "trustedform",
+        "portal_scoping"
       ]
     },
     {

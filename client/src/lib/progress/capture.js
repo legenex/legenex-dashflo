@@ -129,7 +129,9 @@ const canvasToFile = (canvas, name) => new Promise((resolve, reject) => {
 });
 
 // Rasterise a DOM element. Returns { canvas, maskCount }.
-export async function rasterise(target, { mask = true } = {}) {
+// `width` forces the layout width, which is what makes an offscreen tablet or
+// mobile capture possible from a desktop browser.
+export async function rasterise(target, { mask = true, width } = {}) {
   let maskCount = 0;
   const canvas = await html2canvas(target, {
     backgroundColor: getComputedStyle(document.body).backgroundColor || null,
@@ -138,7 +140,8 @@ export async function rasterise(target, { mask = true } = {}) {
     // Cap the pixel ratio: a retina capture of a tall page is enormous and the
     // extra detail buys nothing for review.
     scale: Math.min(window.devicePixelRatio || 1, 1.5),
-    windowWidth: document.documentElement.clientWidth,
+    windowWidth: width || document.documentElement.clientWidth,
+    width: width || undefined,
     onclone: (clonedDoc) => {
       if (mask) {
         try { maskCount = maskClone(clonedDoc); } catch { maskCount = -1; }
@@ -150,6 +153,100 @@ export async function rasterise(target, { mask = true } = {}) {
     },
   });
   return { canvas, maskCount };
+}
+
+/**
+ * Store a capture of a specific element at an explicit viewport and width.
+ *
+ * Used by the offscreen capturer, where the container width is chosen rather
+ * than inherited from the window, so desktop, tablet and mobile can all be
+ * captured from one browser at any size.
+ *
+ * Always resolves to a PageSnapshot. A failure is recorded as a failed capture
+ * rather than thrown away, so a page with no usable screenshot reads as failed
+ * instead of as a page nobody looked at.
+ */
+export async function capturePageElement({
+  pageKey,
+  route,
+  element,
+  viewport,
+  width,
+  mask = true,
+  role,
+  capturedBy,
+  notes,
+  forcedError,
+}) {
+  const base = {
+    page_key: pageKey,
+    route,
+    viewport,
+    width,
+    masked: mask,
+    theme: document.documentElement.classList.contains('light') ? 'light' : 'dark',
+    role_used: role || null,
+    app_commit: manifest.app_commit || null,
+    captured_by: capturedBy || null,
+    captured_at: new Date().toISOString(),
+    notes: notes || null,
+  };
+
+  if (forcedError || !element) {
+    return api.entities.PageSnapshot.create({
+      ...base,
+      height: 0,
+      capture_status: 'failed',
+      failure_reason: String(forcedError || 'No element to capture').slice(0, 500),
+      mask_count: 0,
+      superseded: false,
+    });
+  }
+
+  try {
+    const { canvas, maskCount } = await rasterise(element, { mask, width });
+    if (!canvas || canvas.width === 0 || canvas.height === 0) {
+      throw new Error('Rasteriser returned an empty canvas');
+    }
+    const file = await canvasToFile(canvas, `${pageKey}-${viewport}-${Date.now()}.png`);
+    const { file_url: imageUrl } = await api.integrations.Core.UploadFile({ file });
+
+    await supersedePrior(pageKey, viewport);
+
+    return api.entities.PageSnapshot.create({
+      ...base,
+      height: canvas.height,
+      image_url: imageUrl,
+      capture_status: 'ok',
+      mask_count: maskCount,
+      superseded: false,
+    });
+  } catch (err) {
+    return api.entities.PageSnapshot.create({
+      ...base,
+      height: 0,
+      capture_status: 'failed',
+      failure_reason: String(err?.message || err).slice(0, 500),
+      mask_count: 0,
+      superseded: false,
+    });
+  }
+}
+
+// Older captures for the same page and viewport stop being the current one.
+async function supersedePrior(pageKey, viewport) {
+  try {
+    const prior = (await api.entities.PageSnapshot.filter({
+      page_key: pageKey,
+      viewport,
+      superseded: false,
+    })) || [];
+    for (const p of prior) {
+      await api.entities.PageSnapshot.update(p.id, { superseded: true });
+    }
+  } catch {
+    // Superseding is housekeeping. A failure here must not lose the capture.
+  }
 }
 
 /**
@@ -191,19 +288,7 @@ export async function capturePage({
     const file = await canvasToFile(canvas, `${pageKey}-${viewport}-${Date.now()}.png`);
     const { file_url: imageUrl } = await api.integrations.Core.UploadFile({ file });
 
-    // Older captures for the same page and viewport stop being the current one.
-    try {
-      const prior = (await api.entities.PageSnapshot.filter({
-        page_key: pageKey,
-        viewport,
-        superseded: false,
-      })) || [];
-      for (const p of prior) {
-        await api.entities.PageSnapshot.update(p.id, { superseded: true });
-      }
-    } catch {
-      // Superseding is housekeeping. A failure here must not lose the capture.
-    }
+    await supersedePrior(pageKey, viewport);
 
     return api.entities.PageSnapshot.create({
       ...base,

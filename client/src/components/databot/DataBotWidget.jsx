@@ -5,7 +5,7 @@ import { dataBot } from '@/functions/dataBot';
 import { usePermissions } from '@/lib/AuthContext';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Bot, X, Send, Loader2, Copy, Hammer, ArrowLeft, MessageSquare } from 'lucide-react';
+import { Bot, X, Send, Loader2, Copy, Hammer, ArrowLeft, MessageSquare, ImagePlus } from 'lucide-react';
 import { toast } from 'sonner';
 import { verdictTagClass } from '@/lib/tagColors';
 import ReactMarkdown from 'react-markdown';
@@ -13,6 +13,26 @@ import ReactMarkdown from 'react-markdown';
 // Track the current conversation ID per bot mode so the backend can persist
 // messages into the right ChatConversation thread.
 const conversationIds = { data: null, build: null };
+
+// Screenshot attachments. The backend takes { media_type, data } with data
+// base64 encoded; preview is the full data URL and stays in the browser only.
+const MAX_IMAGES = 4;
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+const fileToImage = (file) => new Promise((resolve, reject) => {
+  const reader = new FileReader();
+  reader.onload = () => {
+    const res = String(reader.result || '');
+    const comma = res.indexOf(',');
+    resolve({
+      media_type: file.type || 'image/png',
+      data: comma >= 0 ? res.slice(comma + 1) : res,
+      preview: res,
+      name: file.name || 'screenshot',
+    });
+  };
+  reader.onerror = () => reject(new Error('Could not read that image'));
+  reader.readAsDataURL(file);
+});
 
 function BuildCard({ build }) {
   const copy = () => { navigator.clipboard.writeText(build.ready_prompt || ''); toast.success('Build request copied'); };
@@ -68,6 +88,7 @@ export default function DataBotWidget() {
   const [open, setOpen] = useState(false);
   const [activeBot, setActiveBot] = useState(null); // null = picker
   const [input, setInput] = useState('');
+  const [pending, setPending] = useState([]); // screenshots attached but not yet sent
   const [busy, setBusy] = useState(false);
   const [threads, setThreads] = useState({ data: [], build: [] });
   const { data: configs = [] } = useQuery({ queryKey: ['bot-configs'], queryFn: () => api.entities.BotConfig.list(), staleTime: 60000 });
@@ -78,6 +99,9 @@ export default function DataBotWidget() {
   threadsRef.current = threads;
   const busyRef = useRef(busy);
   busyRef.current = busy;
+  const pendingRef = useRef(pending);
+  pendingRef.current = pending;
+  const fileInputRef = useRef(null);
 
   const messages = activeBot ? threads[activeBot] : [];
   const cfg = activeBot ? (() => {
@@ -114,6 +138,35 @@ export default function DataBotWidget() {
     return () => window.removeEventListener('databot-open', handler);
   }, [showData, showBuild]);
 
+  const addFiles = async (fileList) => {
+    const files = Array.from(fileList || []).filter((f) => f.type?.startsWith('image/'));
+    if (!files.length) return;
+    const room = MAX_IMAGES - pendingRef.current.length;
+    if (room <= 0) { toast.error(`You can attach up to ${MAX_IMAGES} screenshots.`); return; }
+    const take = files.slice(0, room);
+    const ok = take.filter((f) => f.size <= MAX_IMAGE_BYTES);
+    if (ok.length < take.length) toast.error('Each image must be under 5MB.');
+    if (!ok.length) return;
+    try {
+      const loaded = await Promise.all(ok.map(fileToImage));
+      setPending((ps) => [...ps, ...loaded].slice(0, MAX_IMAGES));
+    } catch {
+      toast.error('Could not read that image.');
+    }
+  };
+
+  // Paste a screenshot anywhere while the panel is open, which is how people
+  // actually share a screen grab. The file picker is the explicit fallback.
+  useEffect(() => {
+    if (!open || !activeBot) return undefined;
+    const onPaste = (e) => {
+      const files = Array.from(e.clipboardData?.files || []).filter((f) => f.type?.startsWith('image/'));
+      if (files.length) { e.preventDefault(); addFiles(files); }
+    };
+    window.addEventListener('paste', onPaste);
+    return () => window.removeEventListener('paste', onPaste);
+  }, [open, activeBot]);
+
   if (!showData && !showBuild) return null;
 
   const openBot = (bot) => {
@@ -123,15 +176,25 @@ export default function DataBotWidget() {
 
   const sendToBot = async (bot, text) => {
     const question = (text ?? input).trim();
-    if (!question || busyRef.current || !bot) return;
+    const pics = pendingRef.current;
+    if ((!question && !pics.length) || busyRef.current || !bot) return;
     const current = threadsRef.current[bot] || [];
-    const next = [...current, { role: 'user', content: question }];
+    const next = [...current, { role: 'user', content: question, images: pics.map((p) => p.preview) }];
     setThreads((t) => ({ ...t, [bot]: next }));
-    if (bot === activeBot) setInput('');
+    if (bot === activeBot) { setInput(''); setPending([]); }
     setBusy(true);
     busyRef.current = true;
     try {
-      const res = await dataBot({ question, history: next.slice(-8), mode: bot, conversation_id: conversationIds[bot] });
+      // Previews are stripped from history: they are large data URLs and the
+      // backend only needs the images attached to THIS message.
+      const history = next.slice(-8).map(({ images: _drop, ...m }) => m);
+      const res = await dataBot({
+        question,
+        history,
+        mode: bot,
+        conversation_id: conversationIds[bot],
+        images: pics.map(({ media_type, data }) => ({ media_type, data })),
+      });
       const data = res?.data || {};
       if (data.conversation_id) conversationIds[bot] = data.conversation_id;
       const msg = (data.type === 'build_request' && data.build_request)
@@ -188,7 +251,16 @@ export default function DataBotWidget() {
                 {messages.map((m, i) => (
                   <div key={i} className={m.role === 'user' ? 'flex justify-end' : 'flex justify-start'}>
                     {m.role === 'user' ? (
-                      <div className="max-w-[85%] rounded-[12px] px-3 py-2 text-[13px] bg-primary text-primary-foreground">{m.content}</div>
+                      <div className="max-w-[85%] rounded-[12px] px-3 py-2 text-[13px] bg-primary text-primary-foreground">
+                        {Array.isArray(m.images) && m.images.length > 0 && (
+                          <div className="flex flex-wrap gap-1.5 mb-1.5">
+                            {m.images.map((src, k) => (
+                              <img key={k} src={src} alt="Attached screenshot" className="h-14 w-14 rounded-md object-cover border border-border" />
+                            ))}
+                          </div>
+                        )}
+                        {m.content}
+                      </div>
                     ) : m.type === 'build_request' ? (
                       <BuildCard build={m.build} />
                     ) : (
@@ -211,7 +283,41 @@ export default function DataBotWidget() {
               </div>
 
               <div className="p-3 border-t border-border bg-card">
+                {pending.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5 mb-2">
+                    {pending.map((p, k) => (
+                      <div key={k} className="relative">
+                        <img src={p.preview} alt={p.name} className="h-12 w-12 rounded-md object-cover border border-border" />
+                        <button
+                          onClick={() => setPending((ps) => ps.filter((_, j) => j !== k))}
+                          className="absolute -top-1.5 -right-1.5 h-4 w-4 rounded-full bg-popover border border-border text-muted-foreground hover:text-foreground flex items-center justify-center"
+                          aria-label="Remove attachment"
+                        >
+                          <X className="w-2.5 h-2.5" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
                 <div className="flex items-center gap-2">
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    className="hidden"
+                    onChange={(e) => { addFiles(e.target.files); e.target.value = ''; }}
+                  />
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={busy || pending.length >= MAX_IMAGES}
+                    className="shrink-0 h-9 w-9 text-muted-foreground hover:text-foreground hover:bg-accent"
+                    aria-label="Attach a screenshot"
+                  >
+                    <ImagePlus className="w-4 h-4" />
+                  </Button>
                   <Input
                     value={input}
                     onChange={(e) => setInput(e.target.value)}
@@ -220,8 +326,13 @@ export default function DataBotWidget() {
                     className="bg-background text-[13px]"
                     disabled={busy}
                   />
-                  <Button size="icon" onClick={() => send()} disabled={busy || !input.trim()} className="shrink-0 h-9 w-9"><Send className="w-4 h-4" /></Button>
+                  <Button size="icon" onClick={() => send()} disabled={busy || (!input.trim() && pending.length === 0)} className="shrink-0 h-9 w-9"><Send className="w-4 h-4" /></Button>
                 </div>
+                <p className="mt-1.5 text-[10px] text-muted-foreground">
+                  {pending.length > 0
+                    ? `${pending.length} of ${MAX_IMAGES} screenshots attached.`
+                    : 'Paste or attach a screenshot to ask about what you are looking at.'}
+                </p>
               </div>
             </>
           )}

@@ -1,7 +1,7 @@
-import { requireUser, HttpError } from './_runtime.js';
-import { callLLM } from '../integrations/llm.js';
+import { requireUser } from './_runtime.js';
 
 // DataBot: answers questions about the app's own data + a curated Knowledge Base.
+// Uses OpenAI (OPENAI_API_KEY secret).
 //
 // ARCHITECTURE (rewritten 30 July 2026)
 // -------------------------------------
@@ -19,48 +19,68 @@ import { callLLM } from '../integrations/llm.js';
 //   3. NARRATE a second model call sees the question plus a small result object
 //              (typically well under 4k characters) and writes the answer.
 //
+// Entity resolution is a real index: every supplier and buyer is registered
+// under all of its aliases (name, sid, ssid, buyer_code, buyer id) and matched
+// on word boundaries, so "Inbounds" no longer fires on the word "inbound".
+//
 // Counting rules, unchanged and matching the dashboard:
 //   1. Archived leads are excluded. They are retired duplicates.
 //   2. The event date is the supplier's own timestamp where present, NOT
 //      created_date, which is only when the row was written.
 //   3. Days bucket in America/Regina, the operating timezone.
 
-const stripFences = (s) => {
-  const t = String(s ?? '').trim();
-  const fence = t.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
-  return fence ? fence[1].trim() : t;
-};
-
-// Tolerant JSON parse for model output that was asked to return JSON only.
-function parseJsonLoose(text) {
-  const t = stripFences(text);
-  try { return JSON.parse(t); } catch { /* try harder below */ }
-  const start = t.indexOf('{');
-  const end = t.lastIndexOf('}');
-  if (start !== -1 && end > start) {
-    try { return JSON.parse(t.slice(start, end + 1)); } catch { /* give up */ }
+async function callOpenAI({ apiKey, prompt, system, model = 'gpt-4o-mini', temperature = 0.4, jsonSchema = null, images = [] }) {
+  if (!apiKey) throw new Error('OPENAI_API_KEY is not set');
+  const messages = [];
+  if (system) messages.push({ role: 'system', content: system });
+  // Attached screenshots ride along with the prompt as image parts. The vision
+  // models accept a data URL directly, so nothing is uploaded anywhere.
+  const pics = Array.isArray(images) ? images.filter((i) => i && i.data).slice(0, 4) : [];
+  if (pics.length) {
+    messages.push({
+      role: 'user',
+      content: [
+        { type: 'text', text: prompt },
+        ...pics.map((i) => ({
+          type: 'image_url',
+          image_url: { url: `data:${i.media_type || 'image/png'};base64,${i.data}`, detail: 'high' },
+        })),
+      ],
+    });
+  } else {
+    messages.push({ role: 'user', content: prompt });
   }
-  return null;
-}
-
-// Single model entry point. Structured calls pass a jsonSchema (used to signal
-// that a parsed object is wanted); the schema shape is enforced by the prompt
-// and the parse is tolerant, so a stray fence or preamble does not break it.
-async function callModel({ prompt, system, temperature = 0.4, jsonSchema = null }) {
-  const raw = await callLLM({ prompt, system: system || undefined, temperature });
-  const content = typeof raw === 'string'
-    ? raw
-    : (raw && (raw.content ?? raw.text)) ?? '';
+  const payload = { model, messages, temperature };
   if (jsonSchema) {
-    const parsed = parseJsonLoose(content);
-    return parsed != null ? parsed : content;
+    payload.response_format = { type: 'json_schema', json_schema: { name: 'response', strict: false, schema: jsonSchema } };
   }
+  const res = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(`OpenAI error ${res.status}: ${await res.text()}`);
+  const data = await res.json();
+  const content = data?.choices?.[0]?.message?.content ?? '';
+  if (jsonSchema) { try { return JSON.parse(content); } catch { return content; } }
   return content;
 }
 
+// A real inventory of the app, so target_files names things that exist instead
+// of being invented. Static and will drift, so the build channel confirms it.
+const APP_INVENTORY = `PAGES (src/pages/<Name>.jsx): ApiStatus, Apply, BuyerDetail, Campaigns, ConversionEvents, CustomCalculations, Deliveries, DistributionDashboard, ErrorLogs, Finances, ForgotPassword, Leads, LeadsRejections, LeadsView, Login, Notifications, Overview, PayloadTester, QueueRecovery, Register, Reports, ResetPassword, RouteGroups, RouteSimulator, Settings, SupplierDetail, Suppliers, ToolsDashboard, Verification
+
+COMPONENT FOLDERS (src/components/<folder>/): admanager, apply, calculations, campaigns, databot, distribution, docs, finances, layout, leads, operations, overview, portal, progress, reports, settings, shared, suppliers, supplierportal, tools, ui, verification
+
+BACKEND FUNCTIONS (server/src/functions/<name>.js): processLead, leads, leadbyteWebhook, webhook, distributionConfig, distributionSetMode, distributionSimulate, distributionShadowReport, distributionInsights, campaignDeliveryTest, operationsData, operatorData, portalData, supplierPortalData, overviewBriefing, adManagerInsights, reconInsights, generateBillingRun, syncMetaSpend, syncMercury, syncStripe, syncXero, syncGoogleSheets, auditRun, dataBot, recomputeStateStatus, nightlyStateStatusRecompute, dedupeLeads, bulkDeleteLeads, onboardBuyer, submitBuyerOnboarding, allocateBuyerCode, testLeadByte, testLeadByteConnector, sendPayloadTest, health, spec, validate
+
+SHARED LIBS: src/lib/fetchAll.js (pagination past the 500 row cap), src/lib/reportMetrics.js (analytics engine), src/lib/adManagerMetrics.js, src/lib/distribution/engine.js
+
+DOCS: DESIGN-SYSTEM.md, docs/`;
+
 // Scope a change request into a single-concern build prompt for the CONTROLLED
-// channel (Claude via connector, the app builder, or Claude Code). Never executes.
-async function draftBuildRequest(question, history) {
+// channel (Claude via connector, the builder, or Claude Code). Never executes.
+async function draftBuildRequest(question, history, images = [], apiKey) {
   const schema = {
     type: 'object',
     properties: {
@@ -75,13 +95,31 @@ async function draftBuildRequest(question, history) {
     required: ['is_build', 'title', 'summary', 'ready_prompt'],
   };
   const convo = history.map((m) => `${m.role === 'user' ? 'User' : 'BuildBot'}: ${m.content}`).join('\n');
-  const system = `You scope change requests for the Legenex app so they can be handed to a controlled build channel (Claude via the connector, the app builder, or Claude Code). You NEVER execute changes yourself. If the user's message is actually an analytics or data question rather than a request to change the app, set is_build=false and leave the other fields empty.\n\nBake these conventions into ready_prompt so it is safe to run:\n- One concern per change, with an explicit do-not-touch list.\n- Follow DESIGN-SYSTEM.md: semantic tokens only, never raw hex/hsl or raw palette utilities.\n- RED surfaces that need explicit human approval and must not be edited casually: processLead, the four LeadByteConnectors and their enabled states, Conversion Events, distribution_mode (only via distributionSetMode), credentials, live endpoints, billing records, buyer pricing and state coverage.\n- Additive schema only. No em dashes anywhere. Checkpoint before any schema or destructive change. Verify with the design-token gate and lint.\n\nready_prompt must be a complete, copy-pasteable instruction a builder can act on: the target area, the exact change, the do-not-touch list, and the verification step. Set risk=red if the request touches any RED surface, amber if it touches shared or data surfaces, green for isolated UI or docs.`;
+  const system = `You scope change requests for the Legenex app so they can be handed to a controlled build channel (Claude via the connector, the builder, or Claude Code). You NEVER execute changes yourself.
+
+WHAT COUNTS AS A BUILD. Set is_build=true for ANY request to change the app: add, remove, disable, enable, turn off, turn on, change, edit, update, fix, create, build, rename, move, restyle, redesign, refactor, or wire something up. A screenshot attached with a complaint or a request about what is shown is also a build request. Set is_build=false ONLY when the message is purely a question about DATA (counts, revenue, performance, what happened) with no request to change anything.
+
+CRITICAL, DO NOT REFUSE. A request touching a RED surface is still drafted. You mark it risk=red, put an explicit approval gate as the first line of ready_prompt, and describe the change precisely. You NEVER set is_build=false to avoid a sensitive request, and you never reply that you only handle analytics. Refusing to draft is a failure: the operator needs the scoped request in order to decide. Drafting is not doing.
+
+RISK. red if it touches any RED surface: processLead, the four live LeadByteConnectors or their enabled states, Conversion Events, distribution_mode, credentials, live endpoints, billing records, buyer pricing or state coverage, TrustedForm behaviour, portal scoping. amber for schema changes, shared components, data writes, or anything backend. green only for isolated UI, copy, or docs.
+
+DO_NOT_TOUCH IS NEVER EMPTY unless the change is a single isolated file. Name the adjacent surfaces the builder must leave alone. "None" is almost always wrong.
+
+SCOPE. One concern per change. If the request is vague or sprawling ("redesign the dashboard"), narrow it to the smallest sensible first step and say in summary what you deliberately excluded. Never draft a change spanning many unrelated files.
+
+CONVENTIONS to bake into ready_prompt: follow DESIGN-SYSTEM.md, semantic tokens only, never raw hex/hsl or raw palette utilities; additive schema only, no renames or deletions of live fields; create_checkpoint before any schema change or destructive edit; distribution_mode only ever via the distributionSetMode function, never a direct field write; no secrets; no em dashes anywhere; verify with the design token gate and lint, and confirm the rendered result in the live app.
+
+ready_prompt must be complete and copy-pasteable: the approval gate if red, the target area, the exact change, the do-not-touch list, and the verification step.
+
+TARGET FILES. Use the inventory below and name real paths. If you are unsure which file holds something, say so in target_files with a "confirm: " prefix rather than inventing a filename.
+
+${APP_INVENTORY}`;
   const prompt = `Conversation so far:\n${convo || '(none)'}\n\nUser request: ${question}\n\nReturn JSON only.`;
-  return await callModel({ system, prompt, jsonSchema: schema, temperature: 0.2 });
+  return await callOpenAI({ apiKey, system, prompt, jsonSchema: schema, temperature: 0.2, images });
 }
 
 // Extract learnable facts from a conversation exchange. Returns up to 3 facts.
-async function extractMemories(question, answer, existingMemory) {
+async function extractMemories(question, answer, existingMemory, apiKey) {
   const schema = {
     type: 'object',
     properties: {
@@ -103,7 +141,7 @@ async function extractMemories(question, answer, existingMemory) {
   const system = `You extract durable, reusable facts and preferences from a conversation between a user and an analytics assistant. Only extract facts that will be useful in future conversations: business rules, user preferences, recurring data insights, or definitions the user provided. Do NOT extract transient questions or answers. Do NOT duplicate facts already known.\n\nKnown memories:\n${existingStr || '(none)'}`;
   const prompt = `User asked: ${question}\nAssistant answered: ${answer}\n\nExtract up to 3 new memories. Return JSON only.`;
   try {
-    const result = await callModel({ system, prompt, jsonSchema: schema, temperature: 0.2 });
+    const result = await callOpenAI({ apiKey, system, prompt, jsonSchema: schema, temperature: 0.2 });
     return Array.isArray(result?.memories) ? result.memories.filter(m => m.fact && m.fact.length > 5).slice(0, 3) : [];
   } catch { return []; }
 }
@@ -113,7 +151,7 @@ async function extractMemories(question, answer, existingMemory) {
 // Turns a natural-language question into a structured spec. Sees only the
 // entity directory and the list of valid options, never the lead data, so the
 // prompt stays tiny and the call stays fast.
-async function planQuery(question, history, directory) {
+async function planQuery(question, history, directory, apiKey) {
   const schema = {
     type: 'object',
     properties: {
@@ -157,18 +195,28 @@ group_by: use the dimension the user is slicing by. "which supplier"/"by supplie
 Known suppliers and buyers:
 ${directory}`;
   const prompt = `Conversation so far:\n${convo || '(none)'}\n\nQuestion: ${question}\n\nReturn JSON only.`;
-  return await callModel({ system, prompt, jsonSchema: schema, temperature: 0 });
+  return await callOpenAI({ apiKey, system, prompt, jsonSchema: schema, temperature: 0 });
 }
 
 export default async function dataBot(ctx) {
+  const db = ctx.db;
+  const user = requireUser(ctx);
   try {
-    const user = requireUser(ctx);
-    const svc = ctx.db;
+    const svc = db;
+    const apiKey = (ctx.config?.integrations?.openaiApiKey) || ctx.env.OPENAI_API_KEY;
 
     const body = ctx.body || {};
     const question = (body.question || '').toString().trim();
     const history = Array.isArray(body.history) ? body.history.slice(-8) : [];
-    if (!question) return ctx.json({ error: 'No question provided' }, 400);
+    // Attached screenshots, as [{ media_type, data }] with data base64 encoded.
+    // Capped at four, and each one is checked for a plausible size so a stray
+    // paste cannot blow the request up.
+    const images = (Array.isArray(body.images) ? body.images : [])
+      .filter((i) => i && typeof i.data === 'string' && i.data.length > 32 && i.data.length < 8_000_000)
+      .slice(0, 4)
+      .map((i) => ({ media_type: String(i.media_type || 'image/png'), data: i.data }));
+    // An image on its own is a valid message: "fix this" with a screenshot.
+    if (!question && !images.length) return ctx.json({ error: 'No question provided' }, 400);
 
     const isAdmin = user.role === 'admin' || user.role === 'owner';
     const mode = body.mode === 'build' ? 'build' : 'data';
@@ -225,34 +273,33 @@ export default async function dataBot(ctx) {
     const canBuild = !isPartner && (buildAllow === null ? !!perms.buildbot : buildAllow);
 
     // Friendly, actionable message instead of a silent 500 when the key is unset.
-    const llmKey = ctx.config?.integrations?.openaiApiKey || ctx.env?.OPENAI_API_KEY;
-    if (!llmKey) {
-      return { type: 'answer', answer: 'This assistant is not configured yet: the OPENAI_API_KEY secret is missing. An admin can add it in the app secrets, then I can answer.' };
+    if (!apiKey) {
+      return ctx.json({ type: 'answer', answer: 'This assistant is not configured yet: the OPENAI_API_KEY secret is missing. An admin can add it in the app secrets, then I can answer.' });
     }
 
     // BuildBot: draft a single-concern build request for the controlled channel.
     if (mode === 'build') {
       if (!canBuild) {
-        return {
+        return ctx.json({
           type: 'answer',
           answer: buildAllow === false
             ? 'BuildBot is restricted to specific roles or people, and your account is not on that list. An admin can change this in Settings > ChatBot > BuildBot.'
             : 'BuildBot is not enabled for your account. An admin can grant the BuildBot permission in Users and Roles.',
-        };
+        });
       }
       try {
-        const draft = await draftBuildRequest(question, history);
-        if (draft && draft.is_build) return { type: 'build_request', build_request: draft };
+        const draft = await draftBuildRequest(question || 'See the attached screenshot and scope the change it implies.', history, images, apiKey);
+        if (draft && draft.is_build) return ctx.json({ type: 'build_request', build_request: draft });
       } catch (_) { /* not a build, or draft failed: fall through to an answer */ }
     }
 
     if (!canData) {
-      return {
+      return ctx.json({
         type: 'answer',
         answer: dataAllow === false
           ? 'DataBot is restricted to specific roles or people, and your account is not on that list. An admin can change this in Settings > ChatBot > DataBot.'
           : 'DataBot access is turned off for your account. An admin can enable it in Users and Roles.',
-      };
+      });
     }
 
     // --- Load conversation history and memories for context ---
@@ -314,7 +361,8 @@ export default async function dataBot(ctx) {
     // "07/30/2026 05:26:44" are ignored on purpose and fall through to
     // created_date, which is what the dashboard does. A naive ISO string is a
     // wall clock in APP_TZ, not UTC. Regina is UTC-6 year round with no DST, so
-    // the offset can be pinned literally rather than importing date-fns-tz.
+    // the offset can be pinned literally rather than importing date-fns-tz,
+    // which is not bundled here.
     const APP_TZ_OFFSET = '-06:00';
     const eventDayKey = (l) => {
       const bag = parseBag(l);
@@ -438,9 +486,9 @@ export default async function dataBot(ctx) {
 
       // Real-column lookups, corrected against live data on 30 July 2026.
       //
-      // Lead.buyer_id holds the buyer CODE ("AG1", "NW2", "LF3"), NOT a record
-      // id, so buyer_code is the join key. Lead.supplier_name is correct on all
-      // but a couple of rows, but sids carry suffixes in the wild
+      // Lead.buyer_id holds the buyer CODE ("AG1", "NW2", "LF3"), NOT a
+      // record id, so buyer_code is the join key. Lead.supplier_name is correct
+      // on all but a couple of rows, but sids carry suffixes in the wild
       // ("INBNDS-SURVEY" belongs to Inbounds/INBNDS), so supplier resolution
       // falls back to a longest-prefix sid match rather than exact equality.
       const buyerByCode = new Map();
@@ -596,12 +644,36 @@ export default async function dataBot(ctx) {
       ].join('\n');
 
       let plan = null;
-      try { plan = await planQuery(question, history, directory); } catch { plan = null; }
+      try { plan = await planQuery(question, history, directory, apiKey); } catch { plan = null; }
       if (!plan || typeof plan !== 'object') {
         plan = { intent: 'aggregate', entity_refs: [], group_by: 'none', period: 'all_time' };
       }
 
-      const period = plan.period || 'all_time';
+      const qLower = question.toLowerCase();
+
+      // Deterministic period inference, and it OVERRIDES the planner.
+      //
+      // The planner has been observed returning all_time for a question that
+      // said "this month", after which the narrator reported a June date as
+      // this month's best day. The date was real, the window was not. When the
+      // question names a window in plain words, that wording is authoritative.
+      const inferPeriod = () => {
+        const pats = [
+          [/\blast month\b|\bprevious month\b/, 'last_month'],
+          [/\bthis month\b|\bmonth to date\b|\bmtd\b|\bcurrent month\b/, 'this_month'],
+          [/\blast week\b|\bprevious week\b/, 'last_week'],
+          [/\bthis week\b|\bweek to date\b|\bso far this week\b/, 'this_week'],
+          [/\blast 30 days\b|\bpast 30 days\b|\blast thirty days\b/, 'last_30_days'],
+          [/\blast 7 days\b|\bpast 7 days\b|\blast seven days\b/, 'last_7_days'],
+          [/\byesterday\b/, 'yesterday'],
+          [/\btoday\b/, 'today'],
+          [/\ball ?time\b|\boverall\b|\bever\b|\bin total\b|\bto date\b/, 'all_time'],
+        ];
+        for (const [re, p] of pats) if (re.test(qLower)) return p;
+        return null;
+      };
+      const textPeriod = inferPeriod();
+      const period = textPeriod || plan.period || 'all_time';
       const daySpec = periodDays(period, plan.start_date, plan.end_date);
       const topN = Math.min(Math.max(Number(plan.top_n) || 15, 1), 40);
 
@@ -611,7 +683,6 @@ export default async function dataBot(ctx) {
       // loses the breakdown and the answer degrades to a bare period total. The
       // question text itself is unambiguous in these cases, so it is read
       // directly. This only ever fills a gap: an explicit planner choice wins.
-      const qLower = question.toLowerCase();
       const inferGroup = () => {
         const pats = [
           [/\b(?:by|per|across|each)\s+states?\b|\bwhich states?\b|\btop states?\b|\bstate breakdown\b/, 'state'],
@@ -661,14 +732,24 @@ export default async function dataBot(ctx) {
       // ---- Execute ---------------------------------------------------------
       const periodRows = leads.filter((l) => inPeriod(l, daySpec));
 
+      // The actual day range covered, so no answer can name a date outside it.
+      const coveredKeys = periodRows.map(eventDayKey).filter(Boolean).sort();
+      const undatedInPeriod = leads.filter((l) => !eventDayKey(l)).length;
+
       const result = {
         timezone: APP_TZ,
         today_date: todayKey,
         yesterday_date: yesterdayKey,
         week_convention: 'this_week is the calendar week running Sunday through today. last_7_days is a rolling seven day window ending today. They are deliberately different.',
         period_requested: period,
+        period_source: textPeriod ? 'taken from the words used in the question' : 'chosen by the planner',
+        period_bounds: coveredKeys.length
+          ? { earliest_day: coveredKeys[0], latest_day: coveredKeys[coveredKeys.length - 1] }
+          : null,
         period_row_count: periodRows.length,
         totals_for_period: econ(periodRows),
+        cost_basis: 'lead_cost, profit, margin_pct and cpl are built from per-lead cost fields ONLY. Internal suppliers (LeadFlow, Legenex) never carry a per-lead price: their real cost is ad spend, and LeadFlow settles as a 30 percent profit share of window revenue minus window cost. So any margin, profit or CPL figure covering internal supply EXCLUDES the real cost base and overstates profitability, often severely. Never present those figures as settled without saying what they exclude.',
+        leads_with_no_event_date: undatedInPeriod,
       };
       if (period === 'custom') {
         result.period_dates = { from: plan.start_date || null, to: plan.end_date || plan.start_date || null };
@@ -728,6 +809,25 @@ export default async function dataBot(ctx) {
         result.group_keys_present = entries.map(([k]) => k);
         result.groups = picked.reduce((acc, [k, v]) => { acc[k] = econ(v); return acc; }, {});
         if (entries.length > effTopN) result.groups_truncated = `showing ${effTopN} of ${entries.length}, ranked by volume`;
+      }
+
+      // Data quality probe, answered directly rather than left to a breakdown.
+      if (/\bunattributed\b|\bno supplier\b|\bmissing supplier\b|\bno state\b|\bmissing state\b|\bunknown state\b|\bblank\b|\bdata quality\b|\bunassigned\b/.test(qLower)) {
+        const noSupplier = periodRows.filter((l) => dimSupplier(l) === '(unattributed)');
+        const noState = periodRows.filter((l) => dimState(l) === '(unknown)');
+        const noBuyer = periodRows.filter((l) => dimBuyer(l) === '(unsold or unassigned)');
+        const srcOf = (rows) => {
+          const m = {};
+          for (const l of rows) { const k = dimSource(l); m[k] = (m[k] || 0) + 1; }
+          return m;
+        };
+        result.data_quality = {
+          no_supplier_attribution: { count: noSupplier.length, by_source: srcOf(noSupplier) },
+          no_state: { count: noState.length, by_supplier: (() => { const m = {}; for (const l of noState) { const k = dimSupplier(l); m[k] = (m[k] || 0) + 1; } return m; })() },
+          no_buyer_assigned: { count: noBuyer.length },
+          no_event_date: undatedInPeriod,
+          _note: 'Counts are within the requested period. Zero is a real answer and means the field is fully populated.',
+        };
       }
 
       // Always give the model the standard windows as a cheap safety net.
@@ -830,13 +930,14 @@ export default async function dataBot(ctx) {
       ? pastConversations.map(c => `Conversation "${c.title}":\n${c.recent.join('\n')}`).join('\n\n')
       : '(none)';
 
-    // Load bot config for temperature, instructions, name.
+    // Load bot config for model, temperature, instructions
     const botKey = mode === 'build' ? 'build' : 'data';
     let botConfig = {};
     try {
       const configs = arr(await svc.entities.BotConfig.filter({ bot_key: botKey }).catch(() => []));
       if (configs.length) botConfig = configs[0];
     } catch { /* config is optional */ }
+    const botModel = botConfig.model || 'gpt-4o-mini';
     const botTemp = botConfig.temperature ?? 0.4;
     const botInstructions = botConfig.instructions || '';
     const botName = botConfig.name || (mode === 'build' ? 'BuildBot' : 'DataBot');
@@ -850,6 +951,10 @@ HOW TO READ THE RESULT:
 - Each entity carries a "requested_period" block. That is the exact window the user asked about, already computed, with "resolved_to" naming which window it was. If requested_period is present it IS the answer to the period they asked about. Never say the data does not specify a period when requested_period is populated.
 - Each entity also carries today, yesterday, this_week, last_week, last_7_days, last_30_days, this_month, last_month and all_time, so a follow-up about a different window needs no new query. "How many sold for X yesterday" is entities[0].yesterday.sold.
 - this_week is the calendar week, Sunday through today. last_7_days is a rolling seven day window. They are different numbers and both are correct for their own question. If the user's wording is ambiguous, give the one in requested_period and note the other in a short clause rather than refusing.
+- "period_bounds" gives the earliest and latest day actually inside the requested window. NEVER name a date outside those bounds. If a date you are about to cite falls outside period_bounds, it belongs to a different window and citing it as part of this one is an error.
+- "cost_basis" is a hard constraint, not a footnote. Whenever you report margin_pct, profit, lead_cost or cpl for LeadFlow, Legenex, or for any total that includes them, you MUST state that the figure excludes ad spend and therefore overstates profitability. If asked whether such a margin is real, the answer is no: say it is not a true margin because the cost base is missing, and point at Finances for the settled number. Do not defend the figure.
+- "data_quality" when present answers attribution and completeness questions directly. Zero means the field is fully populated, which is a real answer.
+- "leads_with_no_event_date" counts rows that could not be dated at all and therefore appear in all_time but in no dated window. If all_time is much larger than the sum of the dated windows, that is why, along with imported leads whose true event dates predate the current windows.
 - "totals_for_period" covers the window the user asked about, across everything.
 - "groups" is the breakdown, present whenever the question sliced by a dimension. The keys ARE the dimension values. If groups is present, the breakdown exists and you must answer from it. Do not say a breakdown is unavailable when groups is populated.
 - "group_by" names the dimension. "group_keys_present" lists every key that exists, including any beyond the ones detailed in groups, so you can state what is there rather than guessing.
@@ -872,7 +977,7 @@ Every figure you state must come from the RESULT block in this message. Past top
 
 === PAST TOPICS (questions previously asked, for continuity only, never a source of figures) ===
 ${pastConvContext}
-
+${images.length ? `\nThe user has attached ${images.length} screenshot${images.length > 1 ? 's' : ''}. Read ${images.length > 1 ? 'them' : 'it'} and answer in relation to what is shown. If a figure in the screenshot disagrees with the RESULT block, say so plainly and treat the RESULT block as authoritative for data, while the screenshot is authoritative for what the interface currently looks like.\n` : ''}
 === RESULT (JSON, authoritative) ===
 ${JSON.stringify(payload)}
 
@@ -885,7 +990,18 @@ ${convo || '(none)'}
 User: ${question}
 ${botName}:`;
 
-    const answer = await callModel({ prompt, temperature: botTemp, system: botInstructions || undefined });
+    // Vision needs a multimodal model. If the configured one is not obviously
+    // capable, fall back for this call rather than dropping the screenshot.
+    const visionOk = /4o|4\.1|omni/i.test(String(botModel));
+    const modelForCall = images.length && !visionOk ? 'gpt-4o-mini' : botModel;
+    const answer = await callOpenAI({
+      apiKey,
+      prompt,
+      model: modelForCall,
+      temperature: botTemp,
+      system: botInstructions || undefined,
+      images,
+    });
 
     const answerStr = typeof answer === 'string' ? answer : JSON.stringify(answer);
 
@@ -929,7 +1045,7 @@ ${botName}:`;
         conversationId = created.id;
       }
 
-      const newMemories = await extractMemories(question, answerStr, memories);
+      const newMemories = await extractMemories(question, answerStr, memories, apiKey);
       for (const mem of newMemories) {
         await svc.entities.ChatMemory.create({
           user_id: user.id,
@@ -941,9 +1057,8 @@ ${botName}:`;
       }
     } catch { /* conversation persistence is best-effort */ }
 
-    return { type: 'answer', answer: answerStr, conversation_id: conversationId };
+    return ctx.json({ type: 'answer', answer: answerStr, conversation_id: conversationId });
   } catch (error) {
-    if (error instanceof HttpError) throw error;
     return ctx.json({ error: error.message }, 500);
   }
 }

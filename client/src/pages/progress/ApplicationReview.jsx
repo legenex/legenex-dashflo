@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
-  ChevronRight, ChevronDown, Search, FileCode, EyeOff, Camera, CheckCircle2,
+  ChevronRight, ChevronDown, Search, FileCode, EyeOff, Camera, CheckCircle2, XCircle, Loader2,
 } from 'lucide-react';
 import { usePermissions, useAuth } from '@/lib/AuthContext';
 import { pageReadiness } from '@/lib/progress/readiness';
@@ -11,7 +11,7 @@ import {
 } from '@/components/progress/useProgress';
 import VisualReview from '@/components/progress/VisualReview';
 import { TaskSidebar, BackendPlainEnglish } from '@/components/progress/ReviewPanels';
-import { startCaptureQueue } from '@/components/progress/CaptureController';
+import { useOffscreenCapture } from '@/components/progress/OffscreenCapture';
 import { sortSections } from '@/components/progress/progressNav';
 import {
   ProgressPageHeader, Card, CardBody, Badge, EmptyState,
@@ -69,6 +69,10 @@ export default function ApplicationReview() {
   const selectedKey = params.get('page');
   const [query, setQuery] = useState('');
   const [collapsed, setCollapsed] = useState({});
+  const [treeOpen, setTreeOpen] = useState(true);
+
+  const { user } = useAuth();
+  const capture = useOffscreenCapture({ role: user?.role, capturedBy: user?.email });
 
   const pagesQ = useProgressPages();
   const findingsQ = useProgressFindings();
@@ -110,6 +114,14 @@ export default function ApplicationReview() {
 
   const selected = pages.find((p) => p.page_key === selectedKey) || null;
 
+  // Only surfaces that resolve to a real page component can be rendered
+  // offscreen. Redirects, catchalls and :id detail routes have nothing stable to
+  // capture, so they are skipped rather than producing junk snapshots.
+  const capturable = (list) => list.filter((p) => ['page', 'tab'].includes(p.route_type)
+    && p.portal_scope === 'operator'
+    && p.component_path
+    && !String(p.route).includes(':'));
+
   if (pagesQ.isLoading) {
     return (
       <>
@@ -125,34 +137,58 @@ export default function ApplicationReview() {
         title="Application Review"
         description={`${pages.length} surfaces derived from the router, nav and permission config. Select one to review it.`}
         actions={(can('progress_write') || can('progress_admin')) ? (
-          <PrimaryButton
-            onClick={() => {
-              // Walk the capturable routes in this session. Redirects, catchalls
-              // and detail routes with an :id placeholder have nothing stable to
-              // capture, so they are skipped rather than producing junk.
-              const queue = pages
-                .filter((p) => ['page', 'tab'].includes(p.route_type))
-                .filter((p) => !String(p.route).includes(':'))
-                .filter((p) => p.portal_scope === 'operator')
-                .map((p) => ({ page_key: p.page_key, route: p.route }));
-              if (queue.length === 0) return;
-              startCaptureQueue(queue, '/progress/review');
-              const first = queue[0];
-              const sep = first.route.includes('?') ? '&' : '?';
-              window.location.assign(`${first.route}${sep}progress_capture=${first.page_key}`);
-            }}
-          >
-            <span className="flex items-center gap-1.5">
-              <Camera className="h-3.5 w-3.5" />
-              Capture every page
-            </span>
-          </PrimaryButton>
+          <div className="flex flex-wrap items-center gap-2">
+            <SecondaryButton onClick={() => setTreeOpen(!treeOpen)}>
+              {treeOpen ? 'Hide list' : 'Show list'}
+            </SecondaryButton>
+            {capture.running && (
+              <SecondaryButton onClick={capture.cancel}>Stop</SecondaryButton>
+            )}
+            <PrimaryButton
+              onClick={() => capture.run(capturable(pages), { label: 'every page' })}
+              disabled={capture.running}
+            >
+              <span className="flex items-center gap-1.5">
+                {capture.running
+                  ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  : <Camera className="h-3.5 w-3.5" />}
+                {capture.running ? 'Capturing' : 'Capture every page'}
+              </span>
+            </PrimaryButton>
+          </div>
         ) : null}
       />
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,320px)_minmax(0,1fr)]">
+      {capture.progress && (
+        <Card className="mb-4">
+          <CardBody className="flex flex-wrap items-center justify-between gap-3 py-2.5">
+            <div className="flex items-center gap-2.5">
+              {capture.running
+                ? <Loader2 className="h-4 w-4 animate-spin text-primary" />
+                : capture.progress.failed > 0
+                  ? <XCircle className="h-4 w-4 text-chart-3" />
+                  : <CheckCircle2 className="h-4 w-4 text-chart-5" />}
+              <span className="text-[12px] text-foreground">
+                {capture.running
+                  ? `Capturing ${capture.progress.label}: ${capture.progress.done} of ${capture.progress.total}`
+                  : `${capture.progress.done} captured${capture.progress.failed ? `, ${capture.progress.failed} failed` : ''}${capture.progress.cancelled ? ', stopped' : ''}`}
+              </span>
+              {capture.progress.current && (
+                <span className="text-[11px] text-muted-foreground">{capture.progress.current}</span>
+              )}
+            </div>
+            {!capture.running && (
+              <button type="button" onClick={capture.clear} className="text-[11px] text-muted-foreground hover:text-foreground">
+                Dismiss
+              </button>
+            )}
+          </CardBody>
+        </Card>
+      )}
+
+      <div className={`grid grid-cols-1 gap-4 ${treeOpen ? 'lg:grid-cols-[minmax(0,280px)_minmax(0,1fr)]' : 'lg:grid-cols-1'}`}>
         {/* Tree */}
-        <Card className="h-fit lg:sticky lg:top-4">
+        <Card className={`h-fit lg:sticky lg:top-4 ${treeOpen ? '' : 'hidden'}`}>
           <div className="border-b border-border p-3">
             <div className="flex items-center gap-2 rounded-md border border-border bg-background px-2.5 py-1.5">
               <Search className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
@@ -182,10 +218,11 @@ export default function ApplicationReview() {
               const sectionDone = section.pages.filter((p) => p.review_complete).length;
               return (
                 <div key={section.key} className="border-b border-border last:border-b-0">
+                  <div className="flex items-center gap-1 pr-2">
                   <button
                     type="button"
                     onClick={() => setCollapsed((c) => ({ ...c, [section.key]: open }))}
-                    className="flex w-full items-center gap-2 px-3 py-2.5 text-left transition-colors hover:bg-accent"
+                    className="flex min-w-0 flex-1 items-center gap-2 px-3 py-2.5 text-left transition-colors hover:bg-accent"
                   >
                     {open ? <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                       : <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />}
@@ -202,6 +239,18 @@ export default function ApplicationReview() {
                       {sectionDone}/{section.pages.length}
                     </span>
                   </button>
+                  {(can('progress_write') || can('progress_admin')) && (
+                    <button
+                      type="button"
+                      title={`Capture the ${section.label} section`}
+                      disabled={capture.running}
+                      onClick={() => capture.run(capturable(section.pages), { label: section.label })}
+                      className="shrink-0 rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-40"
+                    >
+                      <Camera className="h-3.5 w-3.5" />
+                    </button>
+                  )}
+                  </div>
                   {open && (
                     <div className="pb-1">
                       {section.pages.map((p) => {
@@ -253,6 +302,7 @@ export default function ApplicationReview() {
               threads={threadsByPage[selected.page_key] || []}
               verifications={verifsByPage[selected.page_key] || []}
               snapshots={snapsByPage[selected.page_key] || []}
+              capture={capture}
             />
           )}
         </div>
@@ -270,7 +320,7 @@ export default function ApplicationReview() {
  * could already see and pushed the actual work below the fold.
  * ---------------------------------------------------------------- */
 
-function PageWorkspace({ page, findings, threads, verifications, snapshots = [] }) {
+function PageWorkspace({ page, findings, threads, verifications, snapshots = [], capture }) {
   const { can } = usePermissions();
   const pageMutation = useProgressMutation('ProgressPage', 'progress-pages');
   const threadMutation = useProgressMutation('ReviewThread', 'progress-threads');
@@ -330,7 +380,13 @@ function PageWorkspace({ page, findings, threads, verifications, snapshots = [] 
 
       {/* The review itself: screenshot beside the task list. */}
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,360px)]">
-        <VisualReview page={page} snapshots={snapshots} threads={threads} />
+        <VisualReview
+          page={page}
+          snapshots={snapshots}
+          threads={threads}
+          capturing={capture?.running}
+          onRecapture={(viewports) => capture?.run([page], { viewports, label: page.title })}
+        />
         <TaskSidebar page={page} threads={threads} findings={findings} />
       </div>
 

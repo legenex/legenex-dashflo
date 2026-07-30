@@ -8,6 +8,7 @@ import UserNotRegisteredError from '@/components/UserNotRegisteredError';
 import ProtectedRoute from '@/components/ProtectedRoute';
 import PermissionRoute from '@/components/PermissionRoute';
 import ScrollToTop from './components/ScrollToTop';
+import { hostScope, isAllowedOnProgressHost } from '@/lib/hostScope';
 
 import Login from '@/pages/Login';
 import Register from '@/pages/Register';
@@ -125,22 +126,20 @@ const DocsRoutes = () => (
   </Route>
 );
 
-// True when the app is being served on the public docs subdomain.
-const isDocsHost = () =>
-  typeof window !== 'undefined' && /(^|\.)docs\./i.test(window.location.hostname);
+// Host predicates live in src/lib/hostScope.js so they can be unit tested. Host
+// scoping is a security boundary, not a convenience.
+const currentHost = () => (typeof window !== 'undefined' ? window.location.hostname : '');
+const isDocsHost = () => hostScope(currentHost()) === 'docs';
 
-// True when served on the API host (api.legenex.com). This domain exists only
-// to serve backend functions, so the frontend just shows a status page and
-// never gates on auth or redirects to the login page.
-const isApiHost = () =>
-  typeof window !== 'undefined' && /(^|\.)api\./i.test(window.location.hostname);
+// api.legenex.com exists only to serve backend functions, so the frontend just
+// shows a status page and never gates on auth or redirects to login.
+const isApiHost = () => hostScope(currentHost()) === 'api';
 
-// True when served on the Progress Control Center host
-// (progress.dashboard.legenex.com). On that host the app serves ONLY the
-// authenticated progress experience: the ordinary operator dashboard is never
-// reachable through the progress subdomain.
-const isProgressHost = () =>
-  typeof window !== 'undefined' && /^progress\./i.test(window.location.hostname);
+// progress.dashboard.legenex.com serves ONLY the authenticated Progress Control
+// Center. The operator dashboard, the portals, the docs and the public
+// application form are all unreachable there, enforced by the path allowlist
+// below rather than by which links happen to exist.
+const isProgressHost = () => hostScope(currentHost()) === 'progress';
 
 // The progress route table, reused on both the progress subdomain (as the whole
 // app) and under /progress on the main dashboard.
@@ -195,6 +194,13 @@ const AuthenticatedApp = () => {
   // goes to login and every other path lands back on the Command Center rather
   // than falling through to the operator app.
   if (isProgressHost()) {
+    // Hard guard before any route matching. If a path is not on the allowlist,
+    // redirect immediately rather than letting the route table decide, so adding
+    // a route later cannot accidentally expose it on this domain.
+    const path = typeof window !== 'undefined' ? window.location.pathname : '/progress';
+    if (!isAllowedOnProgressHost(path)) {
+      return <Navigate to="/progress" replace />;
+    }
     if (authError) {
       if (authError.type === 'user_not_registered') return <UserNotRegisteredError />;
       if (authError.type === 'auth_required') { navigateToLogin(); return null; }
@@ -209,6 +215,9 @@ const AuthenticatedApp = () => {
             {ProgressRoutes()}
           </Route>
         </Route>
+        {/* Anything not on the allowlist goes back to the Command Center. This is
+            what locks the subdomain: typing an operator route into the address
+            bar on this host cannot render it. */}
         <Route path="*" element={<Navigate to="/progress" replace />} />
       </Routes>
     );

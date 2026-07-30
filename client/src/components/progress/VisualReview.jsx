@@ -1,5 +1,4 @@
 import React, { useMemo, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
 import {
   Camera, RefreshCw, AlertTriangle, EyeOff, Eye, MessageSquarePlus, Trash2, X,
 } from 'lucide-react';
@@ -40,8 +39,7 @@ const FINDING_TYPES = [
 
 const humanise = (s) => (s || '').replace(/_/g, ' ').replace(/^\w/, (c) => c.toUpperCase());
 
-export default function VisualReview({ page, snapshots, threads }) {
-  const navigate = useNavigate();
+export default function VisualReview({ page, snapshots, threads, onRecapture, capturing }) {
   const { can, role } = usePermissions();
   const { user } = useAuth();
   const [viewport, setViewport] = useState('desktop');
@@ -64,11 +62,10 @@ export default function VisualReview({ page, snapshots, threads }) {
     [threads],
   );
 
-  const recapture = () => {
-    const route = page.route || '/';
-    const sep = route.includes('?') ? '&' : '?';
-    navigate(`${route}${sep}progress_capture=${page.page_key}`);
-  };
+  // Offscreen. Nothing navigates: the page is mounted in a hidden container at a
+  // fixed width, captured, and removed. That is also why tablet and mobile are
+  // possible from a desktop browser.
+  const recapture = (viewports) => onRecapture?.(viewports || [viewport]);
 
   const toggleMask = () => {
     const next = !masked;
@@ -98,12 +95,17 @@ export default function VisualReview({ page, snapshots, threads }) {
                 </span>
               </SecondaryButton>
               {canCapture && (
-                <PrimaryButton onClick={recapture}>
-                  <span className="flex items-center gap-1.5">
-                    <RefreshCw className="h-3.5 w-3.5" />
-                    {latest ? 'Recapture' : 'Capture this page'}
-                  </span>
-                </PrimaryButton>
+                <>
+                  <SecondaryButton onClick={() => recapture(['desktop', 'tablet', 'mobile'])} disabled={capturing}>
+                    All sizes
+                  </SecondaryButton>
+                  <PrimaryButton onClick={() => recapture()} disabled={capturing}>
+                    <span className="flex items-center gap-1.5">
+                      <RefreshCw className={`h-3.5 w-3.5 ${capturing ? 'animate-spin' : ''}`} />
+                      {capturing ? 'Capturing' : (latest ? 'Recapture' : 'Capture')}
+                    </span>
+                  </PrimaryButton>
+                </>
               )}
             </div>
           )}
@@ -147,7 +149,7 @@ export default function VisualReview({ page, snapshots, threads }) {
             description={canCapture
               ? 'Press Capture to open this page, let it settle and store a screenshot. The capture happens in your own session, so it shows exactly what you see.'
               : 'Nobody with capture permission has taken a screenshot of this page yet.'}
-            action={canCapture ? <PrimaryButton onClick={recapture}>Capture this page</PrimaryButton> : null}
+            action={canCapture ? <PrimaryButton onClick={() => recapture()} disabled={capturing}>Capture this page</PrimaryButton> : null}
           />
         </Card>
       ) : latest.capture_status === 'failed' ? (
@@ -161,7 +163,7 @@ export default function VisualReview({ page, snapshots, threads }) {
                 Attempted {new Date(latest.captured_at || latest.created_date).toLocaleString()}. This is recorded as a
                 failed capture rather than left blank, so the gap is visible.
               </p>
-              {canCapture && <div className="mt-3"><SecondaryButton onClick={recapture}>Try again</SecondaryButton></div>}
+              {canCapture && <div className="mt-3"><SecondaryButton onClick={() => recapture()} disabled={capturing}>Try again</SecondaryButton></div>}
             </div>
           </CardBody>
         </Card>

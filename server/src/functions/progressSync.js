@@ -1,4 +1,5 @@
 import { MANIFEST } from './pageManifest.js';
+import { requireUser, HttpError } from './_runtime.js';
 
 // Synchronises the generated page inventory into ProgressPage records.
 //
@@ -28,9 +29,16 @@ const GENERATED_FIELDS = [
 ];
 
 async function loadAll(entity) {
-  // Pull every ProgressPage record. The page inventory is small and bounded,
-  // so a single generous read returns the full set without cursor paging.
-  return (await entity.list('-created_date', 100000)) || [];
+  const pageSize = 500;
+  const out = [];
+  let skip = 0;
+  while (true) {
+    const batch = (await entity.list('-created_date', pageSize, skip)) || [];
+    out.push(...batch);
+    if (batch.length < pageSize) break;
+    skip += pageSize;
+  }
+  return out;
 }
 
 // Stable fingerprint of what a page depends on. When this changes, any prior
@@ -50,11 +58,9 @@ function dependencyFingerprint(page) {
 const toJson = (value) => (value == null ? null : JSON.stringify(value));
 
 export default async function progressSync(ctx) {
+  const db = ctx.db;
   try {
-    const db = ctx.db;
-
-    const user = ctx.user;
-    if (!user) return ctx.json({ error: 'Unauthorized' }, 401);
+    const user = requireUser(ctx);
 
     const record = await db.entities.User.get(user.id).catch(() => null);
     const caller = record || user;
@@ -281,8 +287,9 @@ export default async function progressSync(ctx) {
       retired,
       duplicates_removed: deduped,
       duplicates_parked: dedupeFailures,
-    });
+    }, 200);
   } catch (err) {
+    if (err instanceof HttpError) throw err;
     return ctx.json({ error: String(err?.message || err) }, 500);
   }
 }

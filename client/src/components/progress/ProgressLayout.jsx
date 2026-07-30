@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
-import { Menu, X, ExternalLink, ShieldAlert } from 'lucide-react';
+import { Menu, X, ExternalLink, ShieldAlert, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import { usePermissions } from '@/lib/AuthContext';
 import { PROGRESS_NAV } from './progressNav';
 import ProgressErrorBoundary from './ProgressErrorBoundary';
@@ -12,7 +12,7 @@ import ProgressErrorBoundary from './ProgressErrorBoundary';
 // so this reads as part of the same product, but it never mounts the operator
 // sidebar: the two surfaces have different jobs and different audiences.
 
-function NavItems({ items, onNavigate }) {
+function NavItems({ items, onNavigate, compact }) {
   const location = useLocation();
   return (
     <nav className="flex flex-col gap-0.5 p-2">
@@ -27,7 +27,8 @@ function NavItems({ items, onNavigate }) {
             key={item.key}
             to={item.to}
             onClick={onNavigate}
-            className={`group relative flex items-start gap-2.5 rounded-md px-3 py-2 transition-colors ${
+            title={compact ? `${item.label}: ${item.description}` : undefined}
+            className={`group relative flex items-start gap-2.5 rounded-md py-2 transition-colors ${compact ? 'justify-center px-2' : 'px-3'} ${
               active
                 ? 'bg-accent text-foreground'
                 : 'text-muted-foreground hover:bg-accent hover:text-foreground'
@@ -35,12 +36,14 @@ function NavItems({ items, onNavigate }) {
           >
             {active && <span className="absolute left-0 top-1/2 -translate-y-1/2 h-5 w-[3px] rounded-r-full bg-primary" />}
             <Icon className="mt-0.5 h-4 w-4 shrink-0" />
-            <span className="min-w-0">
-              <span className="block text-[13px] font-medium leading-tight">{item.label}</span>
-              <span className="mt-0.5 block text-[11px] leading-tight text-muted-foreground">
-                {item.description}
+            {!compact && (
+              <span className="min-w-0">
+                <span className="block text-[13px] font-medium leading-tight">{item.label}</span>
+                <span className="mt-0.5 block text-[11px] leading-tight text-muted-foreground">
+                  {item.description}
+                </span>
               </span>
-            </span>
+            )}
           </NavLink>
         );
       })}
@@ -73,6 +76,9 @@ function SidebarFooter() {
 
 export default function ProgressLayout() {
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [navOpen, setNavOpen] = useState(() => {
+    try { return localStorage.getItem('progress_nav_open') !== '0'; } catch { return true; }
+  });
   const { can } = usePermissions();
   const location = useLocation();
 
@@ -97,11 +103,27 @@ export default function ProgressLayout() {
 
   return (
     <div className="flex min-h-screen bg-background">
-      {/* Desktop sidebar */}
-      <aside className="hidden w-64 shrink-0 flex-col border-r border-border bg-card lg:flex">
-        <SidebarHeader />
-        <NavItems items={items} />
-        <SidebarFooter />
+      {/* Desktop sidebar. Collapsible, because the operator sidebar plus this one
+          plus the page tree left very little room for the thing being reviewed. */}
+      <aside className={`hidden shrink-0 flex-col border-r border-border bg-card lg:flex ${navOpen ? 'w-64' : 'w-14'}`}>
+        {navOpen && <SidebarHeader />}
+        <NavItems items={items} compact={!navOpen} />
+        <div className="mt-auto border-t border-border p-2">
+          <button
+            type="button"
+            onClick={() => {
+              const next = !navOpen;
+              setNavOpen(next);
+              try { localStorage.setItem('progress_nav_open', next ? '1' : '0'); } catch { /* private mode */ }
+            }}
+            title={navOpen ? 'Collapse' : 'Expand'}
+            className="flex w-full items-center justify-center gap-2 rounded-md px-2 py-1.5 text-[12px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          >
+            {navOpen ? <PanelLeftClose className="h-3.5 w-3.5" /> : <PanelLeftOpen className="h-3.5 w-3.5" />}
+            {navOpen && 'Collapse'}
+          </button>
+        </div>
+        {navOpen && <SidebarFooter />}
       </aside>
 
       {/* Mobile drawer */}
