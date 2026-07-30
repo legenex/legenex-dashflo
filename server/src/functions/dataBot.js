@@ -14,14 +14,10 @@ import { callLLM } from '../integrations/llm.js';
 // This version is a two-pass query tool:
 //   1. PLAN    a small model call turns the question into a structured query
 //              spec (entity refs, group_by, period, top_n). No data in scope.
-//   2. EXECUTE the spec runs deterministically here in JS. Counting is
+//   2. EXECUTE the spec runs deterministically here in JavaScript. Counting is
 //              never done by the model.
 //   3. NARRATE a second model call sees the question plus a small result object
 //              (typically well under 4k characters) and writes the answer.
-//
-// Entity resolution is a real index: every supplier and buyer is registered
-// under all of its aliases (name, sid, ssid, buyer_code, buyer id) and matched
-// on word boundaries, so "Inbounds" no longer fires on the word "inbound".
 //
 // Counting rules, unchanged and matching the dashboard:
 //   1. Archived leads are excluded. They are retired duplicates.
@@ -29,32 +25,35 @@ import { callLLM } from '../integrations/llm.js';
 //      created_date, which is only when the row was written.
 //   3. Days bucket in America/Regina, the operating timezone.
 
-// Extract the first JSON object from a model reply, tolerating code fences and
-// prose the model wraps around it.
-function extractJson(s) {
-  if (typeof s !== 'string') return s;
-  let t = s.trim();
-  const fence = t.match(/(?:json)?\s*([\s\S]*?)/i);
-  if (fence) t = fence[1].trim();
-  const first = t.indexOf('{');
-  const last = t.lastIndexOf('}');
-  if (first !== -1 && last !== -1 && last > first) return t.slice(first, last + 1);
-  return t;
+const stripFences = (s) => {
+  const t = String(s ?? '').trim();
+  const fence = t.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+  return fence ? fence[1].trim() : t;
+};
+
+// Tolerant JSON parse for model output that was asked to return JSON only.
+function parseJsonLoose(text) {
+  const t = stripFences(text);
+  try { return JSON.parse(t); } catch { /* try harder below */ }
+  const start = t.indexOf('{');
+  const end = t.lastIndexOf('}');
+  if (start !== -1 && end > start) {
+    try { return JSON.parse(t.slice(start, end + 1)); } catch { /* give up */ }
+  }
+  return null;
 }
 
-// Single entry point to the language model. When a JSON schema is requested we
-// steer the model to emit one object and parse it here; the counting engine
-// never depends on the model returning valid JSON, callers all degrade.
-async function callModel({ prompt, system, model, temperature = 0.4, jsonSchema = null }) {
-  const sys = jsonSchema
-    ? `${system ? `${system}\n\n` : ''}Respond with a single valid JSON object and nothing else.`
-    : system;
-  const raw = await callLLM({ prompt, system: sys || undefined, temperature, model, maxTokens: 1500 });
+// Single model entry point. Structured calls pass a jsonSchema (used to signal
+// that a parsed object is wanted); the schema shape is enforced by the prompt
+// and the parse is tolerant, so a stray fence or preamble does not break it.
+async function callModel({ prompt, system, temperature = 0.4, jsonSchema = null }) {
+  const raw = await callLLM({ prompt, system: system || undefined, temperature });
   const content = typeof raw === 'string'
     ? raw
-    : (raw?.content ?? raw?.text ?? raw?.answer ?? '');
+    : (raw && (raw.content ?? raw.text)) ?? '';
   if (jsonSchema) {
-    try { return JSON.parse(extractJson(content)); } catch { return content; }
+    const parsed = parseJsonLoose(content);
+    return parsed != null ? parsed : content;
   }
   return content;
 }
@@ -100,12 +99,12 @@ async function extractMemories(question, answer, existingMemory) {
     },
     required: ['memories'],
   };
-  const existingStr = existingMemory.slice(0, 20).map((m) => `- ${m.fact}`).join('\n');
+  const existingStr = existingMemory.slice(0, 20).map(m => `- ${m.fact}`).join('\n');
   const system = `You extract durable, reusable facts and preferences from a conversation between a user and an analytics assistant. Only extract facts that will be useful in future conversations: business rules, user preferences, recurring data insights, or definitions the user provided. Do NOT extract transient questions or answers. Do NOT duplicate facts already known.\n\nKnown memories:\n${existingStr || '(none)'}`;
   const prompt = `User asked: ${question}\nAssistant answered: ${answer}\n\nExtract up to 3 new memories. Return JSON only.`;
   try {
     const result = await callModel({ system, prompt, jsonSchema: schema, temperature: 0.2 });
-    return Array.isArray(result?.memories) ? result.memories.filter((m) => m.fact && m.fact.length > 5).slice(0, 3) : [];
+    return Array.isArray(result?.memories) ? result.memories.filter(m => m.fact && m.fact.length > 5).slice(0, 3) : [];
   } catch { return []; }
 }
 
@@ -162,11 +161,11 @@ ${directory}`;
 }
 
 export default async function dataBot(ctx) {
-  const db = ctx.db;
-  const body = ctx.body || {};
   try {
     const user = requireUser(ctx);
+    const svc = ctx.db;
 
+    const body = ctx.body || {};
     const question = (body.question || '').toString().trim();
     const history = Array.isArray(body.history) ? body.history.slice(-8) : [];
     if (!question) return ctx.json({ error: 'No question provided' }, 400);
@@ -205,7 +204,7 @@ export default async function dataBot(ctx) {
     // launcher too, but hiding a button is not access control.
     const botAllows = async (botKey, u) => {
       try {
-        const cfgs = await db.entities.BotConfig.filter({ bot_key: botKey });
+        const cfgs = await svc.entities.BotConfig.filter({ bot_key: botKey });
         const cfg = arr(cfgs)[0] || null;
         if (!cfg) return null;
         const roles = arr(cfg.allowed_roles).filter(Boolean);
@@ -226,9 +225,9 @@ export default async function dataBot(ctx) {
     const canBuild = !isPartner && (buildAllow === null ? !!perms.buildbot : buildAllow);
 
     // Friendly, actionable message instead of a silent 500 when the key is unset.
-    const hasLLM = !!(ctx.config?.integrations?.openaiApiKey || ctx.env?.OPENAI_API_KEY);
-    if (!hasLLM) {
-      return { type: 'answer', answer: 'This assistant is not configured yet: the language model API key is missing. An admin can add it in the app secrets, then I can answer.' };
+    const llmKey = ctx.config?.integrations?.openaiApiKey || ctx.env?.OPENAI_API_KEY;
+    if (!llmKey) {
+      return { type: 'answer', answer: 'This assistant is not configured yet: the OPENAI_API_KEY secret is missing. An admin can add it in the app secrets, then I can answer.' };
     }
 
     // BuildBot: draft a single-concern build request for the controlled channel.
@@ -263,21 +262,31 @@ export default async function dataBot(ctx) {
 
     try {
       // Load recent active memories (learned facts) for this user.
-      memories = arr(await db.entities.ChatMemory.filter(
+      memories = arr(await svc.entities.ChatMemory.filter(
         { user_id: user.id, active: true },
-        '-created_date', 30,
+        '-created_date', 30
       ).catch(() => []));
       // Load recent conversations for continuity (titles + last few messages).
-      const recentConvs = arr(await db.entities.ChatConversation.filter(
+      const recentConvs = arr(await svc.entities.ChatConversation.filter(
         { user_id: user.id, mode, active: true },
-        '-last_message_at', 5,
+        '-last_message_at', 5
       ).catch(() => []));
-      pastConversations = recentConvs.map((c) => {
+      pastConversations = recentConvs.map(c => {
         let msgs = [];
         try { msgs = JSON.parse(c.messages || '[]'); } catch { /* malformed history is not fatal */ }
-        const lastMsgs = msgs.slice(-4);
-        return { title: c.title, recent: lastMsgs.map((m) => `${m.role}: ${typeof m.content === 'string' ? m.content : ''}`) };
-      });
+        // Only the user's own questions are carried forward, never past
+        // assistant answers. Old answers contain figures that were correct for
+        // a different question, and the model will happily reuse them instead
+        // of reading the result block. This is topic continuity, not a data
+        // source. The current thread's history is passed separately and is the
+        // only conversational context that may inform an answer.
+        return {
+          title: c.title,
+          recent: msgs.filter((m) => m.role === 'user')
+            .slice(-3)
+            .map((m) => `asked: ${typeof m.content === 'string' ? m.content.slice(0, 160) : ''}`),
+        };
+      }).filter((c) => c.recent.length);
     } catch { /* memory entities may not exist yet */ }
 
     // --- Resolve caller scope (deny-by-default), then gather only what they may see ---
@@ -305,7 +314,7 @@ export default async function dataBot(ctx) {
     // "07/30/2026 05:26:44" are ignored on purpose and fall through to
     // created_date, which is what the dashboard does. A naive ISO string is a
     // wall clock in APP_TZ, not UTC. Regina is UTC-6 year round with no DST, so
-    // the offset can be pinned literally rather than importing a tz library.
+    // the offset can be pinned literally rather than importing date-fns-tz.
     const APP_TZ_OFFSET = '-06:00';
     const eventDayKey = (l) => {
       const bag = parseBag(l);
@@ -335,7 +344,7 @@ export default async function dataBot(ctx) {
       const out = [];
       const pageSize = 500;
       for (let p = 0; p < 400; p += 1) {
-        const batch = arr(await db.entities.Lead
+        const batch = arr(await svc.entities.Lead
           .filter({ archived: false }, '-created_date', pageSize, p * pageSize)
           .catch(() => []));
         if (batch.length === 0) break;
@@ -385,11 +394,11 @@ export default async function dataBot(ctx) {
     if (scope.kind === 'operator') {
       const [leads, suppliersRaw, buyersRaw, adSpendRaw, txnsRaw, kbDocsRaw] = await Promise.all([
         loadAllLeads(),
-        db.entities.Supplier.list().catch(() => []),
-        db.entities.Buyer.list().catch(() => []),
-        db.entities.AdSpend.list('-date', 500).catch(() => []),
-        db.entities.BankTransaction.list('-date', 300).catch(() => []),
-        db.entities.KnowledgeDoc.filter({ active: true }, 'sort_order').catch(() => []),
+        svc.entities.Supplier.list().catch(() => []),
+        svc.entities.Buyer.list().catch(() => []),
+        svc.entities.AdSpend.list('-date', 500).catch(() => []),
+        svc.entities.BankTransaction.list('-date', 300).catch(() => []),
+        svc.entities.KnowledgeDoc.filter({ active: true }, 'sort_order').catch(() => []),
       ]);
       const suppliers = arr(suppliersRaw);
       const buyers = arr(buyersRaw);
@@ -429,9 +438,9 @@ export default async function dataBot(ctx) {
 
       // Real-column lookups, corrected against live data on 30 July 2026.
       //
-      // Lead.buyer_id holds the buyer CODE ("AG1", "NW2", "LF3"), NOT a
-      // record id, so buyer_code is the join key. Lead.supplier_name is correct
-      // on all but a couple of rows, but sids carry suffixes in the wild
+      // Lead.buyer_id holds the buyer CODE ("AG1", "NW2", "LF3"), NOT a record
+      // id, so buyer_code is the join key. Lead.supplier_name is correct on all
+      // but a couple of rows, but sids carry suffixes in the wild
       // ("INBNDS-SURVEY" belongs to Inbounds/INBNDS), so supplier resolution
       // falls back to a longest-prefix sid match rather than exact equality.
       const buyerByCode = new Map();
@@ -594,8 +603,39 @@ export default async function dataBot(ctx) {
 
       const period = plan.period || 'all_time';
       const daySpec = periodDays(period, plan.start_date, plan.end_date);
-      const groupKey = plan.group_by && plan.group_by !== 'none' ? plan.group_by : null;
       const topN = Math.min(Math.max(Number(plan.top_n) || 15, 1), 40);
+
+      // Deterministic fallback for the slice dimension.
+      //
+      // The planner returns group_by=none often enough that relying on it alone
+      // loses the breakdown and the answer degrades to a bare period total. The
+      // question text itself is unambiguous in these cases, so it is read
+      // directly. This only ever fills a gap: an explicit planner choice wins.
+      const qLower = question.toLowerCase();
+      const inferGroup = () => {
+        const pats = [
+          [/\b(?:by|per|across|each)\s+states?\b|\bwhich states?\b|\btop states?\b|\bstate breakdown\b/, 'state'],
+          [/\b(?:by|per|each)\s+day\b|\bdaily\b|\bwhich day\b|\b(?:best|worst) day\b|\btrend\b|\bover time\b|\bday by day\b/, 'day'],
+          [/\b(?:by|per|across|each)\s+buyers?\b|\bwhich buyers?\b|\btop buyers?\b|\bworst buyers?\b|\bbuyer breakdown\b/, 'buyer'],
+          [/\b(?:by|per|across|each)\s+suppliers?\b|\bwhich suppliers?\b|\btop suppliers?\b|\bworst suppliers?\b|\bsupplier breakdown\b/, 'supplier'],
+          [/\b(?:by|per|across|each)\s+sources?\b|\bwhich sources?\b|\btop sources?\b/, 'source'],
+          [/\b(?:by|per|across|each)\s+verticals?\b|\bwhich vertical\b|\bmva vs\b|\bwc vs\b/, 'vertical'],
+          [/\b(?:by|per|across|each)\s+status\b|\bstatus breakdown\b/, 'status'],
+          [/\blead type\b|\bquiz vs\b|\bvs affiliate\b|\baffiliate vs\b/, 'lead_type'],
+        ];
+        for (const [re, dim] of pats) if (re.test(qLower)) return dim;
+        return null;
+      };
+      let groupKey = plan.group_by && plan.group_by !== 'none' ? plan.group_by : null;
+      let groupInferred = false;
+      if (!groupKey) {
+        const g = inferGroup();
+        if (g) { groupKey = g; groupInferred = true; }
+      }
+
+      // Same treatment for the finance flag, which the planner also under-sets.
+      const needsFinance = !!plan.needs_finance || plan.intent === 'finance'
+        || /\b(?:ad ?spend|spend|cost|costs|profit|margin|money|losing|revenue|bank|cash|cpl|roi|payout)\b/.test(qLower);
 
       // Resolve entities from the plan, then top up from a direct scan.
       const resolved = [];
@@ -674,11 +714,20 @@ export default async function dataBot(ctx) {
           buckets[k].push(l);
         }
         const entries = Object.entries(buckets);
-        entries.sort((a, b) => (groupKey === 'day' ? a[0].localeCompare(b[0]) : b[1].length - a[1].length));
+        const isDay = groupKey === 'day';
+        // A day series must keep the most RECENT days, then read chronologically.
+        // Sorting ascending and slicing kept the oldest, which is the opposite
+        // of what any trend question wants.
+        const effTopN = isDay ? Math.min(Math.max(topN, 31), 40) : topN;
+        entries.sort((a, b) => (isDay ? b[0].localeCompare(a[0]) : b[1].length - a[1].length));
+        const picked = entries.slice(0, effTopN);
+        if (isDay) picked.sort((a, b) => a[0].localeCompare(b[0]));
         result.group_by = groupKey;
+        result.group_by_source = groupInferred ? 'inferred from the question text' : 'chosen by the planner';
         result.group_count_total = entries.length;
-        result.groups = entries.slice(0, topN).reduce((acc, [k, v]) => { acc[k] = econ(v); return acc; }, {});
-        if (entries.length > topN) result.groups_truncated = `showing top ${topN} of ${entries.length}`;
+        result.group_keys_present = entries.map(([k]) => k);
+        result.groups = picked.reduce((acc, [k, v]) => { acc[k] = econ(v); return acc; }, {});
+        if (entries.length > effTopN) result.groups_truncated = `showing ${effTopN} of ${entries.length}, ranked by volume`;
       }
 
       // Always give the model the standard windows as a cheap safety net.
@@ -697,7 +746,7 @@ export default async function dataBot(ctx) {
         };
       }
 
-      if (plan.needs_finance || plan.intent === 'finance') {
+      if (needsFinance) {
         const acct = adSpend.filter((r) => !r.level || r.level === 'account');
         const rollup = (keyFn) => {
           const m = {};
@@ -724,13 +773,13 @@ export default async function dataBot(ctx) {
       kbContext = kbDocs.map((d) => { const head = d.kind === 'glossary' ? `${d.term || d.title}` : d.title; return `[${d.kind}] ${head}: ${d.content || ''}`; }).join('\n');
     } else if (scope.kind === 'supplier') {
       // Portal scoping is a protected surface. This branch is unchanged.
-      const supplier = scope.id ? await db.entities.Supplier.get(scope.id).catch(() => null) : null;
+      const supplier = scope.id ? await svc.entities.Supplier.get(scope.id).catch(() => null) : null;
       if (!supplier) { scope = { kind: 'none', id: null }; }
       else {
-        const leads = arr(await db.entities.Lead.filter({ supplier_name: supplier.name }, '-created_date', 3000).catch(() => []));
+        const leads = arr(await svc.entities.Lead.filter({ supplier_name: supplier.name }, '-created_date', 3000).catch(() => []));
         const leadIds = new Set(leads.map((l) => l.id));
         let returnsTotal = 0;
-        try { const rr = arr(await db.entities.ReturnRequest.list('-created_date', 3000)); returnsTotal = rr.filter((r) => leadIds.has(r.lead_id)).length; } catch { returnsTotal = 0; }
+        try { const rr = arr(await svc.entities.ReturnRequest.list('-created_date', 3000)); returnsTotal = rr.filter((r) => leadIds.has(r.lead_id)).length; } catch { returnsTotal = 0; }
         scopeNote = `You are answering for supplier "${supplier.name}". Only this supplier's own lead volume and quality are available. Buyer identities, revenue, internal cost, and other suppliers' data are NOT available and must never be inferred or disclosed.`;
         payload = {
           account_type: 'supplier',
@@ -744,13 +793,13 @@ export default async function dataBot(ctx) {
       }
     } else if (scope.kind === 'buyer') {
       // Portal scoping is a protected surface. This branch is unchanged.
-      const buyer = scope.id ? await db.entities.Buyer.get(scope.id).catch(() => null) : null;
+      const buyer = scope.id ? await svc.entities.Buyer.get(scope.id).catch(() => null) : null;
       if (!buyer) { scope = { kind: 'none', id: null }; }
       else {
         const [leadsRaw, feedbackRaw, returnsRaw] = await Promise.all([
-          db.entities.Lead.filter({ buyer_id: buyer.id }, '-created_date', 2000).catch(() => []),
-          db.entities.BuyerFeedback.filter({ buyer_id: buyer.id }, '-created_date', 2000).catch(() => []),
-          db.entities.ReturnRequest.filter({ buyer_id: buyer.id }, '-created_date', 2000).catch(() => []),
+          svc.entities.Lead.filter({ buyer_id: buyer.id }, '-created_date', 2000).catch(() => []),
+          svc.entities.BuyerFeedback.filter({ buyer_id: buyer.id }, '-created_date', 2000).catch(() => []),
+          svc.entities.ReturnRequest.filter({ buyer_id: buyer.id }, '-created_date', 2000).catch(() => []),
         ]);
         const leads = arr(leadsRaw); const feedback = arr(feedbackRaw); const returns = arr(returnsRaw);
         scopeNote = `You are answering for buyer "${buyer.company_name || buyer.name || 'this buyer'}". Only this buyer's own received leads, feedback, and returns are available. Other buyers' and any supplier's data are NOT available and must never be inferred or disclosed.`;
@@ -774,21 +823,20 @@ export default async function dataBot(ctx) {
     const convo = history.map((m) => `${m.role === 'user' ? 'User' : (mode === 'build' ? 'BuildBot' : 'DataBot')}: ${m.content}`).join('\n');
 
     const memoryContext = memories.length
-      ? memories.map((m) => `- [${m.category}] ${m.fact}`).join('\n')
+      ? memories.map(m => `- [${m.category}] ${m.fact}`).join('\n')
       : '(none yet)';
 
     const pastConvContext = pastConversations.length
-      ? pastConversations.map((c) => `Conversation "${c.title}":\n${c.recent.join('\n')}`).join('\n\n')
+      ? pastConversations.map(c => `Conversation "${c.title}":\n${c.recent.join('\n')}`).join('\n\n')
       : '(none)';
 
-    // Load bot config for model, temperature, instructions
+    // Load bot config for temperature, instructions, name.
     const botKey = mode === 'build' ? 'build' : 'data';
     let botConfig = {};
     try {
-      const configs = arr(await db.entities.BotConfig.filter({ bot_key: botKey }).catch(() => []));
+      const configs = arr(await svc.entities.BotConfig.filter({ bot_key: botKey }).catch(() => []));
       if (configs.length) botConfig = configs[0];
     } catch { /* config is optional */ }
-    const botModel = botConfig.model || 'gpt-4o-mini';
     const botTemp = botConfig.temperature ?? 0.4;
     const botInstructions = botConfig.instructions || '';
     const botName = botConfig.name || (mode === 'build' ? 'BuildBot' : 'DataBot');
@@ -803,7 +851,10 @@ HOW TO READ THE RESULT:
 - Each entity also carries today, yesterday, this_week, last_week, last_7_days, last_30_days, this_month, last_month and all_time, so a follow-up about a different window needs no new query. "How many sold for X yesterday" is entities[0].yesterday.sold.
 - this_week is the calendar week, Sunday through today. last_7_days is a rolling seven day window. They are different numbers and both are correct for their own question. If the user's wording is ambiguous, give the one in requested_period and note the other in a short clause rather than refusing.
 - "totals_for_period" covers the window the user asked about, across everything.
-- "groups" is the breakdown when the question sliced by a dimension. Keys are the dimension values.
+- "groups" is the breakdown, present whenever the question sliced by a dimension. The keys ARE the dimension values. If groups is present, the breakdown exists and you must answer from it. Do not say a breakdown is unavailable when groups is populated.
+- "group_by" names the dimension. "group_keys_present" lists every key that exists, including any beyond the ones detailed in groups, so you can state what is there rather than guessing.
+- Entity type follows group_by and is not negotiable. Under group_by=buyer the keys are buyers. Under group_by=supplier they are suppliers. LeadFlow, Legenex, Inbounds and TriggerFish are SUPPLIERS. Never describe a supplier as a buyer or the reverse.
+- For a superlative question (best, worst, highest, lowest, most, least) rank the entries in groups yourself on the metric asked about and name the winner with its figure. Do not fall back to a period total.
 - "overall" holds the standard windows as a fallback if the question drifts to another period.
 - Every figure block carries total, sold, unsold, disqualified, returned, rejected, duplicate, revenue, lead_cost, profit, margin_pct, cpl (cost per SOLD lead), rev_per_sold and conv_rate_pct.
 - "unresolved_refs" means the name did not match anything known. Say so and offer the closest names from "directory". Do not guess.
@@ -817,7 +868,9 @@ When asked where a money figure comes from, trace it through the finance block a
 === LEARNED MEMORIES (facts from past conversations) ===
 ${memoryContext}
 
-=== RECENT CONVERSATIONS (for continuity only, never a source of figures) ===
+Every figure you state must come from the RESULT block in this message. Past topics below are there so you know what has been discussed, not so you can reuse numbers from them. A figure quoted in an earlier answer was computed for a different question and is not valid here.
+
+=== PAST TOPICS (questions previously asked, for continuity only, never a source of figures) ===
 ${pastConvContext}
 
 === RESULT (JSON, authoritative) ===
@@ -832,7 +885,7 @@ ${convo || '(none)'}
 User: ${question}
 ${botName}:`;
 
-    const answer = await callModel({ prompt, model: botModel, temperature: botTemp, system: botInstructions || undefined });
+    const answer = await callModel({ prompt, temperature: botTemp, system: botInstructions || undefined });
 
     const answerStr = typeof answer === 'string' ? answer : JSON.stringify(answer);
 
@@ -841,12 +894,12 @@ ${botName}:`;
       const now = new Date().toISOString();
       let conv = null;
       if (conversationId) {
-        conv = await db.entities.ChatConversation.get(conversationId).catch(() => null);
+        conv = await svc.entities.ChatConversation.get(conversationId).catch(() => null);
       }
       if (!conv) {
-        const recent = arr(await db.entities.ChatConversation.filter(
+        const recent = arr(await svc.entities.ChatConversation.filter(
           { user_id: user.id, mode, active: true },
-          '-last_message_at', 1,
+          '-last_message_at', 1
         ).catch(() => []));
         if (recent.length) conv = recent[0];
       }
@@ -857,7 +910,7 @@ ${botName}:`;
         const updatedMsgs = history.length
           ? [...existingMsgs.slice(0, -history.length), ...allHistory]
           : [...existingMsgs, ...allHistory];
-        await db.entities.ChatConversation.update(conv.id, {
+        await svc.entities.ChatConversation.update(conv.id, {
           messages: JSON.stringify(updatedMsgs.slice(-50)),
           message_count: (conv.message_count || 0) + 2,
           last_message_at: now,
@@ -865,7 +918,7 @@ ${botName}:`;
         });
         conversationId = conv.id;
       } else {
-        const created = await db.entities.ChatConversation.create({
+        const created = await svc.entities.ChatConversation.create({
           user_id: user.id,
           mode,
           title: question.slice(0, 80),
@@ -878,7 +931,7 @@ ${botName}:`;
 
       const newMemories = await extractMemories(question, answerStr, memories);
       for (const mem of newMemories) {
-        await db.entities.ChatMemory.create({
+        await svc.entities.ChatMemory.create({
           user_id: user.id,
           fact: mem.fact,
           category: mem.category || 'other',
@@ -890,7 +943,7 @@ ${botName}:`;
 
     return { type: 'answer', answer: answerStr, conversation_id: conversationId };
   } catch (error) {
-    if (error instanceof HttpError) return ctx.json({ error: error.message }, error.status ?? error.statusCode ?? 500);
+    if (error instanceof HttpError) throw error;
     return ctx.json({ error: error.message }, 500);
   }
 }

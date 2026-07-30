@@ -36,6 +36,13 @@ export function startCaptureQueue(pages, returnTo = '/progress/review') {
   writeQueue(pages);
   sessionStorage.setItem(RETURN_KEY, returnTo);
 }
+
+// A single capture launched FROM the review workspace should hand you back to
+// the workspace when it is done. A capture taken from the floating button while
+// you are browsing should leave you where you are.
+export function setCaptureReturn(returnTo) {
+  sessionStorage.setItem(RETURN_KEY, returnTo);
+}
 export function maskEnabled() {
   return sessionStorage.getItem(MASK_KEY) !== 'off';
 }
@@ -135,7 +142,14 @@ export default function CaptureController() {
       const next = new URLSearchParams(params);
       next.delete('progress_capture');
       setParams(next, { replace: true });
-      setTimeout(() => setState('idle'), 3500);
+
+      const back = sessionStorage.getItem(RETURN_KEY);
+      if (back) {
+        sessionStorage.removeItem(RETURN_KEY);
+        setTimeout(() => navigate(back, { replace: true }), 900);
+      } else {
+        setTimeout(() => setState('idle'), 3500);
+      }
     }
   }, [page, location.pathname, location.search, role, user, navigate, params, setParams]);
 

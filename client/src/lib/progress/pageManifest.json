@@ -1,6 +1,6 @@
 {
-  "generated_at": "2026-07-30T11:47:28.153Z",
-  "app_commit": "a57b7e16a6be2088b5f9316126052408e411b7ad",
+  "generated_at": "2026-07-30T13:03:32.429Z",
+  "app_commit": "c4960ad522ecf3d8254c9e91032604f6a58adc29",
   "counts": {
     "total": 116,
     "by_type": {
@@ -1591,7 +1591,7 @@
       "permission_key": "progress_access",
       "entity_count": 1,
       "function_count": 3,
-      "dependency_count": 15
+      "dependency_count": 16
     },
     {
       "page_key": "progress-activity",
@@ -1612,7 +1612,7 @@
       "permission_key": "progress_access",
       "entity_count": 1,
       "function_count": 3,
-      "dependency_count": 12
+      "dependency_count": 13
     },
     {
       "page_key": "progress-changes",
@@ -1633,7 +1633,7 @@
       "permission_key": "progress_access",
       "entity_count": 1,
       "function_count": 3,
-      "dependency_count": 14
+      "dependency_count": 15
     },
     {
       "page_key": "progress-findings",
@@ -1654,7 +1654,7 @@
       "permission_key": "progress_access",
       "entity_count": 1,
       "function_count": 3,
-      "dependency_count": 14
+      "dependency_count": 15
     },
     {
       "page_key": "progress-gates",
@@ -1675,7 +1675,7 @@
       "permission_key": "progress_access",
       "entity_count": 1,
       "function_count": 3,
-      "dependency_count": 15
+      "dependency_count": 16
     },
     {
       "page_key": "progress-migration",
@@ -1696,7 +1696,7 @@
       "permission_key": "progress_access",
       "entity_count": 1,
       "function_count": 3,
-      "dependency_count": 15
+      "dependency_count": 16
     },
     {
       "page_key": "progress-prompts",
@@ -1717,7 +1717,7 @@
       "permission_key": "progress_prompts",
       "entity_count": 1,
       "function_count": 3,
-      "dependency_count": 14
+      "dependency_count": 15
     },
     {
       "page_key": "progress-review",
@@ -1738,7 +1738,7 @@
       "permission_key": "progress_access",
       "entity_count": 2,
       "function_count": 3,
-      "dependency_count": 19
+      "dependency_count": 21
     },
     {
       "page_key": "progress-settings",
@@ -1759,7 +1759,7 @@
       "permission_key": "progress_admin",
       "entity_count": 1,
       "function_count": 3,
-      "dependency_count": 15
+      "dependency_count": 16
     },
     {
       "page_key": "reports",

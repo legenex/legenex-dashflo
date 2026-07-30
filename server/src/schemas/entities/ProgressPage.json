@@ -222,6 +222,18 @@
       "default": false,
       "description": "Set when a conclusion depends on business knowledge only Nick has"
     },
+    "review_complete": {
+      "type": "boolean",
+      "default": false,
+      "description": "Nick has looked at this page and is satisfied it is done. Independent of readiness_score, which is evidence based. A section counts as complete when every page in it is ticked."
+    },
+    "review_completed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "review_completed_by": {
+      "type": "string"
+    },
     "open_findings_count": {
       "type": "number",
       "default": 0

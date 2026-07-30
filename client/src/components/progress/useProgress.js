@@ -184,26 +184,55 @@ function assessmentDepth(rec) {
   return score;
 }
 
+// Only the keys that actually carry a value. Spreading a whole record over the
+// manifest lets a null on the record wipe out a real generated value, which is
+// how route_type, host_scope, auth and roles all ended up reading "not set" and
+// why the capture queue filtered down to nothing.
+function defined(obj) {
+  const out = {};
+  Object.entries(obj || {}).forEach(([k, v]) => {
+    if (v === null || v === undefined || v === '') return;
+    out[k] = v;
+  });
+  return out;
+}
+
 // Merge records with the manifest so unregistered routes stay visible.
+//
+// Field level, not record level. The manifest supplies the generated truth, then
+// every record for that key is layered on in order of how much human judgement it
+// carries, contributing only the fields it actually has. Two records for one key
+// therefore combine (generated fields from one, assessment from the other)
+// instead of one silently winning.
 export function mergePagesWithManifest(records = [], manifestPages = manifest.pages) {
   const byKey = new Map();
   (records || []).forEach((r) => {
-    const held = byKey.get(r.page_key);
-    if (!held || assessmentDepth(r) > assessmentDepth(held)) byKey.set(r.page_key, r);
+    const list = byKey.get(r.page_key) || [];
+    list.push(r);
+    byKey.set(r.page_key, list);
   });
 
   const duplicateKeys = [];
-  const seen = new Set();
-  (records || []).forEach((r) => {
-    if (seen.has(r.page_key)) {
-      if (!duplicateKeys.includes(r.page_key)) duplicateKeys.push(r.page_key);
-    }
-    seen.add(r.page_key);
+  byKey.forEach((list, key) => {
+    if (list.length > 1) duplicateKeys.push(key);
+    list.sort((a, b) => assessmentDepth(a) - assessmentDepth(b));
   });
 
+  const layer = (base, list) => list.reduce((acc, rec) => ({ ...acc, ...defined(rec) }), base);
+
   const merged = manifestPages.map((m) => {
-    const rec = byKey.get(m.page_key);
-    if (rec) return { ...m, ...rec, registered: true, duplicated: duplicateKeys.includes(m.page_key) };
+    const list = byKey.get(m.page_key);
+    if (list && list.length) {
+      const richest = list[list.length - 1];
+      return {
+        ...layer({ ...m }, list),
+        // The canonical id must be the one a write should target.
+        id: richest.id,
+        registered: true,
+        duplicated: list.length > 1,
+        duplicate_ids: list.length > 1 ? list.map((r) => r.id) : undefined,
+      };
+    }
     return {
       ...m,
       registered: false,
@@ -215,12 +244,14 @@ export function mergePagesWithManifest(records = [], manifestPages = manifest.pa
       p0_findings_count: 0,
     };
   });
+
   // Records with no matching manifest entry are routes that were removed.
-  byKey.forEach((rec, key) => {
+  byKey.forEach((list, key) => {
     if (!manifestPages.some((m) => m.page_key === key)) {
-      merged.push({ ...rec, registered: true, orphaned: true });
+      merged.push({ ...layer({}, list), registered: true, orphaned: true });
     }
   });
+
   merged.duplicateKeys = duplicateKeys;
   return merged;
 }

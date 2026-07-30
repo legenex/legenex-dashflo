@@ -1,4 +1,3 @@
-import { requireUser, HttpError } from './_runtime.js';
 import { MANIFEST } from './pageManifest.js';
 
 // Synchronises the generated page inventory into ProgressPage records.
@@ -29,27 +28,9 @@ const GENERATED_FIELDS = [
 ];
 
 async function loadAll(entity) {
-  const pageSize = 500;
-  const out = [];
-  const seen = new Set();
-  let skip = 0;
-  while (true) {
-    const batch = (await entity.list('-created_date', pageSize, skip)) || [];
-    let added = 0;
-    for (const rec of batch) {
-      if (rec && rec.id != null) {
-        if (seen.has(rec.id)) continue;
-        seen.add(rec.id);
-      }
-      out.push(rec);
-      added += 1;
-    }
-    // Break on a short page (normal end) or when a page brings nothing new,
-    // which is what happens if the list has no server-side offset cursor.
-    if (batch.length < pageSize || added === 0) break;
-    skip += pageSize;
-  }
-  return out;
+  // Pull every ProgressPage record. The page inventory is small and bounded,
+  // so a single generous read returns the full set without cursor paging.
+  return (await entity.list('-created_date', 100000)) || [];
 }
 
 // Stable fingerprint of what a page depends on. When this changes, any prior
@@ -72,11 +53,10 @@ export default async function progressSync(ctx) {
   try {
     const db = ctx.db;
 
-    const user = requireUser(ctx);
+    const user = ctx.user;
+    if (!user) return ctx.json({ error: 'Unauthorized' }, 401);
 
-    const svc = db.entities;
-
-    const record = await svc.User.get(user.id).catch(() => null);
+    const record = await db.entities.User.get(user.id).catch(() => null);
     const caller = record || user;
 
     // Portal accounts never reach the Progress Control Center.
@@ -100,6 +80,7 @@ export default async function progressSync(ctx) {
     const body = ctx.body || {};
     const dryRun = body?.dry_run === true;
 
+    const svc = db.entities;
     const existing = await loadAll(svc.ProgressPage);
 
     // ---- de-duplication pass ----
@@ -302,7 +283,6 @@ export default async function progressSync(ctx) {
       duplicates_parked: dedupeFailures,
     });
   } catch (err) {
-    if (err instanceof HttpError) throw err;
     return ctx.json({ error: String(err?.message || err) }, 500);
   }
 }
