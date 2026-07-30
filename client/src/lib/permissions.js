@@ -68,6 +68,16 @@ export const PERMISSION_GROUPS = [
     ],
   },
   {
+    group: 'Progress Control Center',
+    items: [
+      { key: 'progress_access', label: 'View progress and reporting (read only)' },
+      { key: 'progress_write', label: 'Update assigned work and add technical notes' },
+      { key: 'progress_review', label: 'Create findings, verify fixes, approve or reject' },
+      { key: 'progress_prompts', label: 'Generate and approve implementation prompts' },
+      { key: 'progress_admin', label: 'Progress settings, release gates, readiness weights' },
+    ],
+  },
+  {
     group: 'Portal',
     items: [
       { key: 'portal_access', label: 'Portal access' },
@@ -81,7 +91,10 @@ export const ALL_KEYS = PERMISSION_GROUPS.flatMap(g => g.items.map(i => i.key));
 const DIST_KEYS = PERMISSION_GROUPS.find(g => g.group === 'Lead Distribution').items.map(i => i.key);
 const FINANCE_KEYS = ['finances', 'bank_feed'];
 const OPERATIONS_KEYS = ['operations', 'ad_manager'];
-export const RESTRICTED_FOR_PARTNERS = [...DIST_KEYS, ...FINANCE_KEYS, ...OPERATIONS_KEYS, 'buildbot'];
+// The Progress Control Center is internal only. It exposes findings, prompts,
+// migration risk and release gates, none of which a buyer or supplier may ever see.
+export const PROGRESS_KEYS = PERMISSION_GROUPS.find(g => g.group === 'Progress Control Center').items.map(i => i.key);
+export const RESTRICTED_FOR_PARTNERS = [...DIST_KEYS, ...FINANCE_KEYS, ...OPERATIONS_KEYS, ...PROGRESS_KEYS, 'buildbot'];
 
 const all = () => Object.fromEntries(ALL_KEYS.map(k => [k, true]));
 const only = (keys) => Object.fromEntries(keys.map(k => [k, true]));
@@ -90,7 +103,7 @@ const allExcept = (excluded) => Object.fromEntries(ALL_KEYS.filter(k => !exclude
 export const ROLE_PRESETS = {
   owner: { label: 'Owner', description: 'Everything. Can delete users, including the Owner.', canDeleteOwner: true, permissions: all() },
   admin: { label: 'Admin', description: 'Everything except deleting the Owner. Finances & Bank Feed off by default.', canDeleteOwner: false, permissions: allExcept(['finances', 'bank_feed']) },
-  manager: { label: 'Manager', description: 'Most things except Finances & Bank Feed. No BuildBot.', canDeleteOwner: false, permissions: allExcept([...FINANCE_KEYS, 'buildbot']) },
+  manager: { label: 'Manager', description: 'Most things except Finances & Bank Feed. No BuildBot.', canDeleteOwner: false, permissions: allExcept([...FINANCE_KEYS, 'buildbot', 'progress_admin', 'progress_prompts']) },
   supplier: { label: 'Supplier', description: 'Own data only. No Lead Distribution, no Finances.', canDeleteOwner: false, permissions: only(['overview', 'leads_all', 'leads_sold', 'leads_unsold', 'reports', 'portal_access', 'databot']) },
   buyer: { label: 'Buyer', description: 'Own data only. No Lead Distribution, no Finances.', canDeleteOwner: false, permissions: only(['overview', 'leads_all', 'leads_sold', 'reports', 'portal_access', 'databot']) },
 };
@@ -132,6 +145,17 @@ export const PATH_KEYS = {
   '/queue-recovery': 'leads_queued',
   '/suppliers': 'dist_suppliers',
   '/buyers': 'dist_buyers',
+  // Progress Control Center. Every route requires at least read access; the
+  // write, review, prompt and admin keys gate actions inside the surfaces.
+  '/progress': 'progress_access',
+  '/progress/review': 'progress_access',
+  '/progress/findings': 'progress_access',
+  '/progress/changes': 'progress_access',
+  '/progress/prompts': 'progress_prompts',
+  '/progress/activity': 'progress_access',
+  '/progress/migration': 'progress_access',
+  '/progress/gates': 'progress_access',
+  '/progress/settings': 'progress_admin',
 };
 
 // Settings ?tab= value -> permission key. Profile is always accessible (null key).
@@ -158,6 +182,7 @@ export function keyForLocation(pathname, search) {
     return SETTINGS_TAB_KEYS[tab] || 'set_integrations';
   }
   // Detail routes fall under their list permission.
+  if (pathname.startsWith('/progress/review/')) return 'progress_access';
   if (pathname.startsWith('/suppliers/')) return 'dist_suppliers';
   if (pathname.startsWith('/buyers/')) return 'dist_buyers';
   if (pathname.startsWith('/distribution/buyers/')) return 'dist_buyers';

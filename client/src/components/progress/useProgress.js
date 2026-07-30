@@ -1,0 +1,184 @@
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { api } from '@/api/client';
+import { fetchAll } from '@/lib/fetchAll';
+import manifest from '@/lib/progress/pageManifest.json';
+
+// Data layer for the Progress Control Center.
+//
+// Two sources feed the surfaces:
+//   1. ProgressPage and friends, the live records.
+//   2. The generated manifest, which lets the Application Review tree render the
+//      complete route inventory even before the first sync has run. A page that
+//      exists in the router but has no record yet is shown as unregistered
+//      rather than being silently absent, because a missing surface is exactly
+//      the kind of thing this system is meant to catch.
+
+const list = (entity, order = '-created_date') =>
+  fetchAll((limit, skip) => api.entities[entity].list(order, limit, skip));
+
+const STALE = 60 * 1000;
+
+export function useProgressPages() {
+  return useQuery({
+    queryKey: ['progress-pages'],
+    queryFn: () => list('ProgressPage'),
+    staleTime: STALE,
+  });
+}
+
+export function useProgressFindings() {
+  return useQuery({
+    queryKey: ['progress-findings'],
+    queryFn: () => list('AuditFinding'),
+    staleTime: STALE,
+  });
+}
+
+export function useReviewThreads() {
+  return useQuery({
+    queryKey: ['progress-threads'],
+    queryFn: () => list('ReviewThread'),
+    staleTime: STALE,
+  });
+}
+
+export function useChangeRequests() {
+  return useQuery({
+    queryKey: ['progress-changes'],
+    queryFn: () => list('ChangeRequest'),
+    staleTime: STALE,
+  });
+}
+
+export function usePromptDrafts() {
+  return useQuery({
+    queryKey: ['progress-prompts'],
+    queryFn: () => list('PromptDraft'),
+    staleTime: STALE,
+  });
+}
+
+export function useReleaseGates() {
+  return useQuery({
+    queryKey: ['progress-gates'],
+    queryFn: () => list('ReleaseGate', 'sort_order'),
+    staleTime: STALE,
+  });
+}
+
+export function useMigrationRequirements() {
+  return useQuery({
+    queryKey: ['progress-migration'],
+    queryFn: () => list('MigrationRequirement', 'sort_order'),
+    staleTime: STALE,
+  });
+}
+
+export function useVerificationRecords() {
+  return useQuery({
+    queryKey: ['progress-verifications'],
+    queryFn: () => list('VerificationRecord'),
+    staleTime: STALE,
+  });
+}
+
+export function useProgressSnapshots() {
+  return useQuery({
+    queryKey: ['progress-snapshots'],
+    queryFn: () => list('ProgressSnapshot', '-snapshot_date'),
+    staleTime: STALE,
+  });
+}
+
+// The manifest is a build artefact, so it never changes at runtime.
+export function usePageManifest() {
+  return manifest;
+}
+
+// Recalculate readiness. This is the only way the UI may move a readiness score:
+// the client never computes and writes one itself.
+export function useRecalculate() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (body = {}) => {
+      const res = await api.functions.invoke('progressReadiness', body);
+      return res.data;
+    },
+    onSuccess: () => {
+      ['progress-pages', 'progress-gates', 'progress-snapshots'].forEach((k) =>
+        qc.invalidateQueries({ queryKey: [k] }));
+    },
+  });
+}
+
+// Re-sync the page inventory from the generated manifest.
+export function useSyncInventory() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (body = {}) => {
+      const res = await api.functions.invoke('progressSync', body);
+      return res.data;
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['progress-pages'] }),
+  });
+}
+
+export function useGeneratePrompt() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (body) => {
+      const res = await api.functions.invoke('progressPrompt', body);
+      return res.data;
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['progress-prompts'] });
+      qc.invalidateQueries({ queryKey: ['progress-changes'] });
+    },
+  });
+}
+
+// Generic record writer for the review surfaces.
+export function useProgressMutation(entity, queryKey) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ action, id, data }) => {
+      if (action === 'create') return api.entities[entity].create(data);
+      if (action === 'update') return api.entities[entity].update(id, data);
+      if (action === 'delete') return api.entities[entity].delete(id);
+      throw new Error(`Unsupported action ${action}`);
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: [queryKey] }),
+  });
+}
+
+export const parseJson = (value, fallback) => {
+  if (value == null) return fallback;
+  if (typeof value !== 'string') return value;
+  try { return JSON.parse(value); } catch { return fallback; }
+};
+
+// Merge records with the manifest so unregistered routes stay visible.
+export function mergePagesWithManifest(records = [], manifestPages = manifest.pages) {
+  const byKey = new Map((records || []).map((r) => [r.page_key, r]));
+  const merged = manifestPages.map((m) => {
+    const rec = byKey.get(m.page_key);
+    if (rec) return { ...m, ...rec, registered: true };
+    return {
+      ...m,
+      registered: false,
+      lifecycle_status: 'not_started',
+      verification_status: 'unverified',
+      readiness_score: 0,
+      criticality: 'normal',
+      open_findings_count: 0,
+      p0_findings_count: 0,
+    };
+  });
+  // Records with no matching manifest entry are routes that were removed.
+  (records || []).forEach((rec) => {
+    if (!manifestPages.some((m) => m.page_key === rec.page_key)) {
+      merged.push({ ...rec, registered: true, orphaned: true });
+    }
+  });
+  return merged;
+}
