@@ -146,9 +146,25 @@ export async function rasterise(target, { mask = true, width } = {}) {
       if (mask) {
         try { maskCount = maskClone(clonedDoc); } catch { maskCount = -1; }
       }
-      // Hide the capture controls themselves so they do not appear in the shot.
+      // Hide the capture controls so they do not appear in the shot. The
+      // offscreen host carries the same attribute (so it stays out of ordinary
+      // in-page captures) but it IS the target here, so it must be exempt.
+      // Hiding it produced an empty canvas on every offscreen capture.
       clonedDoc.querySelectorAll('[data-progress-capture-ui]').forEach((el) => {
+        if (el.hasAttribute('data-offscreen-capture')) return;
+        if (el.querySelector?.('[data-offscreen-capture]')) return;
         el.style.display = 'none';
+      });
+      // The live host is transparent and parked behind the page so it cannot be
+      // seen or clicked. In the clone it has to be fully visible and at the
+      // origin, otherwise there is nothing to rasterise.
+      clonedDoc.querySelectorAll('[data-offscreen-capture]').forEach((el) => {
+        el.style.opacity = '1';
+        el.style.position = 'static';
+        el.style.left = '0';
+        el.style.top = '0';
+        el.style.zIndex = 'auto';
+        el.style.visibility = 'visible';
       });
     },
   });

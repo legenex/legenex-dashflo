@@ -27,11 +27,17 @@ const GENERATED_FIELDS = [
   'component_dependencies',
 ];
 
-// The record client exposes list(sort, limit) with no offset pagination, so we
-// pull the whole inventory in a single generously bounded call. ProgressPage is
-// a page inventory (dozens to low hundreds of rows), well within this ceiling.
 async function loadAll(entity) {
-  return (await entity.list('-created_date', 100000)) || [];
+  const pageSize = 500;
+  const out = [];
+  let skip = 0;
+  while (true) {
+    const batch = (await entity.list('-created_date', pageSize, skip)) || [];
+    out.push(...batch);
+    if (batch.length < pageSize) break;
+    skip += pageSize;
+  }
+  return out;
 }
 
 // Stable fingerprint of what a page depends on. When this changes, any prior
@@ -53,6 +59,7 @@ const toJson = (value) => (value == null ? null : JSON.stringify(value));
 export default async function progressSync(ctx) {
   try {
     const db = ctx.db;
+    const body = ctx.body || {};
 
     const user = ctx.user;
     if (!user) return ctx.json({ error: 'Unauthorized' }, 401);
@@ -78,7 +85,6 @@ export default async function progressSync(ctx) {
       return ctx.json({ error: 'Forbidden' }, 403);
     }
 
-    const body = ctx.body || {};
     const dryRun = body?.dry_run === true;
 
     const svc = db.entities;
