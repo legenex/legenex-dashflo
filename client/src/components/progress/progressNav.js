@@ -34,6 +34,7 @@ export const PROGRESS_NAV = [
     to: '/progress/findings',
     icon: AlertTriangle,
     permKey: 'progress_access',
+    built: true,
     description: 'Machine, AI and human findings in one list',
   },
   {
@@ -42,6 +43,7 @@ export const PROGRESS_NAV = [
     to: '/progress/changes',
     icon: GitPullRequest,
     permKey: 'progress_access',
+    built: true,
     description: 'Approved and proposed work, draft through released',
   },
   {
@@ -50,6 +52,7 @@ export const PROGRESS_NAV = [
     to: '/progress/prompts',
     icon: Sparkles,
     permKey: 'progress_prompts',
+    built: true,
     description: 'Implementation prompts for agents and developers',
   },
   {
@@ -58,6 +61,7 @@ export const PROGRESS_NAV = [
     to: '/progress/activity',
     icon: Activity,
     permKey: 'progress_access',
+    built: true,
     description: 'What changed, who changed it and what it affected',
   },
   {
@@ -66,6 +70,7 @@ export const PROGRESS_NAV = [
     to: '/progress/migration',
     icon: ArrowRightLeft,
     permKey: 'progress_access',
+    built: true,
     description: 'Capability parity across the ten migration groups',
   },
   {
@@ -74,6 +79,7 @@ export const PROGRESS_NAV = [
     to: '/progress/gates',
     icon: ShieldCheck,
     permKey: 'progress_access',
+    built: true,
     description: 'Objective conditions that must hold before cutover',
   },
   {
@@ -82,6 +88,7 @@ export const PROGRESS_NAV = [
     to: '/progress/settings',
     icon: Cog,
     permKey: 'progress_admin',
+    built: true,
     description: 'Weights, gates, verification requirements, sync',
   },
 ];

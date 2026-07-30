@@ -7,6 +7,7 @@ import Sidebar from './Sidebar';
 import DrawerNav from './DrawerNav';
 import MobileBottomTabs from './MobileBottomTabs';
 import DataBotWidget from '@/components/databot/DataBotWidget';
+import CaptureController from '@/components/progress/CaptureController';
 import { Sheet, SheetContent } from '@/components/ui/sheet';
 import { navGroups } from './navConfig';
 import { usePullToRefresh } from '@/hooks/usePullToRefresh';
@@ -157,6 +158,9 @@ export default function AppLayout() {
       </main>
       <MobileBottomTabs />
       <DataBotWidget />
+      {/* Progress Control Center capture control. Renders nothing at all unless
+          the current user holds a progress write or admin permission. */}
+      <CaptureController />
     </div>
   );
 }

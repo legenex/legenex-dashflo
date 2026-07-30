@@ -60,6 +60,13 @@ import ToolsDashboard from '@/pages/ToolsDashboard';
 import ProgressLayout from '@/components/progress/ProgressLayout';
 import CommandCenter from '@/pages/progress/CommandCenter';
 import ApplicationReview from '@/pages/progress/ApplicationReview';
+import Migration from '@/pages/progress/Migration';
+import Gates from '@/pages/progress/Gates';
+import Findings from '@/pages/progress/Findings';
+import ChangeRequests from '@/pages/progress/ChangeRequests';
+import PromptStudio from '@/pages/progress/PromptStudio';
+import BuildActivity from '@/pages/progress/BuildActivity';
+import ProgressSettings from '@/pages/progress/ProgressSettings';
 
 import PortalLayout from '@/components/portal/PortalLayout';
 import PortalDashboard from '@/pages/portal/PortalDashboard';
@@ -141,6 +148,13 @@ const ProgressRoutes = () => (
   <Route element={<ProgressLayout />}>
     <Route path="/progress" element={<CommandCenter />} />
     <Route path="/progress/review" element={<ApplicationReview />} />
+    <Route path="/progress/migration" element={<Migration />} />
+    <Route path="/progress/gates" element={<Gates />} />
+    <Route path="/progress/findings" element={<Findings />} />
+    <Route path="/progress/changes" element={<ChangeRequests />} />
+    <Route path="/progress/prompts" element={<PromptStudio />} />
+    <Route path="/progress/activity" element={<BuildActivity />} />
+    <Route path="/progress/settings" element={<ProgressSettings />} />
   </Route>
 );
 
@@ -173,6 +187,30 @@ const AuthenticatedApp = () => {
       <div className="fixed inset-0 flex items-center justify-center bg-background">
         <div className="w-8 h-8 border-4 border-primary/20 border-t-primary rounded-full animate-spin"></div>
       </div>
+    );
+  }
+
+  // Progress subdomain: authenticated, and the ONLY thing it serves. The
+  // operator dashboard is never reachable here, so an unauthenticated visitor
+  // goes to login and every other path lands back on the Command Center rather
+  // than falling through to the operator app.
+  if (isProgressHost()) {
+    if (authError) {
+      if (authError.type === 'user_not_registered') return <UserNotRegisteredError />;
+      if (authError.type === 'auth_required') { navigateToLogin(); return null; }
+    }
+    return (
+      <Routes>
+        <Route path="/login" element={<Login />} />
+        <Route path="/forgot-password" element={<ForgotPassword />} />
+        <Route path="/reset-password" element={<ResetPassword />} />
+        <Route element={<ProtectedRoute unauthenticatedElement={<Navigate to="/login" replace />} />}>
+          <Route element={<PermissionRoute />}>
+            {ProgressRoutes()}
+          </Route>
+        </Route>
+        <Route path="*" element={<Navigate to="/progress" replace />} />
+      </Routes>
     );
   }
 

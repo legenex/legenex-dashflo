@@ -90,6 +90,14 @@ export function useProgressSnapshots() {
   });
 }
 
+export function usePageSnapshots() {
+  return useQuery({
+    queryKey: ['progress-page-snapshots'],
+    queryFn: () => list('PageSnapshot', '-captured_at'),
+    staleTime: 15 * 1000,
+  });
+}
+
 // The manifest is a build artefact, so it never changes at runtime.
 export function usePageManifest() {
   return manifest;
@@ -157,12 +165,45 @@ export const parseJson = (value, fallback) => {
   try { return JSON.parse(value); } catch { return fallback; }
 };
 
+// How much human judgement a record carries. When two records share a page_key
+// (a race between a sync and another writer) the UI must not pick arbitrarily,
+// or an assessed page silently reads as never started. Prefer the richer record
+// until progressSync collapses them properly.
+function assessmentDepth(rec) {
+  if (!rec) return -1;
+  let score = 0;
+  if (rec.lifecycle_status && rec.lifecycle_status !== 'not_started') score += 4;
+  if (rec.criticality && rec.criticality !== 'normal') score += 3;
+  if (rec.purpose) score += 2;
+  if (rec.gaps) score += 2;
+  if (rec.strengths) score += 1;
+  if (rec.human_notes) score += 1;
+  if (rec.migration_required != null) score += 1;
+  if (rec.leadbyte_equivalent) score += 1;
+  if (rec.dimension_scores) score += 2;
+  return score;
+}
+
 // Merge records with the manifest so unregistered routes stay visible.
 export function mergePagesWithManifest(records = [], manifestPages = manifest.pages) {
-  const byKey = new Map((records || []).map((r) => [r.page_key, r]));
+  const byKey = new Map();
+  (records || []).forEach((r) => {
+    const held = byKey.get(r.page_key);
+    if (!held || assessmentDepth(r) > assessmentDepth(held)) byKey.set(r.page_key, r);
+  });
+
+  const duplicateKeys = [];
+  const seen = new Set();
+  (records || []).forEach((r) => {
+    if (seen.has(r.page_key)) {
+      if (!duplicateKeys.includes(r.page_key)) duplicateKeys.push(r.page_key);
+    }
+    seen.add(r.page_key);
+  });
+
   const merged = manifestPages.map((m) => {
     const rec = byKey.get(m.page_key);
-    if (rec) return { ...m, ...rec, registered: true };
+    if (rec) return { ...m, ...rec, registered: true, duplicated: duplicateKeys.includes(m.page_key) };
     return {
       ...m,
       registered: false,
@@ -175,10 +216,11 @@ export function mergePagesWithManifest(records = [], manifestPages = manifest.pa
     };
   });
   // Records with no matching manifest entry are routes that were removed.
-  (records || []).forEach((rec) => {
-    if (!manifestPages.some((m) => m.page_key === rec.page_key)) {
+  byKey.forEach((rec, key) => {
+    if (!manifestPages.some((m) => m.page_key === key)) {
       merged.push({ ...rec, registered: true, orphaned: true });
     }
   });
+  merged.duplicateKeys = duplicateKeys;
   return merged;
 }

@@ -4,8 +4,9 @@ import React from 'react';
 //
 // These exist so every progress surface uses the same card, row, badge and empty
 // state treatment as the known-good operator pages. Semantic tokens only: no raw
-// hex, no bg-gray-*, no text-white. A flat list of rows on raw canvas is the
-// design-system regression signature and must never appear here.
+// hex values and no raw Tailwind palette utilities of any kind. A flat list of
+// rows on raw canvas is the design-system regression signature and must never
+// appear here. See DESIGN-SYSTEM.md for the token table.
 
 export function ProgressPageHeader({ title, description, actions, children }) {
   return (

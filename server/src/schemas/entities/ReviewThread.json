@@ -84,6 +84,26 @@
       "type": "string",
       "description": "JSON blob: route, query params, filters, role, theme, viewport, commit, data source. Captured automatically at comment time."
     },
+    "snapshot_id": {
+      "type": "string",
+      "description": "PageSnapshot this comment is anchored to, when the comment was drawn on a screenshot"
+    },
+    "region": {
+      "type": "string",
+      "description": "JSON {x, y, w, h} in natural image pixels, so the box can be redrawn on the snapshot later"
+    },
+    "crop_url": {
+      "type": "string",
+      "description": "Uploaded PNG of just the selected region. Small, and enough to see what was meant without opening the full capture."
+    },
+    "element_selector": {
+      "type": "string",
+      "description": "Best-effort CSS path of the element under the selection, resolved at draw time"
+    },
+    "element_audit_id": {
+      "type": "string",
+      "description": "data-audit-id of the element under the selection, when the component carries one"
+    },
     "status": {
       "type": "string",
       "enum": [

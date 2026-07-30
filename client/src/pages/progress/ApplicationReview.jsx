@@ -2,18 +2,20 @@ import React, { useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
   ChevronRight, ChevronDown, Search, MessageSquarePlus, AlertTriangle, Database,
-  Puzzle, FileCode, ShieldCheck, EyeOff, CornerUpRight, Send,
+  Puzzle, FileCode, ShieldCheck, EyeOff, CornerUpRight, Send, Camera,
 } from 'lucide-react';
 import { usePermissions } from '@/lib/AuthContext';
 import { pageReadiness } from '@/lib/progress/readiness';
 import {
   useProgressPages, useProgressFindings, useReviewThreads, useVerificationRecords,
-  useProgressMutation, mergePagesWithManifest, usePageManifest, parseJson,
+  usePageSnapshots, useProgressMutation, mergePagesWithManifest, usePageManifest, parseJson,
 } from '@/components/progress/useProgress';
+import VisualReview from '@/components/progress/VisualReview';
+import { startCaptureQueue } from '@/components/progress/CaptureController';
 import { sortSections } from '@/components/progress/progressNav';
 import {
   ProgressPageHeader, Card, CardHeader, CardBody, Badge, EmptyState, Row,
-  PrimaryButton, SecondaryButton, LoadingBlock, ReadinessBar, toneForReadiness,
+  PrimaryButton, LoadingBlock, ReadinessBar, toneForReadiness,
   LIFECYCLE_LABEL, LIFECYCLE_TONE, PRIORITY_TONE, EvidenceBadge,
 } from '@/components/progress/progressUi';
 
@@ -62,6 +64,7 @@ const groupBy = (list, key) => {
 
 export default function ApplicationReview() {
   const manifest = usePageManifest();
+  const { can } = usePermissions();
   const [params, setParams] = useSearchParams();
   const selectedKey = params.get('page');
   const [query, setQuery] = useState('');
@@ -71,6 +74,7 @@ export default function ApplicationReview() {
   const findingsQ = useProgressFindings();
   const threadsQ = useReviewThreads();
   const verifsQ = useVerificationRecords();
+  const snapsQ = usePageSnapshots();
 
   const pages = useMemo(
     () => mergePagesWithManifest(pagesQ.data || [], manifest.pages),
@@ -83,6 +87,7 @@ export default function ApplicationReview() {
     () => groupBy((verifsQ.data || []).filter((v) => v.subject_type === 'page'), 'subject_key'),
     [verifsQ.data],
   );
+  const snapsByPage = useMemo(() => groupBy(snapsQ.data, 'page_key'), [snapsQ.data]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -119,6 +124,30 @@ export default function ApplicationReview() {
       <ProgressPageHeader
         title="Application Review"
         description={`${pages.length} surfaces derived from the router, nav and permission config. Select one to review it.`}
+        actions={(can('progress_write') || can('progress_admin')) ? (
+          <PrimaryButton
+            onClick={() => {
+              // Walk the capturable routes in this session. Redirects, catchalls
+              // and detail routes with an :id placeholder have nothing stable to
+              // capture, so they are skipped rather than producing junk.
+              const queue = pages
+                .filter((p) => ['page', 'tab'].includes(p.route_type))
+                .filter((p) => !String(p.route).includes(':'))
+                .filter((p) => p.portal_scope === 'operator')
+                .map((p) => ({ page_key: p.page_key, route: p.route }));
+              if (queue.length === 0) return;
+              startCaptureQueue(queue, '/progress/review');
+              const first = queue[0];
+              const sep = first.route.includes('?') ? '&' : '?';
+              window.location.assign(`${first.route}${sep}progress_capture=${first.page_key}`);
+            }}
+          >
+            <span className="flex items-center gap-1.5">
+              <Camera className="h-3.5 w-3.5" />
+              Capture every page
+            </span>
+          </PrimaryButton>
+        ) : null}
       />
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,320px)_minmax(0,1fr)]">
@@ -214,6 +243,7 @@ export default function ApplicationReview() {
               findings={findingsByPage[selected.page_key] || []}
               threads={threadsByPage[selected.page_key] || []}
               verifications={verifsByPage[selected.page_key] || []}
+              snapshots={snapsByPage[selected.page_key] || []}
             />
           )}
         </div>
@@ -228,12 +258,13 @@ export default function ApplicationReview() {
 
 const TABS = [
   { key: 'overview', label: 'Overview' },
+  { key: 'visual', label: 'Visual review' },
   { key: 'backend', label: 'Backend and dependencies' },
   { key: 'findings', label: 'Findings' },
   { key: 'comments', label: 'Comments' },
 ];
 
-function PageWorkspace({ page, findings, threads, verifications }) {
+function PageWorkspace({ page, findings, threads, verifications, snapshots = [] }) {
   const { can } = usePermissions();
   const [tab, setTab] = useState('overview');
   const pageMutation = useProgressMutation('ProgressPage', 'progress-pages');
@@ -327,6 +358,9 @@ function PageWorkspace({ page, findings, threads, verifications }) {
               {t.key === 'comments' && threads.length > 0 && (
                 <span className="ml-1.5 rounded-full bg-muted px-1.5 text-[10px] text-muted-foreground">{threads.length}</span>
               )}
+              {t.key === 'visual' && snapshots.length > 0 && (
+                <span className="ml-1.5 rounded-full bg-muted px-1.5 text-[10px] text-muted-foreground">{snapshots.length}</span>
+              )}
             </button>
           ))}
         </div>
@@ -334,6 +368,9 @@ function PageWorkspace({ page, findings, threads, verifications }) {
 
       {tab === 'overview' && (
         <OverviewTab page={page} result={result} canWrite={canWrite} mutation={pageMutation} />
+      )}
+      {tab === 'visual' && (
+        <VisualReview page={page} snapshots={snapshots} threads={threads} />
       )}
       {tab === 'backend' && (
         <BackendTab entities={entities} functions={functions} components={components} layouts={layouts} page={page} />
