@@ -74,7 +74,7 @@ export default function ProgressLayout() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const { can } = usePermissions();
 
-  const items = PROGRESS_NAV.filter((i) => !i.permKey || can(i.permKey));
+  const items = PROGRESS_NAV.filter((i) => i.built && (!i.permKey || can(i.permKey)));
 
   // A user who reached a progress route without any progress key at all sees an
   // explicit notice rather than an empty shell.

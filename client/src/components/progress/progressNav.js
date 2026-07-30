@@ -6,6 +6,8 @@ import {
 // The Progress Control Center has its own navigation. It deliberately does NOT
 // live inside the operator sidebar: this is an internal build-management surface,
 // not part of the product Nick's team runs the business on.
+// `built` gates the sidebar. A surface that does not exist yet is not linked,
+// because a dead nav link is a defect, not a placeholder.
 export const PROGRESS_NAV = [
   {
     key: 'command',
@@ -13,6 +15,7 @@ export const PROGRESS_NAV = [
     to: '/progress',
     icon: Gauge,
     permKey: 'progress_access',
+    built: true,
     description: 'Readiness, blockers and the current go or no-go call',
   },
   {
@@ -22,6 +25,7 @@ export const PROGRESS_NAV = [
     icon: ListTree,
     permKey: 'progress_access',
     tree: true,
+    built: true,
     description: 'Every section and page, with a review workspace each',
   },
   {

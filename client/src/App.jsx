@@ -57,6 +57,10 @@ import AdBuilder from '@/pages/admanager/AdBuilder';
 import PayloadTester from '@/pages/PayloadTester';
 import ToolsDashboard from '@/pages/ToolsDashboard';
 
+import ProgressLayout from '@/components/progress/ProgressLayout';
+import CommandCenter from '@/pages/progress/CommandCenter';
+import ApplicationReview from '@/pages/progress/ApplicationReview';
+
 import PortalLayout from '@/components/portal/PortalLayout';
 import PortalDashboard from '@/pages/portal/PortalDashboard';
 import PortalLeads from '@/pages/portal/PortalLeads';
@@ -123,6 +127,22 @@ const isDocsHost = () =>
 // never gates on auth or redirects to the login page.
 const isApiHost = () =>
   typeof window !== 'undefined' && /(^|\.)api\./i.test(window.location.hostname);
+
+// True when served on the Progress Control Center host
+// (progress.dashboard.legenex.com). On that host the app serves ONLY the
+// authenticated progress experience: the ordinary operator dashboard is never
+// reachable through the progress subdomain.
+const isProgressHost = () =>
+  typeof window !== 'undefined' && /^progress\./i.test(window.location.hostname);
+
+// The progress route table, reused on both the progress subdomain (as the whole
+// app) and under /progress on the main dashboard.
+const ProgressRoutes = () => (
+  <Route element={<ProgressLayout />}>
+    <Route path="/progress" element={<CommandCenter />} />
+    <Route path="/progress/review" element={<ApplicationReview />} />
+  </Route>
+);
 
 const AuthenticatedApp = () => {
   const { isLoadingAuth, isLoadingPublicSettings, authError, navigateToLogin } = useAuth();
@@ -271,6 +291,10 @@ const AuthenticatedApp = () => {
             <Route path="/payload-tester" element={<PayloadTester />} />
           </Route>
           <Route path="/settings" element={<Settings />} />
+          {/* Progress Control Center on the main dashboard host. Gated by the
+              progress permission keys through PermissionRoute like every other
+              operator route. */}
+          {ProgressRoutes()}
           </Route>
         </Route>
       </Route>
