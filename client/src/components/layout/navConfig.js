@@ -8,6 +8,7 @@ import {
   Gauge, MapPin, FileBarChart, UserPlus, Bell, Calculator, ShieldCheck, FlaskConical,
   User, Plug, Database, ListTree, KeyRound, AlertTriangle, BookOpen, Wallet2,
   LineChart, ImageIcon, PenTool,
+  ClipboardCheck, Sparkles, Activity, ArrowRightLeft, GitPullRequest,
 } from 'lucide-react';
 
 export const navGroups = [
@@ -85,6 +86,23 @@ export const navGroups = [
       { label: 'Calculated Fields', path: '/calculated-fields', icon: Calculator, permKey: 'tools' },
       { label: 'Verification', path: '/verification', icon: ShieldCheck, permKey: 'tools' },
       { label: 'Payload Tester', path: '/payload-tester', icon: FlaskConical, permKey: 'tools' },
+    ],
+  },
+  {
+    // The Progress Control Center used to render its own sidebar next to this
+    // one, which meant three nav columns before the thing being reviewed. It is
+    // a section like any other, so it lives here.
+    label: 'Progress', icon: ClipboardCheck, type: 'dropdown', path: '/progress', permKey: 'progress_access',
+    children: [
+      { label: 'Command Center', path: '/progress', icon: Gauge, permKey: 'progress_access' },
+      { label: 'Application Review', path: '/progress/review', icon: ListTree, permKey: 'progress_access' },
+      { label: 'Findings', path: '/progress/findings', icon: AlertTriangle, permKey: 'progress_access' },
+      { label: 'Change Requests', path: '/progress/changes', icon: GitPullRequest, permKey: 'progress_access' },
+      { label: 'Prompt Studio', path: '/progress/prompts', icon: Sparkles, permKey: 'progress_prompts' },
+      { label: 'Build Activity', path: '/progress/activity', icon: Activity, permKey: 'progress_access' },
+      { label: 'LeadByte Migration', path: '/progress/migration', icon: ArrowRightLeft, permKey: 'progress_access' },
+      { label: 'Release Gates', path: '/progress/gates', icon: ShieldCheck, permKey: 'progress_access' },
+      { label: 'Progress Settings', path: '/progress/settings', icon: Cog, permKey: 'progress_admin' },
     ],
   },
   {

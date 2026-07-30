@@ -3,6 +3,7 @@ import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import { Menu, X, ExternalLink, ShieldAlert, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import { usePermissions } from '@/lib/AuthContext';
 import { PROGRESS_NAV } from './progressNav';
+import { isProgressHost } from '@/lib/hostScope';
 import ProgressErrorBoundary from './ProgressErrorBoundary';
 
 // Dedicated shell for the Progress Control Center.
@@ -101,10 +102,26 @@ export default function ProgressLayout() {
     );
   }
 
+  // On the dashboard host the operator sidebar already carries a Progress
+  // section, so rendering a second nav column here would be duplicate navigation
+  // eating the width of the thing being reviewed. On the progress subdomain
+  // there is no operator sidebar, so this is the only navigation and it stays.
+  const ownNav = isProgressHost(typeof window !== 'undefined' ? window.location.hostname : '');
+
+  if (!ownNav) {
+    return (
+      <div className="min-w-0">
+        <ProgressErrorBoundary key={location.pathname}>
+          <Outlet />
+        </ProgressErrorBoundary>
+      </div>
+    );
+  }
+
   return (
     <div className="flex min-h-screen bg-background">
-      {/* Desktop sidebar. Collapsible, because the operator sidebar plus this one
-          plus the page tree left very little room for the thing being reviewed. */}
+      {/* Desktop sidebar. Only on the progress subdomain. Collapsible, because
+          even alone it competes with the page tree for width. */}
       <aside className={`hidden shrink-0 flex-col border-r border-border bg-card lg:flex ${navOpen ? 'w-64' : 'w-14'}`}>
         {navOpen && <SidebarHeader />}
         <NavItems items={items} compact={!navOpen} />

@@ -186,7 +186,7 @@ export default function ApplicationReview() {
         </Card>
       )}
 
-      <div className={`grid grid-cols-1 gap-4 ${treeOpen ? 'lg:grid-cols-[minmax(0,280px)_minmax(0,1fr)]' : 'lg:grid-cols-1'}`}>
+      <div className={`grid grid-cols-1 gap-4 ${treeOpen ? 'lg:grid-cols-[minmax(0,250px)_minmax(0,1fr)]' : 'lg:grid-cols-1'}`}>
         {/* Tree */}
         <Card className={`h-fit lg:sticky lg:top-4 ${treeOpen ? '' : 'hidden'}`}>
           <div className="border-b border-border p-3">
@@ -379,7 +379,7 @@ function PageWorkspace({ page, findings, threads, verifications, snapshots = [],
       </Card>
 
       {/* The review itself: screenshot beside the task list. */}
-      <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,360px)]">
+      <div className="grid grid-cols-1 gap-4 2xl:grid-cols-[minmax(0,1fr)_minmax(0,320px)]">
         <VisualReview
           page={page}
           snapshots={snapshots}

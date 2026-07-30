@@ -1,6 +1,6 @@
 {
-  "generated_at": "2026-07-30T13:43:10.908Z",
-  "app_commit": "375e8278be9f26d5c691041bbf7849776fefe357",
+  "generated_at": "2026-07-30T19:29:18.512Z",
+  "app_commit": "783b968af31709edfb411b5d34dfba5d5a6df525",
   "counts": {
     "total": 116,
     "by_type": {
@@ -23,7 +23,7 @@
       "operations": 7,
       "other": 7,
       "overview": 2,
-      "progress-control-center": 9,
+      "progress": 9,
       "reports": 8,
       "settings": 15,
       "supplier-portal": 6,
@@ -36,7 +36,7 @@
       "progress": 9,
       "supplier_portal": 6
     },
-    "hidden_from_nav": 46
+    "hidden_from_nav": 37
   },
   "pages": [
     {
@@ -1574,8 +1574,8 @@
     },
     {
       "page_key": "progress",
-      "section_key": "progress-control-center",
-      "section_label": "Progress Control Center",
+      "section_key": "progress",
+      "section_label": "Progress",
       "title": "Command Center",
       "route": "/progress",
       "parent_route": null,
@@ -1587,16 +1587,16 @@
       "component": "CommandCenter",
       "component_path": "src/pages/progress/CommandCenter.jsx",
       "auth": "public",
-      "nav_visibility": "hidden",
+      "nav_visibility": "nav",
       "permission_key": "progress_access",
       "entity_count": 1,
       "function_count": 3,
-      "dependency_count": 16
+      "dependency_count": 17
     },
     {
       "page_key": "progress-activity",
-      "section_key": "progress-control-center",
-      "section_label": "Progress Control Center",
+      "section_key": "progress",
+      "section_label": "Progress",
       "title": "Build Activity",
       "route": "/progress/activity",
       "parent_route": null,
@@ -1608,16 +1608,16 @@
       "component": "BuildActivity",
       "component_path": "src/pages/progress/BuildActivity.jsx",
       "auth": "public",
-      "nav_visibility": "hidden",
+      "nav_visibility": "nav",
       "permission_key": "progress_access",
       "entity_count": 1,
       "function_count": 3,
-      "dependency_count": 13
+      "dependency_count": 14
     },
     {
       "page_key": "progress-changes",
-      "section_key": "progress-control-center",
-      "section_label": "Progress Control Center",
+      "section_key": "progress",
+      "section_label": "Progress",
       "title": "Change Requests",
       "route": "/progress/changes",
       "parent_route": null,
@@ -1629,16 +1629,16 @@
       "component": "ChangeRequests",
       "component_path": "src/pages/progress/ChangeRequests.jsx",
       "auth": "public",
-      "nav_visibility": "hidden",
+      "nav_visibility": "nav",
       "permission_key": "progress_access",
       "entity_count": 1,
       "function_count": 3,
-      "dependency_count": 15
+      "dependency_count": 16
     },
     {
       "page_key": "progress-findings",
-      "section_key": "progress-control-center",
-      "section_label": "Progress Control Center",
+      "section_key": "progress",
+      "section_label": "Progress",
       "title": "Findings",
       "route": "/progress/findings",
       "parent_route": null,
@@ -1650,17 +1650,17 @@
       "component": "Findings",
       "component_path": "src/pages/progress/Findings.jsx",
       "auth": "public",
-      "nav_visibility": "hidden",
+      "nav_visibility": "nav",
       "permission_key": "progress_access",
       "entity_count": 1,
       "function_count": 3,
-      "dependency_count": 15
+      "dependency_count": 16
     },
     {
       "page_key": "progress-gates",
-      "section_key": "progress-control-center",
-      "section_label": "Progress Control Center",
-      "title": "Gates",
+      "section_key": "progress",
+      "section_label": "Progress",
+      "title": "Release Gates",
       "route": "/progress/gates",
       "parent_route": null,
       "tab": null,
@@ -1671,17 +1671,17 @@
       "component": "Gates",
       "component_path": "src/pages/progress/Gates.jsx",
       "auth": "public",
-      "nav_visibility": "hidden",
+      "nav_visibility": "nav",
       "permission_key": "progress_access",
       "entity_count": 1,
       "function_count": 3,
-      "dependency_count": 16
+      "dependency_count": 17
     },
     {
       "page_key": "progress-migration",
-      "section_key": "progress-control-center",
-      "section_label": "Progress Control Center",
-      "title": "Migration",
+      "section_key": "progress",
+      "section_label": "Progress",
+      "title": "LeadByte Migration",
       "route": "/progress/migration",
       "parent_route": null,
       "tab": null,
@@ -1692,16 +1692,16 @@
       "component": "Migration",
       "component_path": "src/pages/progress/Migration.jsx",
       "auth": "public",
-      "nav_visibility": "hidden",
+      "nav_visibility": "nav",
       "permission_key": "progress_access",
       "entity_count": 1,
       "function_count": 3,
-      "dependency_count": 16
+      "dependency_count": 17
     },
     {
       "page_key": "progress-prompts",
-      "section_key": "progress-control-center",
-      "section_label": "Progress Control Center",
+      "section_key": "progress",
+      "section_label": "Progress",
       "title": "Prompt Studio",
       "route": "/progress/prompts",
       "parent_route": null,
@@ -1713,16 +1713,16 @@
       "component": "PromptStudio",
       "component_path": "src/pages/progress/PromptStudio.jsx",
       "auth": "public",
-      "nav_visibility": "hidden",
+      "nav_visibility": "nav",
       "permission_key": "progress_prompts",
       "entity_count": 1,
       "function_count": 3,
-      "dependency_count": 15
+      "dependency_count": 16
     },
     {
       "page_key": "progress-review",
-      "section_key": "progress-control-center",
-      "section_label": "Progress Control Center",
+      "section_key": "progress",
+      "section_label": "Progress",
       "title": "Application Review",
       "route": "/progress/review",
       "parent_route": null,
@@ -1734,16 +1734,16 @@
       "component": "ApplicationReview",
       "component_path": "src/pages/progress/ApplicationReview.jsx",
       "auth": "public",
-      "nav_visibility": "hidden",
+      "nav_visibility": "nav",
       "permission_key": "progress_access",
       "entity_count": 2,
       "function_count": 3,
-      "dependency_count": 23
+      "dependency_count": 24
     },
     {
       "page_key": "progress-settings",
-      "section_key": "progress-control-center",
-      "section_label": "Progress Control Center",
+      "section_key": "progress",
+      "section_label": "Progress",
       "title": "Progress Settings",
       "route": "/progress/settings",
       "parent_route": null,
@@ -1755,11 +1755,11 @@
       "component": "ProgressSettings",
       "component_path": "src/pages/progress/ProgressSettings.jsx",
       "auth": "public",
-      "nav_visibility": "hidden",
+      "nav_visibility": "nav",
       "permission_key": "progress_admin",
       "entity_count": 1,
       "function_count": 3,
-      "dependency_count": 16
+      "dependency_count": 17
     },
     {
       "page_key": "reports",

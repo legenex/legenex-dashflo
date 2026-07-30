@@ -1,5 +1,4 @@
 import { MANIFEST } from './pageManifest.js';
-import { requireUser, HttpError } from './_runtime.js';
 
 // Synchronises the generated page inventory into ProgressPage records.
 //
@@ -28,17 +27,11 @@ const GENERATED_FIELDS = [
   'component_dependencies',
 ];
 
+// The record client exposes list(sort, limit) with no offset pagination, so we
+// pull the whole inventory in a single generously bounded call. ProgressPage is
+// a page inventory (dozens to low hundreds of rows), well within this ceiling.
 async function loadAll(entity) {
-  const pageSize = 500;
-  const out = [];
-  let skip = 0;
-  while (true) {
-    const batch = (await entity.list('-created_date', pageSize, skip)) || [];
-    out.push(...batch);
-    if (batch.length < pageSize) break;
-    skip += pageSize;
-  }
-  return out;
+  return (await entity.list('-created_date', 100000)) || [];
 }
 
 // Stable fingerprint of what a page depends on. When this changes, any prior
@@ -58,9 +51,11 @@ function dependencyFingerprint(page) {
 const toJson = (value) => (value == null ? null : JSON.stringify(value));
 
 export default async function progressSync(ctx) {
-  const db = ctx.db;
   try {
-    const user = requireUser(ctx);
+    const db = ctx.db;
+
+    const user = ctx.user;
+    if (!user) return ctx.json({ error: 'Unauthorized' }, 401);
 
     const record = await db.entities.User.get(user.id).catch(() => null);
     const caller = record || user;
@@ -265,7 +260,7 @@ export default async function progressSync(ctx) {
       retired.push(rec.page_key);
     }
 
-    return ctx.json({
+    return {
       ok: true,
       dry_run: dryRun,
       manifest_generated_at: MANIFEST.generated_at,
@@ -287,9 +282,8 @@ export default async function progressSync(ctx) {
       retired,
       duplicates_removed: deduped,
       duplicates_parked: dedupeFailures,
-    }, 200);
+    };
   } catch (err) {
-    if (err instanceof HttpError) throw err;
     return ctx.json({ error: String(err?.message || err) }, 500);
   }
 }

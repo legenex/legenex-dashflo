@@ -1,6 +1,7 @@
 import React, { useMemo, useRef, useState } from 'react';
 import {
   Camera, RefreshCw, AlertTriangle, EyeOff, Eye, MessageSquarePlus, Trash2, X,
+  Maximize2, Minimize2,
 } from 'lucide-react';
 import { usePermissions, useAuth } from '@/lib/AuthContext';
 import { cropAndUpload } from '@/lib/progress/capture';
@@ -44,6 +45,7 @@ export default function VisualReview({ page, snapshots, threads, onRecapture, ca
   const { user } = useAuth();
   const [viewport, setViewport] = useState('desktop');
   const [masked, setMasked] = useState(maskEnabled());
+  const [expanded, setExpanded] = useState(false);
 
   const canCapture = can('progress_write') || can('progress_admin');
   const canComment = can('progress_write') || can('progress_review');
@@ -88,6 +90,12 @@ export default function VisualReview({ page, snapshots, threads, onRecapture, ca
           icon={Camera}
           actions={(
             <div className="flex flex-wrap items-center gap-2">
+              <SecondaryButton onClick={() => setExpanded(true)} disabled={!snapshots?.length}>
+                <span className="flex items-center gap-1.5">
+                  <Maximize2 className="h-3.5 w-3.5" />
+                  Full size
+                </span>
+              </SecondaryButton>
               <SecondaryButton onClick={toggleMask}>
                 <span className="flex items-center gap-1.5">
                   {masked ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
@@ -178,6 +186,48 @@ export default function VisualReview({ page, snapshots, threads, onRecapture, ca
         />
       )}
 
+      {expanded && latest?.image_url && (
+        <div className="fixed inset-0 z-50 flex flex-col bg-background">
+          <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-2.5">
+            <div className="flex min-w-0 items-center gap-2">
+              <span className="truncate text-[13px] font-semibold text-foreground">{page.title}</span>
+              <span className="truncate font-mono text-[11px] text-muted-foreground">{page.route}</span>
+              <Badge tone="neutral">{viewport}</Badge>
+              {latest.masked
+                ? <Badge tone="good">{latest.mask_count || 0} redacted</Badge>
+                : <Badge tone="warn">Unmasked</Badge>}
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="hidden text-[11px] text-muted-foreground sm:inline">
+                Drag a box over anything that is wrong
+              </span>
+              <button
+                type="button"
+                onClick={() => setExpanded(false)}
+                className="flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-[12px] text-foreground transition-colors hover:bg-accent"
+              >
+                <Minimize2 className="h-3.5 w-3.5" />
+                Close
+              </button>
+            </div>
+          </div>
+          {/* The capture is 1920 wide. In a column it scales down to something
+              unreadable, which defeats the point of reviewing it. Here it gets
+              the whole viewport and scrolls at full size. */}
+          <div className="min-h-0 flex-1 overflow-auto p-4">
+            <AnnotatableSnapshot
+              snapshot={latest}
+              page={page}
+              threads={anchored.filter((t) => t.snapshot_id === latest.id)}
+              canComment={canComment}
+              role={role}
+              userEmail={user?.email}
+              bare
+            />
+          </div>
+        </div>
+      )}
+
       {previous.length > 0 && (
         <Card>
           <CardHeader title={`Previous ${viewport} captures (${previous.length})`} subtitle="Compare against the current one to see what moved" />
@@ -216,7 +266,7 @@ export default function VisualReview({ page, snapshots, threads, onRecapture, ca
  * The annotatable image
  * ---------------------------------------------------------------- */
 
-function AnnotatableSnapshot({ snapshot, page, threads, canComment, role, userEmail }) {
+function AnnotatableSnapshot({ snapshot, page, threads, canComment, role, userEmail, bare }) {
   const wrapRef = useRef(null);
   const imgRef = useRef(null);
   const [drag, setDrag] = useState(null);
@@ -260,6 +310,73 @@ function AnnotatableSnapshot({ snapshot, page, threads, canComment, role, userEm
 
   const previewRegion = drag ? normalise(drag.start, drag.current) : null;
 
+  const surface = (
+    <div
+      ref={wrapRef}
+      className="relative overflow-hidden rounded-md border border-border bg-background"
+      style={{ cursor: canComment ? 'crosshair' : 'default' }}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+    >
+      <img
+        ref={imgRef}
+        src={snapshot.image_url}
+        alt={`${page.title} capture`}
+        className="block w-full select-none"
+        draggable={false}
+      />
+      {threads.map((t) => {
+        const r = safeRegion(t.region);
+        if (!r) return null;
+        return (
+          <button
+            key={t.id}
+            type="button"
+            onClick={(e) => { e.stopPropagation(); setActive(t); }}
+            onPointerDown={(e) => e.stopPropagation()}
+            className={`absolute rounded-sm border-2 transition-colors ${
+              t.severity === 'P0' || t.severity === 'P1'
+                ? 'border-primary bg-primary/10 hover:bg-primary/20'
+                : 'border-chart-3 bg-chart-3/10 hover:bg-chart-3/20'
+            }`}
+            style={pct(r, imgRef.current)}
+            title={t.body}
+          >
+            <span className="absolute -top-2 -left-2 flex h-4 w-4 items-center justify-center rounded-full bg-primary text-[9px] font-semibold text-primary-foreground">
+              {t.severity?.replace('P', '') ?? '?'}
+            </span>
+          </button>
+        );
+      })}
+      {previewRegion && (
+        <div
+          className="pointer-events-none absolute rounded-sm border-2 border-primary bg-primary/10"
+          style={pct(previewRegion, imgRef.current)}
+        />
+      )}
+    </div>
+  );
+
+  if (bare) {
+    return (
+      <>
+        {surface}
+        {pending && (
+          <RegionComposer
+            region={pending}
+            snapshot={snapshot}
+            page={page}
+            role={role}
+            userEmail={userEmail}
+            onClose={() => setPending(null)}
+          />
+        )}
+        {active && <ThreadViewer thread={active} onClose={() => setActive(null)} />}
+      </>
+    );
+  }
+
   return (
     <>
       <Card>
@@ -281,53 +398,7 @@ function AnnotatableSnapshot({ snapshot, page, threads, canComment, role, userEm
           )}
         />
         <CardBody>
-          <div
-            ref={wrapRef}
-            className="relative overflow-hidden rounded-md border border-border bg-background"
-            style={{ cursor: canComment ? 'crosshair' : 'default' }}
-            onPointerDown={onPointerDown}
-            onPointerMove={onPointerMove}
-            onPointerUp={onPointerUp}
-          >
-            <img
-              ref={imgRef}
-              src={snapshot.image_url}
-              alt={`${page.title} capture`}
-              className="block w-full select-none"
-              draggable={false}
-            />
-
-            {threads.map((t) => {
-              const r = safeRegion(t.region);
-              if (!r) return null;
-              return (
-                <button
-                  key={t.id}
-                  type="button"
-                  onClick={(e) => { e.stopPropagation(); setActive(t); }}
-                  onPointerDown={(e) => e.stopPropagation()}
-                  className={`absolute rounded-sm border-2 transition-colors ${
-                    t.severity === 'P0' || t.severity === 'P1'
-                      ? 'border-primary bg-primary/10 hover:bg-primary/20'
-                      : 'border-chart-3 bg-chart-3/10 hover:bg-chart-3/20'
-                  }`}
-                  style={pct(r, imgRef.current)}
-                  title={t.body}
-                >
-                  <span className="absolute -top-2 -left-2 flex h-4 w-4 items-center justify-center rounded-full bg-primary text-[9px] font-semibold text-primary-foreground">
-                    {t.severity?.replace('P', '') ?? '?'}
-                  </span>
-                </button>
-              );
-            })}
-
-            {previewRegion && (
-              <div
-                className="pointer-events-none absolute rounded-sm border-2 border-primary bg-primary/10"
-                style={pct(previewRegion, imgRef.current)}
-              />
-            )}
-          </div>
+          {surface}
 
           {threads.length > 0 && (
             <p className="mt-2 text-[11px] text-muted-foreground">
