@@ -5,11 +5,10 @@ import { Input } from '@/components/ui/input';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Filter, Columns3 } from 'lucide-react';
-import { Bar, Line, Area, ComposedChart, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, CartesianGrid } from 'recharts';
-import { money, moneyShort, pct, int, dailySeries, groupBy, statusBreakdown, seriesWindow } from '@/lib/reportMetrics';
+import { Line, Area, ComposedChart, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
+import { money, moneyShort, int, dailySeries, groupBy, statusBreakdown, seriesWindow } from '@/lib/reportMetrics';
+import { statusTextClass } from '@/lib/tagColors';
 import { downloadCsv } from '@/lib/csv';
-
-const DONUT_COLORS = ['#3DD68C', '#E5484D', '#FACC14', '#3182BD', '#7564CC', '#41D9C7', '#EC4899'];
 
 // Recharts reads computed CSS colors, so resolve the theme tokens to their live hsl() values.
 const cssVar = (name, fallback) => {
@@ -35,7 +34,6 @@ const TABLE_DEFS = {
 const GROUP_COLUMNS = [
   { key: 'leads', label: 'Leads', fmt: int },
   { key: 'sold', label: 'Sold', fmt: int },
-  { key: 'convRate', label: 'Conv %', fmt: pct },
   { key: 'revenue', label: 'Revenue', fmt: money },
   { key: 'cost', label: 'Cost', fmt: money },
   { key: 'cpl', label: 'CPL', fmt: money },
@@ -151,27 +149,52 @@ export default function ReportWidget({ widget, leads, adSpend, onChange, filters
   }
 
   if (type === 'status_donut') {
-    const data = statusBreakdown(leads);
+    const data = statusBreakdown(leads).filter(d => d.value > 0).sort((a, b) => b.value - a.value);
+    const total = data.reduce((a, d) => a + d.value, 0);
+    const soldRate = total ? ((data.find(d => d.name === 'Sold')?.value || 0) / total) * 100 : 0;
     return (
       <WidgetShell title="Leads by Status" wide={widget.wide}
         onToggleWide={() => onChange({ ...widget, wide: !widget.wide })}
         onExport={() => downloadCsv('leads_by_status', [{ key: 'name', label: 'Status' }, { key: 'value', label: 'Count' }], data)}
         onDuplicate={widget.onDuplicate} onRemove={widget.onRemove} onMoveLeft={widget.onMoveLeft} onMoveRight={widget.onMoveRight}>
-        <ResponsiveContainer width="100%" height={260}>
-          <PieChart>
-            <Pie data={data} dataKey="value" nameKey="name" innerRadius={55} outerRadius={90} paddingAngle={2}>
-              {data.map((_, i) => <Cell key={i} fill={DONUT_COLORS[i % DONUT_COLORS.length]} />)}
-            </Pie>
-            <Tooltip contentStyle={{ background: 'hsl(var(--popover))', border: '1px solid hsl(var(--border))', borderRadius: 8, fontSize: 12 }} />
-          </PieChart>
-        </ResponsiveContainer>
-        <div className="flex flex-wrap gap-x-3 gap-y-1 mt-2 justify-center">
-          {data.map((d, i) => (
-            <span key={d.name} className="flex items-center gap-1 text-[11px] text-muted-foreground">
-              <span className="w-2 h-2 rounded-full" style={{ background: DONUT_COLORS[i % DONUT_COLORS.length] }} /> {d.name} ({d.value})
-            </span>
-          ))}
-        </div>
+        {total > 0 ? (
+          <>
+            <div className="flex items-end justify-between gap-4">
+              <div>
+                <div className="text-[28px] leading-none font-semibold text-foreground tabular-nums">{int(total)}</div>
+                <div className="text-[11px] text-muted-foreground mt-1.5">Leads in period</div>
+              </div>
+              <div className="text-right">
+                <div className="text-[28px] leading-none font-semibold status-sold tabular-nums">{soldRate.toFixed(1)}%</div>
+                <div className="text-[11px] text-muted-foreground mt-1.5">Sold rate</div>
+              </div>
+            </div>
+
+            <div className="mt-4 flex h-2.5 w-full gap-[3px] rounded-full bg-muted overflow-hidden">
+              {data.map(d => (
+                <div
+                  key={d.name}
+                  title={`${d.name}: ${int(d.value)}`}
+                  className={`${statusTextClass(d.name)} bg-current h-full rounded-full transition-[width] duration-700 ease-out`}
+                  style={{ width: `${(d.value / total) * 100}%` }}
+                />
+              ))}
+            </div>
+
+            <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-x-6">
+              {data.map(d => (
+                <div key={d.name} className="flex items-center gap-2 px-1.5 py-2 rounded-md hover:bg-accent/40">
+                  <span className={`${statusTextClass(d.name)} bg-current h-2 w-2 rounded-full shrink-0`} />
+                  <span className="text-[12px] text-foreground truncate">{d.name}</span>
+                  <span className="ml-auto text-[12px] font-mono text-foreground tabular-nums">{int(d.value)}</span>
+                  <span className="text-[11px] text-muted-foreground tabular-nums w-11 text-right">{((d.value / total) * 100).toFixed(1)}%</span>
+                </div>
+              ))}
+            </div>
+          </>
+        ) : (
+          <div className="h-[200px] flex items-center justify-center text-[12px] text-muted-foreground">No leads in period</div>
+        )}
       </WidgetShell>
     );
   }

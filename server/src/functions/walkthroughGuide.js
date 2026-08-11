@@ -1,11 +1,18 @@
 import { requireUser } from './_runtime.js';
 import { callLLM } from '../integrations/llm.js';
 
-// AI-guided onboarding walkthrough.
-export default async function walkthroughGuide(ctx) {
-  try {
-    const user = requireUser(ctx);
+// AI-guided onboarding walkthrough. Uses OpenAI (OPENAI_API_KEY secret).
+// Delegates to the shared client: OpenAI first, automatic failover to
+// Anthropic (ANTHROPIC_API_KEY) if OpenAI is unavailable for any reason.
+// The name is kept so existing call sites are untouched.
+async function callOpenAI({ prompt, system, model = 'gpt-4o-mini', temperature = 0.4, maxTokens } = {}) {
+  return await callLLM({ prompt, system, model, temperature, maxTokens });
+}
 
+export default async function walkthroughGuide(ctx) {
+  const user = requireUser(ctx);
+
+  try {
     const body = ctx.body || {};
     const messages = Array.isArray(body.messages) ? body.messages : [];
 
@@ -26,11 +33,10 @@ Style: warm, concise, practical. Give ONE clear step at a time with the exact pa
       ? `Start the walkthrough. Greet the user by name (${user.full_name || 'there'}) in one sentence, briefly say what you'll cover, then give the very first step.`
       : `Conversation so far:\n\n${convo}\n\nContinue as the Guide with the next helpful reply.`;
 
-    const reply = await callLLM({ system, prompt, temperature: 0.4 });
+    const reply = await callOpenAI({ system, prompt });
 
     return { reply: typeof reply === 'string' ? reply : String(reply) };
   } catch (error) {
-    if (error.status) return ctx.json(error.body, error.status);
     return ctx.json({ error: error.message }, 500);
   }
 }

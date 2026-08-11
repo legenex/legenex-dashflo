@@ -3,10 +3,17 @@ import { callLLM } from '../integrations/llm.js';
 
 // Distribution AI Insights: summarizes OPERATIONAL trends for a selected period.
 // The frontend sends a pre-aggregated, revenue-free summary; we return a short narrative.
-export default async function distributionInsights(ctx) {
-  try {
-    requireUser(ctx);
+// Delegates to the shared LLM client: OpenAI first, automatic failover to
+// Anthropic if OpenAI is unavailable for any reason.
+// The name is kept so existing call sites are untouched.
+async function callOpenAI({ prompt, system, model = 'gpt-4o-mini', temperature = 0.4, maxTokens } = {}) {
+  return await callLLM({ prompt, system, model, temperature, maxTokens });
+}
 
+export default async function distributionInsights(ctx) {
+  requireUser(ctx);
+
+  try {
     const body = ctx.body || {};
     const summary = body.summary || {};
     const periodLabel = (body.periodLabel || 'the selected period').toString();
@@ -25,11 +32,10 @@ Be specific and use the actual numbers/percentages from the data. If a trend is 
 === OPERATIONAL DATA (JSON) ===
 ${JSON.stringify(summary)}`;
 
-    const answer = await callLLM({ prompt, temperature: 0.4 });
+    const answer = await callOpenAI({ prompt });
 
     return { insights: typeof answer === 'string' ? answer : JSON.stringify(answer) };
   } catch (error) {
-    if (error.status) return ctx.json(error.body, error.status);
     return ctx.json({ error: error.message }, 500);
   }
 }

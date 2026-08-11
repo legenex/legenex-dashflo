@@ -1,10 +1,10 @@
 import React from 'react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { BarChart3, PieChart, Table2 } from 'lucide-react';
+import { BarChart3, Layers, Table2 } from 'lucide-react';
 
 const WIDGET_OPTIONS = [
   { type: 'rev_spend_profit', label: 'Revenue vs Spend vs Profit', icon: BarChart3 },
-  { type: 'status_donut', label: 'Leads by Status', icon: PieChart },
+  { type: 'status_donut', label: 'Leads by Status', icon: Layers },
   { type: 'campaigns', label: 'Top Campaigns', icon: Table2 },
   { type: 'states', label: 'State Performance', icon: Table2 },
   { type: 'buyers', label: 'Buyers Performance', icon: Table2 },

@@ -55,7 +55,6 @@ export default function SupplierPortalReports() {
         <Stat label="Cost" value={money(m.cost)} icon={Wallet} />
         <Stat label="Profit" value={money(m.profit)} icon={TrendingUp} />
         <Stat label="CPL" value={money(m.cpl)} icon={Wallet} />
-        <Stat label="Conversion Rate" value={pct(m.convRate)} icon={TrendingUp} />
       </div>
 
       {/* Daily Performance */}

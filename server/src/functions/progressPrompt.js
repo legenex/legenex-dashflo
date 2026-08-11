@@ -3,9 +3,8 @@ import { callLLM } from '../integrations/llm.js';
 
 // Prompt Studio generator.
 //
-// Turns a ChangeRequest plus its findings, the operator's own comments, and the
-// real dependency graph into an implementation prompt for a coding agent or a
-// human.
+// Turns a ChangeRequest plus its findings, Nick's own comments, and the real
+// dependency graph into an implementation prompt for a coding agent or a human.
 //
 // Three things this deliberately does NOT do:
 //   1. It never dispatches. The output is a PromptDraft in status draft. Sending
@@ -13,7 +12,7 @@ import { callLLM } from '../integrations/llm.js';
 //   2. It never invents evidence. Everything in the assembled context comes from
 //      records; the model writes the brief, it does not supply the facts.
 //   3. It never decides whether a surface is RED. That is a deterministic code
-//      check below, because a model getting it wrong once is one time too many.
+//      check below, because an LLM getting it wrong once is one time too many.
 //
 // Access: operator session, admin role or progress_write.
 // Writes: PromptDraft only.
@@ -48,47 +47,18 @@ const STANDING_CONSTRAINTS = [
   'Anything that cannot be verified from the working environment is labelled NEEDS-ENV, never closed by assumption.',
 ];
 
+// Delegates to the shared client: OpenAI first, automatic failover to
+// Anthropic (ANTHROPIC_API_KEY) if OpenAI is unavailable for any reason.
+// The name is kept so existing call sites are untouched.
+async function callOpenAI({ prompt, system, model = 'gpt-4o', temperature = 0.2, maxTokens } = {}) {
+  return await callLLM({ prompt, system, model, temperature, maxTokens });
+}
+
 const parse = (v, fallback) => {
   if (v == null) return fallback;
   if (typeof v !== 'string') return v;
   try { return JSON.parse(v); } catch { return fallback; }
 };
-
-// ---------------------------------------------------------------------------
-// RECONSTRUCTED HELPER (originally imported from ./readiness.js).
-// The original source was not available at port time. This computes the same
-// { status, missing_checks } contract the caller consumes. Replace verbatim
-// with the original verificationStateFor if the exact check set differs.
-// ---------------------------------------------------------------------------
-function verificationStateFor(records) {
-  const list = Array.isArray(records) ? records.filter(Boolean) : [];
-  if (list.length === 0) return { status: 'unverified', missing_checks: [] };
-
-  // Keep only the latest record per distinct check.
-  const latestByCheck = new Map();
-  for (const r of list) {
-    const key = r.check_type || r.check || r.check_id || r.kind || 'unknown';
-    const prev = latestByCheck.get(key);
-    if (!prev || String(r.created_date || '') > String(prev.created_date || '')) {
-      latestByCheck.set(key, r);
-    }
-  }
-
-  const passed = [];
-  const missing = [];
-  for (const [key, r] of latestByCheck) {
-    const ok = r.status === 'pass' || r.status === 'passed' || r.status === 'verified'
-      || r.result === 'pass' || r.passed === true || r.verified === true;
-    if (ok) passed.push(key); else missing.push(key);
-  }
-
-  let status;
-  if (missing.length === 0) status = 'verified';
-  else if (passed.length === 0) status = 'unverified';
-  else status = 'partial';
-
-  return { status, missing_checks: missing };
-}
 
 const SYSTEM = `You write implementation briefs for the Legenex Dashboard, a React application that is replacing LeadByte as a lead distribution platform.
 
@@ -121,18 +91,34 @@ Rules you must obey:
   ## Definition of done
   ## Open questions`;
 
-// The runtime entity API exposes list(sort, limit) with no skip/offset, so a
-// single high-limit read replaces the original page-by-skip loop.
 async function loadAll(entity) {
-  const batch = (await entity.list('-created_date', 100000)) || [];
-  return batch;
+  const pageSize = 500;
+  return (await entity.list('-created_date', pageSize)) || [];
+}
+
+// Verification state for a page: overall status plus the checks still outstanding.
+// Derived from the page's VerificationRecords (inlined readiness helper).
+function verificationStateFor(records) {
+  const list = Array.isArray(records) ? records.filter(Boolean) : [];
+  if (list.length === 0) {
+    return { status: 'unverified', missing_checks: [] };
+  }
+  const isPass = (r) => {
+    const s = String(r.status || r.result || r.state || '').toLowerCase();
+    return r.passed === true || s === 'pass' || s === 'passed' || s === 'verified' || s === 'ok';
+  };
+  const nameOf = (r) => r.check_key || r.check || r.check_type || r.check_id || r.key || r.label || 'unknown';
+  const missing_checks = [...new Set(list.filter((r) => !isPass(r)).map(nameOf))];
+  const status = missing_checks.length === 0 ? 'verified' : 'partial';
+  return { status, missing_checks };
 }
 
 export default async function progressPrompt(ctx) {
-  const user = requireUser(ctx);
-  const db = ctx.db;
-
   try {
+    const db = ctx.db;
+
+    const user = requireUser(ctx);
+
     const record = await db.entities.User.get(user.id).catch(() => null);
     const caller = record || user;
     if (caller.base_role === 'supplier' || caller.base_role === 'buyer') {
@@ -141,7 +127,12 @@ export default async function progressPrompt(ctx) {
     if (caller.linked_buyer_id || caller.linked_supplier_id) {
       return ctx.json({ error: 'Forbidden' }, 403);
     }
-    const permissions = parse(caller.permissions, {}) || {};
+    let permissions = {};
+    try {
+      permissions = typeof caller.permissions === 'string'
+        ? JSON.parse(caller.permissions || '{}')
+        : (caller.permissions || {});
+    } catch { permissions = {}; }
     if (caller.role !== 'admin' && permissions.progress_admin !== true && permissions.progress_write !== true) {
       return ctx.json({ error: 'Forbidden' }, 403);
     }
@@ -231,7 +222,7 @@ export default async function progressPrompt(ctx) {
       `COMPONENT FILES IN THIS PAGE'S IMPORT GRAPH (${componentDeps.length}): ${componentDeps.slice(0, 60).join(', ')}${componentDeps.length > 60 ? ', ...' : ''}`,
       '',
       red.length > 0
-        ? `RED SURFACES DETECTED. This work touches: ${red.map((r) => r.label).join('; ')}. State clearly in Constraints that these require the operator's explicit approval in conversation before any change, and that distribution_mode may only ever move via distributionSetMode.`
+        ? `RED SURFACES DETECTED. This work touches: ${red.map((r) => r.label).join('; ')}. State clearly in Constraints that these require Nick's explicit approval in conversation before any change, and that distribution_mode may only ever move via distributionSetMode.`
         : 'No RED surfaces detected by the deterministic check. Still instruct the implementer to stop and ask if they find one.',
       '',
       'STANDING CONSTRAINTS (include all of these under Constraints):',
@@ -242,10 +233,7 @@ export default async function progressPrompt(ctx) {
       `INTENDED IMPLEMENTER: ${target}`,
     ].filter((l) => l !== undefined).join('\n');
 
-    const llmOut = await callLLM({ system: SYSTEM, prompt: contextBlock, temperature: 0.2 });
-    const draftBody = typeof llmOut === 'string'
-      ? llmOut
-      : (llmOut?.content ?? llmOut?.text ?? llmOut?.output ?? '');
+    const draftBody = await callOpenAI({ system: SYSTEM, prompt: contextBlock });
 
     const existing = (await svc.PromptDraft.filter({ change_request_id: cr.id })) || [];
     const version = existing.reduce((max, d) => Math.max(max, d.version || 1), 0) + 1;
@@ -289,7 +277,7 @@ export default async function progressPrompt(ctx) {
       red_surfaces: JSON.stringify(red.map((r) => r.key)),
     });
 
-    return ctx.json({
+    return {
       ok: true,
       prompt_draft_id: created?.id || null,
       reference: `${cr.reference}-P${version}`,
@@ -303,9 +291,11 @@ export default async function progressPrompt(ctx) {
       },
       dispatched: false,
       note: 'Draft only. Nothing was sent to any agent and no code was changed.',
-    });
+    };
   } catch (err) {
-    if (err instanceof HttpError) throw err;
+    if (err instanceof HttpError) {
+      return ctx.json({ error: err.message || 'Unauthorized' }, err.status || 401);
+    }
     return ctx.json({ error: String(err?.message || err) }, 500);
   }
 }

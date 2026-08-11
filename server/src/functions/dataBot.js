@@ -1,4 +1,5 @@
-import { requireUser } from './_runtime.js';
+import { requireUser, HttpError } from './_runtime.js';
+import { callLLM } from '../integrations/llm.js';
 
 // DataBot: answers questions about the app's own data + a curated Knowledge Base.
 // Uses OpenAI (OPENAI_API_KEY secret).
@@ -14,7 +15,7 @@ import { requireUser } from './_runtime.js';
 // This version is a two-pass query tool:
 //   1. PLAN    a small model call turns the question into a structured query
 //              spec (entity refs, group_by, period, top_n). No data in scope.
-//   2. EXECUTE the spec runs deterministically here in JavaScript. Counting is
+//   2. EXECUTE the spec runs deterministically here in code. Counting is
 //              never done by the model.
 //   3. NARRATE a second model call sees the question plus a small result object
 //              (typically well under 4k characters) and writes the answer.
@@ -29,41 +30,11 @@ import { requireUser } from './_runtime.js';
 //      created_date, which is only when the row was written.
 //   3. Days bucket in America/Regina, the operating timezone.
 
-async function callOpenAI({ apiKey, prompt, system, model = 'gpt-4o-mini', temperature = 0.4, jsonSchema = null, images = [] }) {
-  if (!apiKey) throw new Error('OPENAI_API_KEY is not set');
-  const messages = [];
-  if (system) messages.push({ role: 'system', content: system });
-  // Attached screenshots ride along with the prompt as image parts. The vision
-  // models accept a data URL directly, so nothing is uploaded anywhere.
-  const pics = Array.isArray(images) ? images.filter((i) => i && i.data).slice(0, 4) : [];
-  if (pics.length) {
-    messages.push({
-      role: 'user',
-      content: [
-        { type: 'text', text: prompt },
-        ...pics.map((i) => ({
-          type: 'image_url',
-          image_url: { url: `data:${i.media_type || 'image/png'};base64,${i.data}`, detail: 'high' },
-        })),
-      ],
-    });
-  } else {
-    messages.push({ role: 'user', content: prompt });
-  }
-  const payload = { model, messages, temperature };
-  if (jsonSchema) {
-    payload.response_format = { type: 'json_schema', json_schema: { name: 'response', strict: false, schema: jsonSchema } };
-  }
-  const res = await fetch('https://api.openai.com/v1/chat/completions', {
-    method: 'POST',
-    headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
-  if (!res.ok) throw new Error(`OpenAI error ${res.status}: ${await res.text()}`);
-  const data = await res.json();
-  const content = data?.choices?.[0]?.message?.content ?? '';
-  if (jsonSchema) { try { return JSON.parse(content); } catch { return content; } }
-  return content;
+// Delegates to the shared client: OpenAI first, automatic failover to
+// Anthropic (ANTHROPIC_API_KEY) if OpenAI is unavailable for any reason.
+// The name is kept so existing call sites are untouched.
+async function callOpenAI({ prompt, system, model = 'gpt-4o-mini', temperature = 0.4, jsonSchema = null, images = [], maxTokens } = {}) {
+  return await callLLM({ prompt, system, model, temperature, jsonSchema, images, maxTokens });
 }
 
 // A real inventory of the app, so target_files names things that exist instead
@@ -72,15 +43,15 @@ const APP_INVENTORY = `PAGES (src/pages/<Name>.jsx): ApiStatus, Apply, BuyerDeta
 
 COMPONENT FOLDERS (src/components/<folder>/): admanager, apply, calculations, campaigns, databot, distribution, docs, finances, layout, leads, operations, overview, portal, progress, reports, settings, shared, suppliers, supplierportal, tools, ui, verification
 
-BACKEND FUNCTIONS (server/src/functions/<name>.js): processLead, leads, leadbyteWebhook, webhook, distributionConfig, distributionSetMode, distributionSimulate, distributionShadowReport, distributionInsights, campaignDeliveryTest, operationsData, operatorData, portalData, supplierPortalData, overviewBriefing, adManagerInsights, reconInsights, generateBillingRun, syncMetaSpend, syncMercury, syncStripe, syncXero, syncGoogleSheets, auditRun, dataBot, recomputeStateStatus, nightlyStateStatusRecompute, dedupeLeads, bulkDeleteLeads, onboardBuyer, submitBuyerOnboarding, allocateBuyerCode, testLeadByte, testLeadByteConnector, sendPayloadTest, health, spec, validate
+BACKEND FUNCTIONS (functions/<name>/entry.ts): processLead, leads, leadbyteWebhook, webhook, distributionConfig, distributionSetMode, distributionSimulate, distributionShadowReport, distributionInsights, campaignDeliveryTest, operationsData, operatorData, portalData, supplierPortalData, overviewBriefing, adManagerInsights, reconInsights, generateBillingRun, syncMetaSpend, syncMercury, syncStripe, syncXero, syncGoogleSheets, auditRun, dataBot, recomputeStateStatus, nightlyStateStatusRecompute, dedupeLeads, bulkDeleteLeads, onboardBuyer, submitBuyerOnboarding, allocateBuyerCode, testLeadByte, testLeadByteConnector, sendPayloadTest, health, spec, validate
 
 SHARED LIBS: src/lib/fetchAll.js (pagination past the 500 row cap), src/lib/reportMetrics.js (analytics engine), src/lib/adManagerMetrics.js, src/lib/distribution/engine.js
 
 DOCS: DESIGN-SYSTEM.md, docs/`;
 
 // Scope a change request into a single-concern build prompt for the CONTROLLED
-// channel (Claude via connector, the builder, or Claude Code). Never executes.
-async function draftBuildRequest(question, history, images = [], apiKey) {
+// channel (Claude via connector, the app builder, or Claude Code). Never executes.
+async function draftBuildRequest(question, history, images = []) {
   const schema = {
     type: 'object',
     properties: {
@@ -95,7 +66,7 @@ async function draftBuildRequest(question, history, images = [], apiKey) {
     required: ['is_build', 'title', 'summary', 'ready_prompt'],
   };
   const convo = history.map((m) => `${m.role === 'user' ? 'User' : 'BuildBot'}: ${m.content}`).join('\n');
-  const system = `You scope change requests for the Legenex app so they can be handed to a controlled build channel (Claude via the connector, the builder, or Claude Code). You NEVER execute changes yourself.
+  const system = `You scope change requests for the Legenex app so they can be handed to a controlled build channel (Claude via the connector, the app builder, or Claude Code). You NEVER execute changes yourself.
 
 WHAT COUNTS AS A BUILD. Set is_build=true for ANY request to change the app: add, remove, disable, enable, turn off, turn on, change, edit, update, fix, create, build, rename, move, restyle, redesign, refactor, or wire something up. A screenshot attached with a complaint or a request about what is shown is also a build request. Set is_build=false ONLY when the message is purely a question about DATA (counts, revenue, performance, what happened) with no request to change anything.
 
@@ -115,11 +86,11 @@ TARGET FILES. Use the inventory below and name real paths. If you are unsure whi
 
 ${APP_INVENTORY}`;
   const prompt = `Conversation so far:\n${convo || '(none)'}\n\nUser request: ${question}\n\nReturn JSON only.`;
-  return await callOpenAI({ apiKey, system, prompt, jsonSchema: schema, temperature: 0.2, images });
+  return await callOpenAI({ system, prompt, jsonSchema: schema, temperature: 0.2, images });
 }
 
 // Extract learnable facts from a conversation exchange. Returns up to 3 facts.
-async function extractMemories(question, answer, existingMemory, apiKey) {
+async function extractMemories(question, answer, existingMemory) {
   const schema = {
     type: 'object',
     properties: {
@@ -141,7 +112,7 @@ async function extractMemories(question, answer, existingMemory, apiKey) {
   const system = `You extract durable, reusable facts and preferences from a conversation between a user and an analytics assistant. Only extract facts that will be useful in future conversations: business rules, user preferences, recurring data insights, or definitions the user provided. Do NOT extract transient questions or answers. Do NOT duplicate facts already known.\n\nKnown memories:\n${existingStr || '(none)'}`;
   const prompt = `User asked: ${question}\nAssistant answered: ${answer}\n\nExtract up to 3 new memories. Return JSON only.`;
   try {
-    const result = await callOpenAI({ apiKey, system, prompt, jsonSchema: schema, temperature: 0.2 });
+    const result = await callOpenAI({ system, prompt, jsonSchema: schema, temperature: 0.2 });
     return Array.isArray(result?.memories) ? result.memories.filter(m => m.fact && m.fact.length > 5).slice(0, 3) : [];
   } catch { return []; }
 }
@@ -151,7 +122,7 @@ async function extractMemories(question, answer, existingMemory, apiKey) {
 // Turns a natural-language question into a structured spec. Sees only the
 // entity directory and the list of valid options, never the lead data, so the
 // prompt stays tiny and the call stays fast.
-async function planQuery(question, history, directory, apiKey) {
+async function planQuery(question, history, directory) {
   const schema = {
     type: 'object',
     properties: {
@@ -195,15 +166,13 @@ group_by: use the dimension the user is slicing by. "which supplier"/"by supplie
 Known suppliers and buyers:
 ${directory}`;
   const prompt = `Conversation so far:\n${convo || '(none)'}\n\nQuestion: ${question}\n\nReturn JSON only.`;
-  return await callOpenAI({ apiKey, system, prompt, jsonSchema: schema, temperature: 0 });
+  return await callOpenAI({ system, prompt, jsonSchema: schema, temperature: 0 });
 }
 
 export default async function dataBot(ctx) {
   const db = ctx.db;
-  const user = requireUser(ctx);
   try {
-    const svc = db;
-    const apiKey = (ctx.config?.integrations?.openaiApiKey) || ctx.env.OPENAI_API_KEY;
+    const user = requireUser(ctx);
 
     const body = ctx.body || {};
     const question = (body.question || '').toString().trim();
@@ -240,6 +209,7 @@ export default async function dataBot(ctx) {
     };
     const isPartner = user.base_role === 'supplier' || user.base_role === 'buyer' || !!user.linked_supplier_id || !!user.linked_buyer_id;
     const perms = resolvePerms(user);
+    const svc = db;
 
     // Per-bot allow list, configured on the bot itself in Settings > ChatBot.
     //
@@ -273,7 +243,7 @@ export default async function dataBot(ctx) {
     const canBuild = !isPartner && (buildAllow === null ? !!perms.buildbot : buildAllow);
 
     // Friendly, actionable message instead of a silent 500 when the key is unset.
-    if (!apiKey) {
+    if (!ctx.env.OPENAI_API_KEY) {
       return ctx.json({ type: 'answer', answer: 'This assistant is not configured yet: the OPENAI_API_KEY secret is missing. An admin can add it in the app secrets, then I can answer.' });
     }
 
@@ -288,7 +258,7 @@ export default async function dataBot(ctx) {
         });
       }
       try {
-        const draft = await draftBuildRequest(question || 'See the attached screenshot and scope the change it implies.', history, images, apiKey);
+        const draft = await draftBuildRequest(question || 'See the attached screenshot and scope the change it implies.', history, images);
         if (draft && draft.is_build) return ctx.json({ type: 'build_request', build_request: draft });
       } catch (_) { /* not a build, or draft failed: fall through to an answer */ }
     }
@@ -362,7 +332,7 @@ export default async function dataBot(ctx) {
     // created_date, which is what the dashboard does. A naive ISO string is a
     // wall clock in APP_TZ, not UTC. Regina is UTC-6 year round with no DST, so
     // the offset can be pinned literally rather than importing date-fns-tz,
-    // which is not bundled here.
+    // which is not available in this runtime.
     const APP_TZ_OFFSET = '-06:00';
     const eventDayKey = (l) => {
       const bag = parseBag(l);
@@ -644,7 +614,7 @@ export default async function dataBot(ctx) {
       ].join('\n');
 
       let plan = null;
-      try { plan = await planQuery(question, history, directory, apiKey); } catch { plan = null; }
+      try { plan = await planQuery(question, history, directory); } catch { plan = null; }
       if (!plan || typeof plan !== 'object') {
         plan = { intent: 'aggregate', entity_refs: [], group_by: 'none', period: 'all_time' };
       }
@@ -995,7 +965,6 @@ ${botName}:`;
     const visionOk = /4o|4\.1|omni/i.test(String(botModel));
     const modelForCall = images.length && !visionOk ? 'gpt-4o-mini' : botModel;
     const answer = await callOpenAI({
-      apiKey,
       prompt,
       model: modelForCall,
       temperature: botTemp,
@@ -1045,7 +1014,7 @@ ${botName}:`;
         conversationId = created.id;
       }
 
-      const newMemories = await extractMemories(question, answerStr, memories, apiKey);
+      const newMemories = await extractMemories(question, answerStr, memories);
       for (const mem of newMemories) {
         await svc.entities.ChatMemory.create({
           user_id: user.id,
@@ -1059,6 +1028,7 @@ ${botName}:`;
 
     return ctx.json({ type: 'answer', answer: answerStr, conversation_id: conversationId });
   } catch (error) {
+    if (error instanceof HttpError) throw error;
     return ctx.json({ error: error.message }, 500);
   }
 }

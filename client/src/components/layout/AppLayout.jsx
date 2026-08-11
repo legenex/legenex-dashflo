@@ -12,6 +12,7 @@ import { Sheet, SheetContent } from '@/components/ui/sheet';
 import { navGroups } from './navConfig';
 import { usePullToRefresh } from '@/hooks/usePullToRefresh';
 import useMetaAutoSync from '@/hooks/useMetaAutoSync';
+import { isCaptureMode } from '@/lib/progress/captureMode';
 import useInternalSuppliers from '@/hooks/useInternalSuppliers';
 
 // Resolve a human page title from the nav config for the current path.
@@ -40,6 +41,11 @@ export default function AppLayout() {
 
   // Meta spend keeps itself current on a 15 minute cadence. Mounted here rather
   // than on Overview so it holds regardless of which page is open.
+  // Screenshot capture mounts this layout hundreds of times. Background upkeep
+  // must not run during that, or taking screenshots would write ad spend rows.
+  // Screenshots mount this shell. Nothing here may reach the network, start a
+  // timer or touch the parent document while a capture is running.
+  const capturing = isCaptureMode();
   useMetaAutoSync();
 
   // Registers which suppliers are Internal so lead cost is suppressed for them
@@ -66,7 +72,7 @@ export default function AppLayout() {
   // transition lands. So this watches <body> for as long as the drawer is
   // closed and clears the lock every time it reappears.
   React.useEffect(() => {
-    if (drawerOpen) return;
+    if (drawerOpen || capturing) return;
     const clear = () => {
       if (document.body.style.pointerEvents === 'none') {
         document.body.style.pointerEvents = '';
@@ -76,20 +82,20 @@ export default function AppLayout() {
     const observer = new MutationObserver(clear);
     observer.observe(document.body, { attributes: true, attributeFilter: ['style'] });
     return () => observer.disconnect();
-  }, [drawerOpen, location.pathname]);
+  }, [drawerOpen, location.pathname, capturing]);
 
   // Auto-refresh: silently re-pull data every 15 minutes on the data-heavy
   // dashboards (Overview, Leads) without a page reload. Skipped while the tab
   // is hidden so background tabs never hit the API.
   React.useEffect(() => {
-    if (!ptrEnabled) return;
+    if (!ptrEnabled || capturing) return;
     const id = setInterval(() => {
       if (document.visibilityState === 'visible') {
         queryClient.invalidateQueries();
       }
     }, 15 * 60 * 1000);
     return () => clearInterval(id);
-  }, [ptrEnabled, queryClient]);
+  }, [ptrEnabled, queryClient, capturing]);
 
   const { data: errorCount = 0 } = useQuery({
     queryKey: ['layout-error-count'],
@@ -160,7 +166,7 @@ export default function AppLayout() {
       <DataBotWidget />
       {/* Progress Control Center capture control. Renders nothing at all unless
           the current user holds a progress write or admin permission. */}
-      <CaptureController />
+      {!capturing && <CaptureController />}
     </div>
   );
 }

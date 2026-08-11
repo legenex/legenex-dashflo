@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import { usePermissions, useAuth } from '@/lib/AuthContext';
 import { cropAndUpload } from '@/lib/progress/capture';
+import { ALL_VIEWPORTS } from '@/lib/progress/captureTargets';
 import { maskEnabled, setMaskEnabled } from '@/components/progress/CaptureController';
 import { useProgressMutation } from '@/components/progress/useProgress';
 import {
@@ -67,7 +68,9 @@ export default function VisualReview({ page, snapshots, threads, onRecapture, ca
   // Offscreen. Nothing navigates: the page is mounted in a hidden container at a
   // fixed width, captured, and removed. That is also why tablet and mobile are
   // possible from a desktop browser.
-  const recapture = (viewports) => onRecapture?.(viewports || [viewport]);
+  // Default to every size. Capturing one viewport and leaving the other two
+  // stale was busywork nobody should have to remember.
+  const recapture = (viewports) => onRecapture?.(viewports || ['desktop', 'tablet', 'mobile']);
 
   const toggleMask = () => {
     const next = !masked;
@@ -104,13 +107,13 @@ export default function VisualReview({ page, snapshots, threads, onRecapture, ca
               </SecondaryButton>
               {canCapture && (
                 <>
-                  <SecondaryButton onClick={() => recapture(['desktop', 'tablet', 'mobile'])} disabled={capturing}>
-                    All sizes
+                  <SecondaryButton onClick={() => recapture([viewport])} disabled={capturing}>
+                    {viewport} only
                   </SecondaryButton>
                   <PrimaryButton onClick={() => recapture()} disabled={capturing}>
                     <span className="flex items-center gap-1.5">
                       <RefreshCw className={`h-3.5 w-3.5 ${capturing ? 'animate-spin' : ''}`} />
-                      {capturing ? 'Capturing' : (latest ? 'Recapture' : 'Capture')}
+                      {capturing ? 'Capturing' : (latest ? 'Recapture all sizes' : 'Capture all sizes')}
                     </span>
                   </PrimaryButton>
                 </>
@@ -155,9 +158,9 @@ export default function VisualReview({ page, snapshots, threads, onRecapture, ca
             icon={Camera}
             title={`No ${viewport} capture yet`}
             description={canCapture
-              ? 'Press Capture to open this page, let it settle and store a screenshot. The capture happens in your own session, so it shows exactly what you see.'
+              ? 'Capture renders this page with its real sidebar and sub-menu, lets it settle, and stores desktop, tablet and mobile in one go. Nothing navigates.'
               : 'Nobody with capture permission has taken a screenshot of this page yet.'}
-            action={canCapture ? <PrimaryButton onClick={() => recapture()} disabled={capturing}>Capture this page</PrimaryButton> : null}
+            action={canCapture ? <PrimaryButton onClick={() => recapture(ALL_VIEWPORTS)} disabled={capturing}>Capture all sizes</PrimaryButton> : null}
           />
         </Card>
       ) : latest.capture_status === 'failed' ? (

@@ -163,7 +163,9 @@
 .status-sold { color: #0F7B4F; }
 .status-unsold { color: #8A6100; }
 .status-disqualified { color: #B4530A; }
-.status-rejected { color: #C11B6C; }
+.status-rejected { color: #C3363B; }
+.status-converted { color: #BE1E63; }
+.status-lead-error { color: #7E22CE; }
 .status-returned { color: #A0521B; }
 .status-queued { color: #5546A8; }
 .status-error { color: #C3363B; }
@@ -175,7 +177,9 @@
 .dark .status-sold { color: #3DD68C; }
 .dark .status-unsold { color: #FACC14; }
 .dark .status-disqualified { color: #F97316; }
-.dark .status-rejected { color: #EC4899; }
+.dark .status-rejected { color: #E5484D; }
+.dark .status-converted { color: #EC4899; }
+.dark .status-lead-error { color: #A855F7; }
 .dark .status-returned { color: #FFB082; }
 .dark .status-queued { color: #7564CC; }
 .dark .status-error { color: #E5484D; }
@@ -185,7 +189,9 @@
 .bg-status-sold { background-color: rgba(61, 214, 140, 0.12); }
 .bg-status-unsold { background-color: rgba(250, 204, 20, 0.15); }
 .bg-status-disqualified { background-color: rgba(249, 115, 22, 0.15); }
-.bg-status-rejected { background-color: rgba(236, 72, 153, 0.15); }
+.bg-status-rejected { background-color: rgba(229, 72, 77, 0.15); }
+.bg-status-converted { background-color: rgba(236, 72, 153, 0.15); }
+.bg-status-lead-error { background-color: rgba(168, 85, 247, 0.15); }
 .bg-status-returned { background-color: rgba(255, 176, 130, 0.18); }
 .bg-status-queued { background-color: rgba(117, 100, 204, 0.15); }
 .bg-status-error { background-color: rgba(229, 72, 77, 0.12); }

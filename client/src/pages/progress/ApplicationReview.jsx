@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
   ChevronRight, ChevronDown, Search, FileCode, EyeOff, Camera, CheckCircle2, XCircle, Loader2,
@@ -12,6 +12,8 @@ import {
 import VisualReview from '@/components/progress/VisualReview';
 import { TaskSidebar, BackendPlainEnglish } from '@/components/progress/ReviewPanels';
 import { useOffscreenCapture } from '@/components/progress/OffscreenCapture';
+import { planDailyRefresh } from '@/lib/progress/captureSchedule';
+import { capturable, ALL_VIEWPORTS } from '@/lib/progress/captureTargets';
 import { sortSections } from '@/components/progress/progressNav';
 import {
   ProgressPageHeader, Card, CardBody, Badge, EmptyState,
@@ -114,13 +116,44 @@ export default function ApplicationReview() {
 
   const selected = pages.find((p) => p.page_key === selectedKey) || null;
 
-  // Only surfaces that resolve to a real page component can be rendered
-  // offscreen. Redirects, catchalls and :id detail routes have nothing stable to
-  // capture, so they are skipped rather than producing junk snapshots.
-  const capturable = (list) => list.filter((p) => ['page', 'tab'].includes(p.route_type)
-    && p.portal_scope === 'operator'
-    && p.component_path
-    && !String(p.route).includes(':'));
+
+
+
+  // Daily structural refresh.
+  //
+  // Once per Regina day, retake anything MISSING a size or captured against an
+  // older build. Data changes are deliberately ignored: a new lead must not
+  // trigger hundreds of screenshots. It cannot literally fire at midnight with
+  // nobody here, because rendering needs a browser, so it runs on the first
+  // visit of each new day instead.
+  const autoRan = useRef(false);
+  const [autoPlan, setAutoPlan] = useState(null);
+  const [autoOn, setAutoOn] = useState(() => {
+    try { return localStorage.getItem('progress_capture_auto') !== '0'; } catch { return true; }
+  });
+
+  useEffect(() => {
+    if (autoRan.current || capture.running) return;
+    if (pagesQ.isLoading || snapsQ.isLoading) return;
+    if (!(can('progress_write') || can('progress_admin'))) return;
+
+    let lastRunDay = null;
+    try { lastRunDay = localStorage.getItem('progress_capture_last_day'); } catch { lastRunDay = null; }
+
+    const plan = planDailyRefresh({
+      pages: capturable(pages),
+      snapshots: snapsQ.data || [],
+      currentCommit: manifest.app_commit,
+      lastRunDay,
+      enabled: autoOn,
+    });
+
+    if (!plan.shouldRun) return;
+    autoRan.current = true;
+    try { localStorage.setItem('progress_capture_last_day', plan.today); } catch { /* private mode */ }
+    setAutoPlan(plan);
+    capture.run(plan.targets, { label: `today's refresh, ${plan.reason}` });
+  }, [pagesQ.isLoading, snapsQ.isLoading, snapsQ.data, pages, autoOn, capture, can, manifest]);
 
   if (pagesQ.isLoading) {
     return (
@@ -138,6 +171,16 @@ export default function ApplicationReview() {
         description={`${pages.length} surfaces derived from the router, nav and permission config. Select one to review it.`}
         actions={(can('progress_write') || can('progress_admin')) ? (
           <div className="flex flex-wrap items-center gap-2">
+            <SecondaryButton
+              onClick={() => {
+                const next = !autoOn;
+                setAutoOn(next);
+                try { localStorage.setItem('progress_capture_auto', next ? '1' : '0'); } catch { /* private mode */ }
+              }}
+              title="Retake missing sizes and pages changed by a new build, once a day"
+            >
+              {autoOn ? 'Daily refresh on' : 'Daily refresh off'}
+            </SecondaryButton>
             <SecondaryButton onClick={() => setTreeOpen(!treeOpen)}>
               {treeOpen ? 'Hide list' : 'Show list'}
             </SecondaryButton>
@@ -145,7 +188,7 @@ export default function ApplicationReview() {
               <SecondaryButton onClick={capture.cancel}>Stop</SecondaryButton>
             )}
             <PrimaryButton
-              onClick={() => capture.run(capturable(pages), { label: 'every page' })}
+              onClick={() => capture.run(capturable(pages), { viewports: ALL_VIEWPORTS, label: 'every page' })}
               disabled={capture.running}
             >
               <span className="flex items-center gap-1.5">
@@ -170,11 +213,16 @@ export default function ApplicationReview() {
                   : <CheckCircle2 className="h-4 w-4 text-chart-5" />}
               <span className="text-[12px] text-foreground">
                 {capture.running
-                  ? `Capturing ${capture.progress.label}: ${capture.progress.done} of ${capture.progress.total}`
-                  : `${capture.progress.done} captured${capture.progress.failed ? `, ${capture.progress.failed} failed` : ''}${capture.progress.cancelled ? ', stopped' : ''}`}
+                  ? `Capturing ${capture.progress.label}: ${capture.progress.done} of ${capture.progress.total}${capture.progress.viewport ? ` (${capture.progress.viewport})` : ''}`
+                  : `${capture.progress.done - capture.progress.failed} captured, ${capture.progress.failed} failed of ${capture.progress.done} attempted${capture.progress.cancelled ? ', stopped early' : ''}`}
               </span>
               {capture.progress.current && (
                 <span className="text-[11px] text-muted-foreground">{capture.progress.current}</span>
+              )}
+              {autoPlan && (
+                <span className="text-[11px] text-muted-foreground">
+                  automatic daily pass
+                </span>
               )}
             </div>
             {!capture.running && (
@@ -183,6 +231,20 @@ export default function ApplicationReview() {
               </button>
             )}
           </CardBody>
+          {!capture.running && capture.progress.failures?.length > 0 && (
+            <CardBody className="border-t border-border pt-2.5">
+              <p className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                What failed, and why
+              </p>
+              <ul className="max-h-40 space-y-1 overflow-y-auto">
+                {capture.progress.failures.slice(0, 40).map((f, i) => (
+                  <li key={i} className="text-[11px] text-muted-foreground">
+                    <span className="text-foreground">{f.page}</span> ({f.viewport}): {f.reason}
+                  </li>
+                ))}
+              </ul>
+            </CardBody>
+          )}
         </Card>
       )}
 
@@ -244,7 +306,7 @@ export default function ApplicationReview() {
                       type="button"
                       title={`Capture the ${section.label} section`}
                       disabled={capture.running}
-                      onClick={() => capture.run(capturable(section.pages), { label: section.label })}
+                      onClick={() => capture.run(capturable(section.pages), { viewports: ALL_VIEWPORTS, label: section.label })}
                       className="shrink-0 rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-40"
                     >
                       <Camera className="h-3.5 w-3.5" />

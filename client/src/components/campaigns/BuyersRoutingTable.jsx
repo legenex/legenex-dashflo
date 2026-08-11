@@ -21,7 +21,6 @@ const COLUMNS = [
   { key: 'accepted', label: 'Accepted' },
   { key: 'leads_14d', label: 'Leads 14D' },
   { key: 'payout', label: 'Payout', money: true },
-  { key: 'conv_rate', label: 'Conv Rate' },
   { key: 'cpl', label: 'CPL', money: true },
   { key: 'revenue', label: 'Revenue', money: true },
   { key: 'billing', label: 'Billing' },

@@ -38,7 +38,10 @@ function matchesView(lead, view) {
     case 'disqualified':
       return lead.final_status === 'Disqualified' || lead.final_status === 'Error' || /disqual|dq/i.test(lead.leadbyte_record_status || '');
     case 'rejected':
-      return lead.final_status === 'Duplicate' || /reject/i.test(lead.leadbyte_record_status || '');
+      // Was matching final_status === 'Duplicate', which is wrong now that
+      // Duplicate is a real merge outcome rather than a stand-in for Rejected.
+      return lead.final_status === 'Rejected' || /reject/i.test(lead.leadbyte_record_status || '');
+    case 'converted': return lead.final_status === 'Converted';
     case 'queued': return lead.final_status === 'Queued';
     default: return true;
   }

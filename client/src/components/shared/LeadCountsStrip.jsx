@@ -44,10 +44,11 @@ export function leadCounts(leads = []) {
   }
 
   const total = leads.length;
-  // Conversion rate is sold over total received, matching Reports and Overview.
-  const convRate = total > 0 ? (sold / total) * 100 : 0;
 
-  return { total, sold, unsold, disqualified, returned, rejected, duplicate, fake, converted, convRate };
+  // No conversion rate here. Sold over total was being labelled "conversion",
+  // but a conversion is a buyer-side outcome this system is never told about,
+  // so the figure was a different metric wearing the wrong name.
+  return { total, sold, unsold, disqualified, returned, rejected, duplicate, fake, converted };
 }
 
 const ITEMS = [
@@ -59,7 +60,7 @@ const ITEMS = [
   { key: 'rejected', label: 'Rejected', tone: 'status-rejected' },
   { key: 'duplicate', label: 'Duplicate', tone: 'status-duplicate' },
   { key: 'fake', label: 'Fake', tone: 'status-error' },
-  { key: 'converted', label: 'Converted', tone: 'status-sold' },
+  { key: 'converted', label: 'Converted', tone: 'status-converted' },
 ];
 
 export default function LeadCountsStrip({ leads, counts, right = null, className = '' }) {
@@ -75,12 +76,6 @@ export default function LeadCountsStrip({ leads, counts, right = null, className
           </span>
         </span>
       ))}
-      <span className="inline-flex items-center gap-1.5 shrink-0">
-        <span className="text-[9.5px] font-semibold tracking-[0.11em] uppercase text-muted-foreground/70">Conv Rate</span>
-        <span className="text-[11.5px] font-mono font-semibold tabular-nums text-primary">
-          {c.convRate.toFixed(1)}%
-        </span>
-      </span>
       {right && <span className="ml-auto shrink-0">{right}</span>}
     </div>
   );

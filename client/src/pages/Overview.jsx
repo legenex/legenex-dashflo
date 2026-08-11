@@ -24,10 +24,10 @@ import SupplierLeaderboard from '@/components/overview/SupplierLeaderboard';
 import { Badge } from '@/components/ui/badge';
 import {
   Bar, Line, ComposedChart, XAxis, YAxis, Tooltip, Legend,
-  ResponsiveContainer, PieChart, Pie, Cell,
+  ResponsiveContainer,
 } from 'recharts';
 import {
-  DollarSign, TrendingUp, Megaphone, Users, PieChart as PieIcon, Trophy, ShieldAlert, ArrowUpRight,
+  DollarSign, TrendingUp, Megaphone, Users, Layers, Trophy, ShieldAlert, ArrowUpRight,
   CheckCircle2, AlertTriangle, Activity, GitBranch, BarChart3, ListFilter, Award,
 } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
@@ -222,6 +222,8 @@ export default function Overview() {
   const truth = useMemo(() => financialTruth(dataset, win), [fLeads, buyers, suppliers, invoices, payments, payouts, fAdSpend, txns, win]);
   const queue = useMemo(() => actionQueue(truth, txns), [truth, txns]);
   const donut = useMemo(() => financeDonut(truth.wLeads), [truth]);
+  const donutTotal = useMemo(() => donut.reduce((a, d) => a + d.value, 0), [donut]);
+  const soldRate = donutTotal ? ((donut.find(d => d.name === 'Sold')?.value || 0) / donutTotal) * 100 : 0;
   const daily = useMemo(() => dailyFinance({ wLeads: truth.wLeads, payments, adSpend }, win), [truth, payments, adSpend, win]);
   const campaigns = useMemo(() => topCampaigns(truth.wLeads), [truth]);
   const risk = useMemo(() => buyerRisk(truth.reconRows), [truth]);
@@ -621,30 +623,54 @@ export default function Overview() {
         <Reveal delay={0.05}>
           <AnimatedPanel duration={6.2}>
             <div className="overflow-hidden">
-              <PanelSectionHeader icon={PieIcon} title="Leads by Status" meta={donutMeta} />
+              <PanelSectionHeader icon={Layers} title="Leads by Status" meta={donutMeta} />
               <div className="p-5">
                 {donut.length > 0 ? (
                   <>
-                    <ResponsiveContainer width="100%" height={200}>
-                      <PieChart>
-                        <Pie data={donut} cx="50%" cy="50%" innerRadius={52} outerRadius={78} dataKey="value" stroke="none" animationDuration={900} animationBegin={150} paddingAngle={2}>
-                          {donut.map((d, i) => <Cell key={i} fill={d.color} />)}
-                        </Pie>
-                        <Tooltip contentStyle={{ backgroundColor: '#182030', border: '1px solid #243044', borderRadius: '8px', fontSize: 12 }} />
-                      </PieChart>
-                    </ResponsiveContainer>
-                    <div className="flex flex-wrap justify-center gap-x-4 gap-y-1.5 mt-2">
+                    <div className="flex items-end justify-between gap-4">
+                      <div>
+                        <div className="text-[28px] leading-none font-semibold text-foreground tabular-nums">
+                          <CountUpText value={donutTotal} render={(n) => int(Math.round(n))} />
+                        </div>
+                        <div className="text-[11px] text-muted-foreground mt-1.5">Leads in period</div>
+                      </div>
+                      <div className="text-right">
+                        <div className="text-[28px] leading-none font-semibold status-sold tabular-nums">
+                          <CountUpText value={soldRate} render={(n) => `${n.toFixed(1)}%`} />
+                        </div>
+                        <div className="text-[11px] text-muted-foreground mt-1.5">Sold rate</div>
+                      </div>
+                    </div>
+
+                    <div className="mt-4 flex h-2.5 w-full gap-[3px] rounded-full bg-muted overflow-hidden">
                       {donut.map(d => (
-                        <div key={d.name} className="flex items-center gap-1.5 text-[11px]">
-                          <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: d.color }} />
-                          <span className="text-muted-foreground">{d.name} (<CountUpText value={d.value} render={(n) => int(Math.round(n))} />)</span>
+                        <div
+                          key={d.name}
+                          title={`${d.name}: ${int(d.value)}`}
+                          className={`${d.tone} bg-current h-full rounded-full transition-[width] duration-700 ease-out`}
+                          style={{ width: `${(d.value / donutTotal) * 100}%` }}
+                        />
+                      ))}
+                    </div>
+
+                    <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-x-6">
+                      {donut.map(d => (
+                        <div key={d.name} className="flex items-center gap-2 px-1.5 py-2 rounded-md hover:bg-accent/40">
+                          <span className={`${d.tone} bg-current h-2 w-2 rounded-full shrink-0`} />
+                          <span className="text-[12px] text-foreground truncate">{d.name}</span>
+                          <span className="ml-auto text-[12px] font-mono text-foreground tabular-nums">
+                            <CountUpText value={d.value} render={(n) => int(Math.round(n))} />
+                          </span>
+                          <span className="text-[11px] text-muted-foreground tabular-nums w-11 text-right">
+                            {((d.value / donutTotal) * 100).toFixed(1)}%
+                          </span>
                         </div>
                       ))}
                     </div>
                   </>
                 ) : (
                   <div className="h-[220px] flex flex-col items-center justify-center text-center gap-1.5 px-4">
-                    <PieIcon className="w-7 h-7 text-muted-foreground/50" />
+                    <Layers className="w-7 h-7 text-muted-foreground/50" />
                     <div className="text-[13px] text-muted-foreground">No leads in period</div>
                     <div className="text-[11px] text-muted-foreground/70 max-w-[300px]">Likely cause: Leadbyte ingestion has never synced. Distribution and status counts depend on it.</div>
                     <Link to="/payload-tester" className="inline-flex items-center gap-1 text-[11px] text-primary hover:underline mt-1">Run Payload Tester <ArrowUpRight className="w-3 h-3" /></Link>

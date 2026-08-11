@@ -38,6 +38,14 @@
     "email": {
       "type": "string"
     },
+    "email_normalized": {
+      "type": "string",
+      "description": "Lowercased, trimmed email. The identity match key used by leadbyteWebhook and leadDedupe. Null when the value is absent or not a valid address, so junk never becomes a match key. Written by processLead via src/lib/leadIdentity.js."
+    },
+    "mobile_normalized": {
+      "type": "string",
+      "description": "Bare 10-digit US mobile (no country code, no formatting). The identity match key used alongside email_normalized. Null when the number cannot be resolved to a valid NANP number."
+    },
     "email_valid": {
       "type": "string",
       "enum": [

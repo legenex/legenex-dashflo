@@ -1,15 +1,76 @@
 // Caller model: public with key.
 //
-// This endpoint is unauthenticated and must be invocable without a logged-in
-// user. It authenticates ONLY by a route token, read from the query param
-// `token` or the `X-Webhook-Token` header, SHA-256 hashed and matched against
-// an enabled leadbyte InboundWebhookRoute. It looks up the route and reads and
-// writes Lead at the function layer (no RLS).
+// This endpoint is unauthenticated at the platform layer and must be invocable
+// without a logged-in user. It authenticates ONLY by a route token, read from
+// the query param `token` or the `X-Webhook-Token` header, SHA-256 hashed and
+// matched against an enabled leadbyte InboundWebhookRoute. It reads the route
+// and reads and writes Lead directly (there is no row-level security at this
+// function layer).
 //
 // This function only RECORDS LeadByte sold/unsold/return/conversion outcome
 // data onto the matching Lead. It never calls processLead or any routing,
 // delivery, connector, CAPI, or HLR logic. It never writes trustedform_valid
 // or cert_source, and never overwrites the inbound pipeline fields.
+
+// ── Identity + precedence helpers (inlined from the shared leadIdentity module) ──
+
+// Precedence order, lowest to highest:
+// Qualified < Duplicate < Rejected < Disqualified < Unsold < Returned < Sold < Converted
+const STATUS_PRECEDENCE = [
+  'Qualified',
+  'Duplicate',
+  'Rejected',
+  'Disqualified',
+  'Unsold',
+  'Returned',
+  'Sold',
+  'Converted',
+];
+
+// Normalize an email for identity matching: trimmed and lowercased. Returns
+// null when empty or clearly not an address. This is why "Blackicedane@..."
+// and "blackicedane@..." now match instead of creating a duplicate.
+function normalizeEmail(v) {
+  if (v === null || v === undefined) return null;
+  const s = String(v).trim().toLowerCase();
+  if (s === '' || !s.includes('@')) return null;
+  return s;
+}
+
+// Normalize a US mobile to its 10 national digits, or null when it is not a
+// valid 10/11-digit US number. Strips formatting and a leading country code so
+// "+1 404 979 1133" and "4049791133" both reduce to "4049791133".
+function normalizeMobileUs(v) {
+  if (v === null || v === undefined) return null;
+  let digits = String(v).replace(/\D+/g, '');
+  if (digits.length === 11 && digits.charAt(0) === '1') digits = digits.slice(1);
+  if (digits.length !== 10) return null;
+  return digits;
+}
+
+// True when status `a` is strictly higher precedence than status `b`. Unknown
+// statuses rank below every known one.
+function outranks(a, b) {
+  return STATUS_PRECEDENCE.indexOf(a) > STATUS_PRECEDENCE.indexOf(b);
+}
+
+// Pick the surviving record between two candidates: status precedence first,
+// then captured revenue, then age (the oldest record is the original intake
+// and carries the quiz/source provenance).
+function pickWinner(a, b) {
+  if (!a) return b;
+  if (!b) return a;
+  const sa = STATUS_PRECEDENCE.indexOf(a.final_status);
+  const sb = STATUS_PRECEDENCE.indexOf(b.final_status);
+  if (sa !== sb) return sa > sb ? a : b;
+  const ra = Number(a.revenue) || 0;
+  const rb = Number(b.revenue) || 0;
+  if (ra !== rb) return ra > rb ? a : b;
+  const ta = Date.parse(a.created_date || '') || 0;
+  const tb = Date.parse(b.created_date || '') || 0;
+  if (ta !== tb) return ta < tb ? a : b;
+  return a;
+}
 
 // Treat a literal single dash and empty string as null. Returns a trimmed
 // string, or null when the value is empty/dash/nullish.
@@ -174,7 +235,9 @@ export default async function leadbyteWebhook(ctx) {
   const db = ctx.db;
 
   // ── Auth gate: route token only, before any Lead access ─────────────────
-  const token = (ctx.req.query?.token || ctx.req.headers?.['x-webhook-token'] || '').trim();
+  const token = String(
+    ctx.req?.query?.token || ctx.req?.headers?.['x-webhook-token'] || '',
+  ).trim();
   if (!token) return ctx.json({ error: 'Unauthorized' }, 401);
 
   let route = null;
@@ -193,11 +256,12 @@ export default async function leadbyteWebhook(ctx) {
 
   // ── Parse the outcome payload ───────────────────────────────────────────
   const body = ctx.body;
-  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+  if (body === null || body === undefined || typeof body !== 'object') {
     return ctx.json({ error: 'Invalid JSON' }, 400);
   }
-  // Preserve the exact raw payload for leadbyte_outcome_payload when the
-  // transport captured it; otherwise reconstruct from the parsed body.
+  // The raw payload string, preserved verbatim onto the Lead. ctx.body is
+  // already parsed, so fall back to a re-serialized copy when the untouched
+  // raw text is not available.
   const rawBody = typeof ctx.req?.rawBody === 'string' ? ctx.req.rawBody : JSON.stringify(body);
 
   try {
@@ -240,21 +304,55 @@ export default async function leadbyteWebhook(ctx) {
     let resultStatus = finalStatus;
 
     let existing = null;
-    // 1. Primary match: the LeadByte lead id.
+    let alsoMatched = [];
+
+    // Identity matching runs on NORMALIZED keys, never raw equality.
+    //
+    // The old code compared raw strings, so LeadsHook storing
+    // "Blackicedane@gmail.com" and LeadByte posting back
+    // "blackicedane@gmail.com" did not match and this function created a
+    // second Lead for the same person. Mobile had the same flaw against
+    // "+1 404 979 1133" vs "4049791133".
+    const emailKey = normalizeEmail(contactEmail);
+    const mobileKey = normalizeMobileUs(contactPhone);
+
+    const candidates = [];
+    const seen = new Set();
+    const addAll = (rows) => {
+      for (const r of (Array.isArray(rows) ? rows : [])) {
+        const id = r?.id;
+        if (id && !seen.has(id)) { seen.add(id); candidates.push(r); }
+      }
+    };
+
+    // 1. Primary match: the LeadByte lead id. Unambiguous when present.
     if (leadbyteId !== null) {
-      const found = await db.entities.Lead.filter({ leadbyte_lead_id: leadbyteId });
-      existing = (Array.isArray(found) ? found : [])[0] || null;
+      addAll(await db.entities.Lead.filter({ leadbyte_lead_id: leadbyteId }));
     }
-    // 2. Fallback match: email, then phone. Outcome webhooks for direct-route
-    //    leads carry no leadbyte_lead_id (those leads never went to LeadByte),
-    //    so match them on contact identity instead of creating a phantom lead.
-    if (!existing && contactEmail) {
-      const found = await db.entities.Lead.filter({ email: contactEmail });
-      existing = (Array.isArray(found) ? found : [])[0] || null;
+    // 2. Identity match on the normalized keys. Both are checked (not
+    //    email-then-phone) so a lead that changed one field is still found.
+    if (candidates.length === 0 && emailKey) {
+      addAll(await db.entities.Lead.filter({ email_normalized: emailKey }));
     }
-    if (!existing && contactPhone) {
-      const found = await db.entities.Lead.filter({ mobile: contactPhone });
-      existing = (Array.isArray(found) ? found : [])[0] || null;
+    if (candidates.length === 0 && mobileKey) {
+      addAll(await db.entities.Lead.filter({ mobile_normalized: mobileKey }));
+    }
+    // 3. Raw fallback, for any record predating the normalization backfill.
+    //    Kept deliberately: without it an un-backfilled lead would be missed
+    //    and this function would create the duplicate all over again.
+    if (candidates.length === 0 && contactEmail) {
+      addAll(await db.entities.Lead.filter({ email: contactEmail }));
+    }
+    if (candidates.length === 0 && contactPhone) {
+      addAll(await db.entities.Lead.filter({ mobile: contactPhone }));
+    }
+
+    if (candidates.length > 0) {
+      // The outcome attaches to ONE record. pickWinner resolves by status
+      // precedence, then captured revenue, then age (the oldest record is the
+      // original intake and carries the quiz/source provenance).
+      existing = candidates.reduce((best, row) => pickWinner(best, row));
+      alsoMatched = candidates.filter((r) => r.id !== existing.id);
     }
 
     if (existing) {
@@ -264,8 +362,17 @@ export default async function leadbyteWebhook(ctx) {
       // Guard: an outcome postback must never downgrade a lead that already
       // sold at intake. If the lead is already Sold, keep it Sold and never
       // zero out its captured revenue.
-      const alreadySold = String(existing.final_status || '').toLowerCase() === 'sold';
-      if (alreadySold && patch.final_status && patch.final_status !== 'Sold' && !toBool(body.buyer_returned)) {
+      // An inbound outcome may only ever move a lead UP the precedence order
+      // (Converted > Sold > Returned > Unsold > Disqualified > Rejected >
+      // Duplicate > Qualified). A late or replayed postback can no longer
+      // downgrade a lead that already reached a better outcome. A buyer return
+      // is the one legitimate downgrade and is allowed through explicitly.
+      if (
+        patch.final_status &&
+        !outranks(patch.final_status, existing.final_status) &&
+        String(patch.final_status) !== String(existing.final_status) &&
+        !toBool(body.buyer_returned)
+      ) {
         delete patch.final_status;
       }
       // Never overwrite an existing non-zero revenue with a null/zero outcome value.
@@ -284,8 +391,31 @@ export default async function leadbyteWebhook(ctx) {
         if (clean(mergedMapped[key]) === null) mergedMapped[key] = value;
       }
       patch.mapped_fields = JSON.stringify(mergedMapped);
+      // Backfill the match keys on the surviving record so the next postback
+      // for this person matches on the fast path.
+      if (!existing.email_normalized && emailKey) patch.email_normalized = emailKey;
+      if (!existing.mobile_normalized && mobileKey) patch.mobile_normalized = mobileKey;
+
       await db.entities.Lead.update(existing.id, patch);
       resultStatus = patch.final_status || existing.final_status || null;
+
+      // Any other record for the same person is a duplicate of the survivor.
+      // Collapse rather than delete: the record stays auditable and reversible,
+      // and reporting excludes it via archived.
+      for (const dup of alsoMatched) {
+        try {
+          const dupMapped = parseMapped(dup.mapped_fields);
+          dupMapped.merged_into = existing.id;
+          dupMapped.merged_at = new Date().toISOString();
+          dupMapped.merged_reason = 'identity_match_leadbyte_webhook';
+          dupMapped.merged_prior_status = dup.final_status || null;
+          await db.entities.Lead.update(dup.id, {
+            final_status: 'Duplicate',
+            archived: true,
+            mapped_fields: JSON.stringify(dupMapped),
+          });
+        } catch { /* a failed collapse must never fail the outcome write */ }
+      }
     } else {
       // No matching lead: CREATE it.
       //
@@ -355,8 +485,10 @@ export default async function leadbyteWebhook(ctx) {
         archived: false,
         first_name: contactFirst || undefined,
         last_name: contactLast || undefined,
-        email: contactEmail || undefined,
-        mobile: contactPhone || undefined,
+        email: emailKey || contactEmail || undefined,
+        mobile: mobileKey ? `+1${mobileKey}` : (contactPhone || undefined),
+        email_normalized: emailKey || undefined,
+        mobile_normalized: mobileKey || undefined,
         supplier_name: supplierName || undefined,
         // The whole canonical payload, plus lead_type and a provenance marker so
         // a lead that arrived this way is identifiable later.

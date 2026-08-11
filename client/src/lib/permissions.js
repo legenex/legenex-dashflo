@@ -118,6 +118,7 @@ export const PATH_KEYS = {
   '/leads/disqualified': 'leads_disqualified',
   '/leads/rejected': 'leads_rejected',
   '/leads/queued': 'leads_queued',
+  '/leads/converted': 'leads_converted',
   '/distribution': 'dist_dashboard',
   '/campaigns': 'dist_campaigns',
   '/campaigns/deliveries': 'dist_deliveries',
@@ -192,7 +193,7 @@ export function keyForLocation(pathname, search) {
 // First path a user with the given can(key) checker is allowed to land on.
 export function firstAllowedPath(can) {
   const order = ['/', '/leads', '/leads/sold', '/leads/unsold', '/leads/disqualified',
-    '/leads/rejected', '/leads/queued', '/reports', '/distribution', '/campaigns', '/deliveries',
+    '/leads/rejected', '/leads/queued', '/leads/converted', '/reports', '/distribution', '/campaigns', '/deliveries',
     '/conversion-events', '/finances', '/notifications'];
   for (const p of order) {
     const key = PATH_KEYS[p];

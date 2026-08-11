@@ -1,5 +1,29 @@
 import { sendMail } from '../lib/mailer.js';
 
+// ── Inlined lead-identity helpers (canonical match-key normalization) ──────
+// normalizeEmail: lowercased, trimmed, validated email or null when unresolvable.
+function normalizeEmail(email) {
+  const s = String(email || '').trim().toLowerCase();
+  if (!s) return null;
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s)) return null;
+  return s;
+}
+
+// toE164Us: normalize a US phone to +1XXXXXXXXXX, or null when it cannot be resolved.
+function toE164Us(phone) {
+  let digits = String(phone || '').replace(/\D/g, '');
+  if (digits.length === 11 && digits.startsWith('1')) digits = digits.slice(1);
+  if (digits.length !== 10) return null;
+  return '+1' + digits;
+}
+
+// titleCaseName: Title Case a name, or null when empty.
+function titleCaseName(name) {
+  const s = String(name || '').trim();
+  if (!s) return null;
+  return s.toLowerCase().replace(/\b[\p{L}]/gu, (c) => c.toUpperCase());
+}
+
 // Resolve phone_verified value from HLR result based on configured source
 function resolvePhoneVerified(hlrResult, source) {
   if (!hlrResult) return '';
@@ -820,7 +844,7 @@ function fireConnectors(db, connectors, trigger, leadData, leadId, supplierAttri
   }
 }
 
-// Fire matching Deliveries destinations (non-default LeadByteConnector records).
+// Fire matching Deliveries destinations (non-default connector records).
 // Same filter/condition/trigger logic as Conversion Events connectors.
 function fireDeliveries(db, destinations, trigger, leadData, leadId, supplierAttribution, supplierRecord) {
   for (const dest of destinations) {
@@ -925,7 +949,7 @@ async function evaluateNotifications(db, conditionTypes, lead, supplierAttributi
           await sendMail({
             to: recipients[0],
             subject: `Legenex Alert: ${rule.name}`,
-            text: `${summary}\n\nLead ID: ${lead.id}\nSupplier: ${supplierAttribution}`,
+            body: `${summary}\n\nLead ID: ${lead.id}\nSupplier: ${supplierAttribution}`,
           });
         } catch {}
       }
@@ -1163,7 +1187,34 @@ function applyInboundAliases(leadPayload) {
   if (!leadPayload.supplier_brand && leadPayload.brand) leadPayload.supplier_brand = leadPayload.brand;
   if (!leadPayload.ad_label && leadPayload.utm_ad_label) leadPayload.ad_label = leadPayload.utm_ad_label;
 
-  return { firstName, lastName, mobile, email };
+  // Standardise identity before anything downstream reads it. Suppliers send
+  // the same person as Blackicedane@ / blackicedane@ and as +1 404 979 1133 /
+  // 4049791133, which previously produced two Lead records for one person.
+  // Canonical stored form: email lowercased, mobile E.164, names Title Case.
+  // The *_normalized keys are the match keys and are null when the value
+  // cannot be resolved, so junk never becomes a match key.
+  const emailNormalized = normalizeEmail(email);
+  const mobileNormalized = toE164Us(mobile);
+  const cleanEmail = emailNormalized || String(email || '').trim();
+  const cleanMobile = mobileNormalized || String(mobile || '').trim();
+  const cleanFirst = titleCaseName(firstName) || String(firstName || '').trim();
+  const cleanLast = titleCaseName(lastName) || String(lastName || '').trim();
+
+  // Write the standardised values back onto the payload so mapped_fields and
+  // every downstream mapping see the same canonical form as the columns.
+  if (cleanEmail) leadPayload.email = cleanEmail;
+  if (cleanMobile) leadPayload.mobile = cleanMobile;
+  if (cleanFirst) leadPayload.first_name = cleanFirst;
+  if (cleanLast) leadPayload.last_name = cleanLast;
+
+  return {
+    firstName: cleanFirst,
+    lastName: cleanLast,
+    mobile: cleanMobile,
+    email: cleanEmail,
+    emailNormalized,
+    mobileNormalized: mobileNormalized ? mobileNormalized.slice(2) : null,
+  };
 }
 
 // Patterns that indicate a LeadByte rejection is due to missing/invalid fields
@@ -1219,8 +1270,11 @@ function bypassLeadStatus(finalForBypass) {
 export default async function processLead(ctx) {
   const db = ctx.db;
   const method = ctx.req.method;
-  const headers = ctx.req.headers || {};
-  const getHeader = (name) => headers[name] ?? headers[name.toLowerCase()] ?? null;
+  const headers = ctx.req?.headers || {};
+  const getHeader = (name) => {
+    const v = headers[String(name).toLowerCase()];
+    return v == null ? null : String(v);
+  };
 
   if (method === 'GET') return ctx.json({ status: 'ok' }, 200);
 
@@ -1393,8 +1447,8 @@ export default async function processLead(ctx) {
     // writes ONLY a RouteDecisionTrace. It sends/reserves/bills nothing and is
     // fully isolated: the dynamic import runs only when enabled (so production on
     // legacy_only never loads it), and any error is caught so it can never alter
-    // the legacy outcome or the supplier response envelope. Deployment of the
-    // generated bundle to the function runtime is verified in staging (CAP-2).
+    // the legacy LeadByte outcome or the supplier response envelope. Deployment of
+    // the generated bundle to the function runtime is verified in staging (CAP-2).
     if (distributionMode !== 'legacy_only') {
       try {
         const leadDist = await import('./routingEngine.generated.js');
@@ -1448,11 +1502,12 @@ export default async function processLead(ctx) {
     }
 
     // ── Normalize field aliases ──────────────────────────────────────────
-    const { firstName, lastName, mobile, email } = applyInboundAliases(leadPayload);
+    const { firstName, lastName, mobile, email, emailNormalized, mobileNormalized } = applyInboundAliases(leadPayload);
 
     await db.entities.Lead.update(leadId, {
       mapped_fields: JSON.stringify(leadPayload),
       first_name: firstName, last_name: lastName, mobile: mobile, email: email,
+      email_normalized: emailNormalized, mobile_normalized: mobileNormalized,
     });
 
     // ── AUTO-DETECT UNKNOWN INBOUND FIELDS ──────────────────────────────

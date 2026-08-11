@@ -388,7 +388,6 @@ export const METRIC_CATALOG = [
   { key: 'fakes', label: 'Fakes', format: 'int' },
   { key: 'duplicates', label: 'Duplicates', format: 'int' },
   { key: 'dqs', label: 'DQs', format: 'int' },
-  { key: 'conv_rate', label: 'Conv Rate', format: 'pct' },
   { key: 'booked_revenue', label: 'Booked Revenue', format: 'money' },
   { key: 'verified_income', label: 'Verified Income', format: 'money' },
   { key: 'revenue_gap', label: 'Revenue Gap', format: 'money' },

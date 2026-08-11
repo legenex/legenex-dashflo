@@ -157,14 +157,17 @@ export function actionQueue({ reconRows, wb }, txns) {
 export function financeDonut(wLeads) {
   const by = (s) => wLeads.filter(l => l.final_status === s).length;
   const unmatchedLeads = wLeads.filter(l => !leadField(l, 'buyer_id')).length;
+  // `tone` is the semantic status class (DESIGN-SYSTEM.md); consumers that draw
+  // with CSS use it with bg-current so both themes resolve correctly. `color` is
+  // retained for recharts consumers that need a literal fill.
   return [
-    { name: 'Sold', value: by('Sold'), color: '#22C55E' },
-    { name: 'Duplicate', value: by('Duplicate'), color: '#64748B' },
-    { name: 'Returned', value: by('Returned'), color: '#06B6D4' },
-    { name: 'Unsold', value: by('Unsold'), color: '#F59E0B' },
-    { name: 'Rejected', value: wLeads.filter(l => (l.leadbyte_record_status || '').toLowerCase() === 'rejected').length, color: '#EF4444' },
-    { name: 'Error', value: by('Error'), color: '#DC2626' },
-    { name: 'Unmatched', value: unmatchedLeads, color: '#A855F7' },
+    { name: 'Sold', value: by('Sold'), color: '#22C55E', tone: 'status-sold' },
+    { name: 'Duplicate', value: by('Duplicate'), color: '#64748B', tone: 'status-duplicate' },
+    { name: 'Returned', value: by('Returned'), color: '#06B6D4', tone: 'status-returned' },
+    { name: 'Unsold', value: by('Unsold'), color: '#F59E0B', tone: 'status-unsold' },
+    { name: 'Rejected', value: wLeads.filter(l => (l.leadbyte_record_status || '').toLowerCase() === 'rejected').length, color: '#EF4444', tone: 'status-rejected' },
+    { name: 'Error', value: by('Error'), color: '#DC2626', tone: 'status-lead-error' },
+    { name: 'Unmatched', value: unmatchedLeads, color: '#A855F7', tone: 'status-queued' },
   ].filter(d => d.value > 0);
 }
 

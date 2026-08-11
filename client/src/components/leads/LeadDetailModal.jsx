@@ -50,6 +50,7 @@ const DETAIL_FIELDS = [
     if (Number.isNaN(d.getTime())) return null;
     return formatInTimeZone(d, APP_TZ, 'MMM d, yyyy HH:mm');
   } },
+  { key: 'lead_status', label: 'Lead Status', value: (lead, m) => lead.final_status || ci(m, 'lead_status') },
   { key: 'name', label: 'Name', value: (lead) => `${lead.first_name || ''} ${lead.last_name || ''}`.trim() || null },
   { key: 'email', label: 'Email', value: (lead) => lead.email },
   { key: 'mobile', label: 'Mobile', value: (lead) => lead.mobile },
@@ -60,7 +61,6 @@ const DETAIL_FIELDS = [
   { key: 'lead_type', label: 'Lead Type', value: (lead, m) => ci(m, 'lead_type') },
   // Column first, then the bag. The bag holds what the supplier last reported and
   // goes stale on a resale, which showed Lead Status Sold under a Returned pill.
-  { key: 'lead_status', label: 'Lead Status', value: (lead, m) => lead.final_status || ci(m, 'lead_status') },
   { key: 'revenue', label: 'Revenue', value: (lead) => `$${Number(lead.revenue || 0).toFixed(2)}` },
   { key: 'buyer', label: 'Buyer', value: (lead, m) => lead.buyer_name || ci(m, 'buyer_name') || ci(m, 'buyer') },
   { key: 'buyer_id', label: 'Buyer ID', value: (lead, m) => lead.buyer_id || ci(m, 'buyer_id') },

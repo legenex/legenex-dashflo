@@ -47,7 +47,6 @@ export default function SupplierPortalDashboard() {
         <Stat label="Leads Sent" value={m.total.toLocaleString()} icon={FileText} />
         <Stat label="Accepted" value={m.accepted.toLocaleString()} icon={CheckCircle2} />
         <Stat label="Accepted %" value={pct(m.acceptedPct)} icon={Percent} />
-        <Stat label="Conversion Rate" value={pct(m.convRate)} icon={TrendingUp} />
       </div>
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
         <Stat label="Duplicate %" value={pct(m.duplicatePct)} icon={Copy} />

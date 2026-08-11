@@ -88,7 +88,11 @@ function transformCode(text) {
     .replace(/\bbase44\b/g, 'api')          // identifier usage
     .replace(/\bBase44\b/g, 'the backend')  // Title-case brand mentions (prose)
     .replace(/Base44/g, 'Entity')           // embedded in camelCase ids (makeBase44CapStore)
-    .replace(/\bBASE44\b/g, 'BACKEND');
+    .replace(/\bBASE44\b/g, 'BACKEND')
+    // Redact live-key-patterned secrets that occasionally appear in upstream test
+    // fixtures — GitHub push protection rejects the whole push otherwise. The
+    // short fixed suffix no longer matches the scanner's length/entropy rules.
+    .replace(/\b(sk|rk|pk|whsec)_(live|test)_[A-Za-z0-9]{16,}/g, '$1_$2_REDACTED');
 }
 
 // Download any platform-hosted images referenced in `raw` into

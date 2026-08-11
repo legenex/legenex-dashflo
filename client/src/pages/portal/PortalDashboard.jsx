@@ -45,7 +45,6 @@ export default function PortalDashboard() {
         <Stat label="Received Leads" value={m.total.toLocaleString()} icon={FileText} />
         <Stat label="Revenue" value={money(m.revenue)} icon={DollarSign} />
         <Stat label="Cost" value={money(m.cost)} icon={Wallet} />
-        <Stat label="Conversion Rate" value={`${m.convRate.toFixed(1)}%`} icon={TrendingUp} />
       </div>
 
       <div className="bg-card border border-border rounded-[10px] p-5">

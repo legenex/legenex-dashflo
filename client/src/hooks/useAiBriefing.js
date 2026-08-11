@@ -21,7 +21,7 @@ export default function useAiBriefing(summary, signature) {
       if (briefing) setText(briefing);
       else setError(res?.data?.error || 'No briefing returned.');
     } catch (e) {
-      setError('Could not generate the briefing right now.');
+      setError(e?.message ? `Briefing failed: ${e.message}` : 'Could not generate the briefing right now.');
     } finally {
       setLoading(false);
     }

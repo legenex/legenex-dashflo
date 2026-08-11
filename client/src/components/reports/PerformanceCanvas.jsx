@@ -22,13 +22,13 @@ const GROUPS = [
 const CATEGORY = {
   revenue: 'revenue', net_revenue: 'revenue', profit: 'revenue', net_profit: 'revenue', qp_margin: 'revenue', roas: 'revenue', booked_revenue: 'revenue',
   verified_income: 'cash', revenue_gap: 'cash', outstanding: 'cash', overdue: 'cash', short_paid: 'cash', cost: 'cash', total_cost: 'cash', ad_spend: 'cash', cpl: 'cash', blended_cpl: 'cash', cost_per_sold: 'cash',
-  sold: 'risk', unsold: 'risk', returns: 'risk', dqs: 'risk', duplicates: 'risk', conv_rate: 'risk',
+  sold: 'risk', unsold: 'risk', returns: 'risk', dqs: 'risk', duplicates: 'risk',
   total_leads: 'data', fakes: 'data', phone_verified: 'data',
 };
 // Cost and CPL are pinned on every report view, not buried in the Cash group.
 // They are the two numbers that decide whether a campaign is worth running, so
 // they sit next to revenue rather than a click away.
-const PINNED = ['revenue', 'total_cost', 'blended_cpl', 'profit', 'total_leads', 'conv_rate'];
+const PINNED = ['revenue', 'total_cost', 'blended_cpl', 'profit', 'total_leads'];
 const RISK = ['returns', 'fakes', 'dqs', 'duplicates', 'revenue_gap', 'overdue', 'short_paid', 'outstanding', 'total_cost', 'blended_cpl'];
 const groupOf = (metric) => CATEGORY[metric] || 'data';
 

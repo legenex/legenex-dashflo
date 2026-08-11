@@ -45,7 +45,6 @@ export default function PortalReports() {
         <Stat label="Received Leads" value={m.total.toLocaleString()} icon={FileText} />
         <Stat label="Revenue" value={money(m.revenue)} icon={DollarSign} />
         <Stat label="Cost" value={money(m.cost)} icon={Wallet} />
-        <Stat label="Conversion Rate" value={`${m.convRate.toFixed(1)}%`} icon={TrendingUp} />
       </div>
 
       {/* Daily Performance */}
@@ -58,7 +57,7 @@ export default function PortalReports() {
             <table className="w-full text-[13px] min-w-[560px]">
               <thead>
                 <tr className="border-b border-border">
-                  {['Date', 'Leads', 'Sold', 'Conv %', 'Revenue', 'Cost'].map(h => (
+                  {['Date', 'Leads', 'Sold', 'Revenue', 'Cost'].map(h => (
                     <th key={h} className="text-left px-3 py-2 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider whitespace-nowrap">{h}</th>
                   ))}
                 </tr>
@@ -69,7 +68,6 @@ export default function PortalReports() {
                     <td className="px-3 py-2 font-mono text-[12px] text-foreground">{d.day}</td>
                     <td className="px-3 py-2 font-mono text-[12px]">{d.total.toLocaleString()}</td>
                     <td className="px-3 py-2 font-mono text-[12px]">{d.sold.toLocaleString()}</td>
-                    <td className="px-3 py-2 font-mono text-[12px]">{d.convRate.toFixed(1)}%</td>
                     <td className="px-3 py-2 font-mono text-[12px]">{money(d.revenue)}</td>
                     <td className="px-3 py-2 font-mono text-[12px]">{money(d.cost)}</td>
                   </tr>

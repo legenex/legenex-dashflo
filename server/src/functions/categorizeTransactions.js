@@ -4,7 +4,8 @@ import { callLLM } from '../integrations/llm.js';
 // AI-categorizes uncategorized BankTransaction records. The taxonomy is read
 // from the finance_settings IntegrationConfig so it stays in sync with the
 // user-editable categories in Finances > Settings. Falls back to the original
-// six categories when no settings record exists. Admin-only.
+// six categories when no settings record exists.
+// Uses OpenAI (OPENAI_API_KEY secret). Admin-only.
 
 // Used only when no finance_settings record exists, parsing fails, or the
 // categories array is empty. Matches the original hardcoded behavior.
@@ -17,46 +18,11 @@ const FALLBACK_CATEGORIES = [
   { key: 'other', label: 'Other', hint: 'anything else' },
 ];
 
-// Best-effort JSON extraction from an LLM text response. Mirrors the original
-// behavior of returning {} when the model output cannot be parsed.
-function parseJsonLoose(text) {
-  if (text && typeof text === 'object') return text;
-  const raw = String(text ?? '').trim();
-  if (!raw) return {};
-  let candidate = raw;
-  const fence = candidate.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  if (fence) candidate = fence[1].trim();
-  try {
-    return JSON.parse(candidate);
-  } catch {
-    const start = candidate.indexOf('{');
-    const end = candidate.lastIndexOf('}');
-    if (start !== -1 && end !== -1 && end > start) {
-      try {
-        return JSON.parse(candidate.slice(start, end + 1));
-      } catch {
-        return {};
-      }
-    }
-    return {};
-  }
-}
-
-async function categorizeBatch({ resolved, resolvedKeys, batch }) {
-  const list = batch.map((t, i) => `${i}. ${t.description || '(no description)'} | amount ${t.amount}`).join('\n');
-  const categoryLines = resolved.map((c) => `- ${c.key} (${c.label}): ${c.hint}`).join('\n');
-  const out = await callLLM({
-    prompt: `You are a bookkeeping assistant for a lead-generation business. Categorize each bank transaction into exactly one of: ${resolvedKeys.join(', ')}.
-${categoryLines}
-
-Transactions:
-${list}
-
-Return ONLY valid JSON (no markdown) with an array "items" of { index, category }.`,
-    temperature: 0.2,
-    maxTokens: 2000,
-  });
-  return parseJsonLoose(typeof out === 'string' ? out : (out?.text ?? out?.content ?? out));
+// Delegates to the shared client: OpenAI first, automatic failover to
+// Anthropic (ANTHROPIC_API_KEY) if OpenAI is unavailable for any reason.
+// The name is kept so existing call sites are untouched.
+async function callOpenAI({ prompt, system, model = 'gpt-4o-mini', temperature = 0.4, maxTokens } = {}) {
+  return await callLLM({ prompt, system, model, temperature, maxTokens });
 }
 
 export default async function categorizeTransactions(ctx) {
@@ -93,7 +59,26 @@ export default async function categorizeTransactions(ctx) {
     if (uncategorized.length > 0) {
       // Batch to keep the prompt small.
       const batch = uncategorized.slice(0, 100);
-      const result = await categorizeBatch({ resolved, resolvedKeys, batch });
+      const list = batch.map((t, i) => `${i}. ${t.description || '(no description)'} | amount ${t.amount}`).join('\n');
+      const categoryLines = resolved.map((c) => `- ${c.key} (${c.label}): ${c.hint}`).join('\n');
+      const result = await callOpenAI({
+        prompt: `You are a bookkeeping assistant for a lead-generation business. Categorize each bank transaction into exactly one of: ${resolvedKeys.join(', ')}.
+${categoryLines}
+
+Transactions:
+${list}
+
+Return JSON with an array "items" of { index, category }.`,
+        jsonSchema: {
+          type: 'object',
+          properties: {
+            items: {
+              type: 'array',
+              items: { type: 'object', properties: { index: { type: 'number' }, category: { type: 'string' } } },
+            },
+          },
+        },
+      });
       const items = result?.items || [];
       for (const it of items) {
         const t = batch[it.index];

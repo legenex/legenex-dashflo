@@ -40,6 +40,33 @@
       "description": "Free text note, e.g. which platform posts to this webhook",
       "type": "string"
     },
+    "purpose": {
+      "description": "What this webhook carries. Absent or 'lead_outcome' is the pre-existing behaviour: a buyer or platform posting a lifecycle status. 'buyer_feedback' writes a BuyerFeedback record, 'inbound_call' records a call outcome, 'cost' records spend.",
+      "enum": [
+        "lead_outcome",
+        "buyer_feedback",
+        "inbound_call",
+        "cost"
+      ],
+      "default": "lead_outcome",
+      "type": "string"
+    },
+    "match_field": {
+      "description": "Our field used to find the lead this payload belongs to: sid, buyer_id, email, mobile, lead_id or utm_source. Absent means the built-in resolution order, which is what every existing route uses.",
+      "type": "string"
+    },
+    "match_key": {
+      "description": "Payload key holding the match value, when the sender does not use one of the known aliases",
+      "type": "string"
+    },
+    "date_key": {
+      "description": "Payload key holding the event date for this receipt",
+      "type": "string"
+    },
+    "field_map": {
+      "description": "JSON object mapping payload key -> our field name, applied before the built-in alias resolution. Lets a sender post its own column names without a code change.",
+      "type": "string"
+    },
     "provider": {
       "description": "DEPRECATED. Legacy source-system tag from the per-route token model. Retained for history only, no longer written or displayed.",
       "type": "string"

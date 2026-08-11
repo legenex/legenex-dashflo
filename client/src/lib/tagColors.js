@@ -63,7 +63,8 @@ export const STATUS_TAG = {
   Disqualified: 'bg-status-disqualified status-disqualified',
   Returned: 'bg-status-returned status-returned',
   Rejected: 'bg-status-rejected status-rejected',
-  Error: 'bg-status-error status-error',
+  Converted: 'bg-status-converted status-converted',
+  Error: 'bg-status-lead-error status-lead-error',
   Processing: 'bg-status-processing status-processing',
   Queued: 'bg-status-queued status-queued',
   Duplicate: 'bg-status-duplicate status-duplicate',
@@ -78,7 +79,8 @@ const STATUS_TEXT = {
   Disqualified: 'status-disqualified',
   Returned: 'status-returned',
   Rejected: 'status-rejected',
-  Error: 'status-error',
+  Converted: 'status-converted',
+  Error: 'status-lead-error',
   Processing: 'status-processing',
   Queued: 'status-queued',
   Duplicate: 'status-duplicate',
@@ -122,7 +124,7 @@ export const TRIGGER_TAG = {
   on_duplicates: { label: 'Duplicate', className: 'bg-status-duplicate status-duplicate' },
   on_24m_lead: { label: '24m Lead', className: 'bg-status-24m status-24m' },
   on_returned: { label: 'Returned', className: 'bg-status-returned status-returned' },
-  on_error: { label: 'Error', className: 'bg-status-error status-error' },
+  on_error: { label: 'Error', className: 'bg-status-lead-error status-lead-error' },
 };
 
 export function triggerTagClass(triggerKey) {

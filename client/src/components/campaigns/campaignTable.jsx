@@ -12,7 +12,7 @@ export const rise = {
 // Numeric column headers that should render right-aligned + mono in body cells.
 const NUMERIC_HEADS = new Set([
   'Leads', 'Campaigns', 'Accepted', 'Accepted %', 'Duplicate', 'DQ', 'Cost', 'Revenue',
-  'Profit', 'CPL', 'Conv Rate', 'Suppliers', 'FB / IG', 'Balance', 'Min Balance', 'Actions',
+  'Profit', 'CPL', 'Suppliers', 'FB / IG', 'Balance', 'Min Balance', 'Actions',
 ]);
 
 export const Panel = ({ children, className = '' }) => (

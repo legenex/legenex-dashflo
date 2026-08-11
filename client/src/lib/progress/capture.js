@@ -1,6 +1,7 @@
 import html2canvas from 'html2canvas';
 import { api } from '@/api/client';
 import manifest from '@/lib/progress/pageManifest.json';
+import { maskText, blockOut, PII_SELECTORS, VIEWPORTS, viewportFor } from './mask';
 
 // Screenshot capture for the Progress Control Center.
 //
@@ -20,41 +21,6 @@ import manifest from '@/lib/progress/pageManifest.json';
 /* ---------------------------------------------------------------- *
  * Masking
  * ---------------------------------------------------------------- */
-
-const EMAIL = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi;
-// North American numbers in the shapes this app actually renders.
-const PHONE = /(\+?1[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}/g;
-// Long opaque tokens: TrustedForm and Jornaya identifiers, API keys, JWTs.
-const TOKEN = /\b[A-Za-z0-9_-]{24,}\b/g;
-const CERT_URL = /https?:\/\/cert\.trustedform\.com\/\S+/gi;
-
-// Elements whose text is treated as personal regardless of shape.
-const PII_SELECTORS = [
-  '[data-pii]',
-  '[data-progress-mask]',
-  '[data-field="first_name"]',
-  '[data-field="last_name"]',
-  '[data-field="email"]',
-  '[data-field="phone"]',
-  '[data-field="address"]',
-  '[data-field="ip_address"]',
-];
-
-const blockOut = (text) => (text || '').replace(/\S/g, '\u2022');
-
-function maskText(value) {
-  if (!value) return { text: value, hits: 0 };
-  let hits = 0;
-  let out = value;
-  const apply = (re) => {
-    out = out.replace(re, (m) => { hits += 1; return blockOut(m); });
-  };
-  apply(CERT_URL);
-  apply(EMAIL);
-  apply(PHONE);
-  apply(TOKEN);
-  return { text: out, hits };
-}
 
 // Redact a cloned document. Never called on the live DOM.
 function maskClone(doc) {
@@ -108,18 +74,7 @@ function maskClone(doc) {
  * Capture
  * ---------------------------------------------------------------- */
 
-export const VIEWPORTS = [
-  { key: 'desktop', label: 'Desktop', min: 1100 },
-  { key: 'tablet', label: 'Tablet', min: 700 },
-  { key: 'mobile', label: 'Mobile', min: 0 },
-];
-
-// Viewport is DERIVED from the real window width, never forced. The capture is
-// whatever the operator's browser was actually showing, and saying otherwise
-// would be a lie about what was reviewed.
-export function viewportFor(width) {
-  return VIEWPORTS.find((v) => width >= v.min)?.key || 'mobile';
-}
+export { VIEWPORTS, viewportFor, maskText };
 
 const canvasToFile = (canvas, name) => new Promise((resolve, reject) => {
   canvas.toBlob((blob) => {
@@ -142,6 +97,11 @@ export async function rasterise(target, { mask = true, width } = {}) {
     scale: Math.min(window.devicePixelRatio || 1, 1.5),
     windowWidth: width || document.documentElement.clientWidth,
     width: width || undefined,
+    // Without an explicit height a tall page is cropped to the viewport. The
+    // element's own scroll height is the whole page.
+    height: width ? Math.max(target.scrollHeight || 0, 600) : undefined,
+    scrollX: 0,
+    scrollY: 0,
     onclone: (clonedDoc) => {
       if (mask) {
         try { maskCount = maskClone(clonedDoc); } catch { maskCount = -1; }

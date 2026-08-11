@@ -1,4 +1,4 @@
-import { invokeLLM } from '../integrations/llm.js';
+import { callLLM } from '../integrations/llm.js';
 
 // Public buyer feedback webhook (/functions/buyerFeedbackWebhook).
 // Buyers POST feedback here. We authenticate with a per-buyer feedback token,
@@ -19,32 +19,40 @@ function normEmail(v) {
   return String(v || '').trim().toLowerCase();
 }
 
+// Read a request header regardless of whether it's a Fetch Headers object
+// (case-insensitive .get) or a plain Express headers object (lowercased keys).
+function getHeader(headers, name) {
+  if (!headers) return '';
+  if (typeof headers.get === 'function') return headers.get(name) || '';
+  const lower = String(name).toLowerCase();
+  return headers[lower] || headers[name] || '';
+}
+
 async function mapDisposition(raw) {
   const exact = TAXONOMY.find(t => t.toLowerCase() === String(raw || '').trim().toLowerCase());
   if (exact) return { disposition: exact, confidence: 1 };
 
-  // No raw disposition or no LLM configured -> degrade gracefully.
   if (!raw) return { disposition: 'Other', confidence: 0.3 };
 
   try {
-    const parsed = await invokeLLM({
+    const result = await callLLM({
+      system: 'You map a buyer\'s raw lead disposition to a fixed taxonomy and reply only with JSON.',
       prompt: `Map the buyer's raw lead disposition to the single closest value in this fixed taxonomy. Reply ONLY with JSON {"disposition": "<one taxonomy value>", "confidence": <0-1>}. If nothing fits, use "Other".
 
 Taxonomy: ${TAXONOMY.join(', ')}
 
 Buyer's raw disposition: "${raw}"`,
       temperature: 0,
-      response_json_schema: {
-        type: 'object',
-        properties: {
-          disposition: { type: 'string' },
-          confidence: { type: 'number' },
-        },
-        required: ['disposition', 'confidence'],
-      },
+      maxTokens: 200,
     });
-    const disposition = TAXONOMY.includes(parsed?.disposition) ? parsed.disposition : 'Other';
-    let confidence = Number(parsed?.confidence);
+
+    const text = typeof result === 'string'
+      ? result
+      : (result?.text ?? result?.content ?? result?.output ?? '');
+    const match = String(text || '').match(/\{[\s\S]*\}/);
+    const parsed = JSON.parse(match ? match[0] : '{}');
+    const disposition = TAXONOMY.includes(parsed.disposition) ? parsed.disposition : 'Other';
+    let confidence = Number(parsed.confidence);
     if (isNaN(confidence)) confidence = 0.5;
     confidence = Math.max(0, Math.min(1, confidence));
     return { disposition, confidence };
@@ -54,19 +62,21 @@ Buyer's raw disposition: "${raw}"`,
 }
 
 export default async function buyerFeedbackWebhook(ctx) {
-  const method = ctx.req.method;
-  if (method === 'OPTIONS') return ctx.json(null, 204);
+  const req = ctx.req || {};
+  const method = req.method;
+
+  if (method === 'OPTIONS') return ctx.json({}, 204);
   if (method === 'GET') return ctx.json({ status: 'ok' }, 200);
-  if (method !== 'POST') return ctx.json({ error: 'Method not allowed' }, 405);
+  if (method && method !== 'POST') return ctx.json({ error: 'Method not allowed' }, 405);
 
   try {
     const db = ctx.db;
     const body = ctx.body || {};
 
     // Authenticate the buyer by their feedback token (buyer id used as token).
-    let token = ctx.req.get('X-BUYER-TOKEN') || body.buyer_token || '';
+    let token = getHeader(req.headers, 'X-BUYER-TOKEN') || body.buyer_token || '';
     if (!token) {
-      const auth = ctx.req.get('Authorization') || '';
+      const auth = getHeader(req.headers, 'Authorization') || '';
       if (auth.startsWith('Bearer ')) token = auth.slice(7);
     }
     if (!token) return ctx.json({ error: 'Missing buyer token' }, 401);

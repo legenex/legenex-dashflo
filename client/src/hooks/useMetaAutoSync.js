@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { api } from '@/api/client';
+import { isCaptureMode } from '@/lib/progress/captureMode';
 
 // Keeps Meta ad spend fresh without anyone pressing Refresh.
 //
@@ -26,11 +27,18 @@ const INTERVAL_MS = 15 * 60 * 1000; // 15 minutes
 const CHECK_MS = 60 * 1000;         // re-evaluate every minute
 
 export default function useMetaAutoSync({ enabled = true } = {}) {
+  // A screenshot must never cause the app to do anything. The offscreen capturer
+  // mounts the real shell, which mounts this hook; syncing ad spend because
+  // somebody took a screenshot would be a genuine data side effect. Either the
+  // caller passing enabled: false or the module level capture flag stands it down.
+  const capturing = isCaptureMode() || enabled === false;
+
   const qc = useQueryClient();
   // Guards against a slow sync overlapping the next tick.
   const inFlight = useRef(false);
 
   useEffect(() => {
+    if (capturing) return undefined;
     if (!enabled) return undefined;
     let cancelled = false;
 

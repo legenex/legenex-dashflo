@@ -11,9 +11,10 @@ import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
-import { Plus, Copy, Trash2, Pencil, Webhook, KeyRound } from 'lucide-react';
+import { Plus, Copy, Trash2, Pencil, Webhook, KeyRound, X } from 'lucide-react';
 import { format } from 'date-fns';
 import { toast } from 'sonner';
+import { WEBHOOK_PURPOSES, MATCH_FIELDS, purposeMeta } from '@/components/settings/dataSourcePurposes';
 
 const WEBHOOK_FN_URL = 'https://api.legenex.com/functions/webhook';
 
@@ -33,7 +34,33 @@ const EVENT_OPTIONS = [
 
 const NO_SUPPLIER = '__none__';
 
-const blankForm = { name: '', event_type: DYNAMIC, api_key_id: '', supplier_name: NO_SUPPLIER, notes: '' };
+// Blank match_field means the built-in resolution order: lead id, then email,
+// then mobile. That is what every route created before purposes existed uses.
+const AUTO_MATCH = '__auto__';
+
+const blankForm = {
+  name: '', event_type: DYNAMIC, api_key_id: '', supplier_name: NO_SUPPLIER, notes: '',
+  purpose: 'lead_outcome', match_field: AUTO_MATCH, match_key: '', date_key: '', field_map: [],
+};
+
+// field_map is stored as a JSON object and edited as ordered rows.
+function mapToRows(json) {
+  try {
+    const obj = JSON.parse(json || '{}');
+    if (!obj || typeof obj !== 'object') return [];
+    return Object.entries(obj).map(([key, field]) => ({ key, field: String(field) }));
+  } catch { return []; }
+}
+
+function rowsToMap(rows) {
+  const out = {};
+  for (const r of rows || []) {
+    const k = String(r.key || '').trim();
+    const f = String(r.field || '').trim();
+    if (k && f) out[k] = f;
+  }
+  return out;
+}
 
 // The full URL a sender posts to. The key authenticates; route is optional and
 // only exists so receipts and last-received land on the right row.
@@ -100,6 +127,11 @@ export default function SettingsInboundWebhooks() {
       api_key_id: route.api_key_id || '',
       supplier_name: route.supplier_name || NO_SUPPLIER,
       notes: route.notes || '',
+      purpose: route.purpose || 'lead_outcome',
+      match_field: route.match_field || AUTO_MATCH,
+      match_key: route.match_key || '',
+      date_key: route.date_key || '',
+      field_map: mapToRows(route.field_map),
     });
     setModalOpen(true);
   };
@@ -113,6 +145,11 @@ export default function SettingsInboundWebhooks() {
       api_key_name: key?.name || '',
       supplier_name: form.supplier_name === NO_SUPPLIER ? '' : form.supplier_name,
       notes: form.notes.trim(),
+      purpose: form.purpose || 'lead_outcome',
+      match_field: form.match_field === AUTO_MATCH ? '' : form.match_field,
+      match_key: form.match_key.trim(),
+      date_key: form.date_key.trim(),
+      field_map: JSON.stringify(rowsToMap(form.field_map)),
     };
     try {
       if (editingId) {
@@ -165,7 +202,7 @@ export default function SettingsInboundWebhooks() {
           <div className="text-[12px] font-semibold text-muted-foreground uppercase tracking-wider">Inbound Webhooks</div>
         </div>
         <p className="text-[13px] text-muted-foreground leading-relaxed">
-          One endpoint takes lead outcomes from any platform that can POST JSON. Authentication is an API key on the URL, so there are no per-webhook tokens to rotate: use the master key, or a supplier key to pin every payload to that supplier. The supplier is otherwise read from <code className="font-mono text-[12px] text-foreground">sid</code> on the payload. Leave Event blank and the status is read from <code className="font-mono text-[12px] text-foreground">lead_status</code>. A lead that is not in the system is created; one that matches is updated.
+          One endpoint takes posts from any platform that can send JSON: buyer dispositions, inbound call payouts, disqualifications, daily cost, or a Google Sheets Apps Script pushing rows. Each route says what it is for and which key identifies the lead. Authentication is an API key on the URL, so there are no per-webhook tokens to rotate: use the master key, or a supplier key to pin every payload to that supplier. The supplier is otherwise read from <code className="font-mono text-[12px] text-foreground">sid</code> on the payload. Leave Event blank and the status is read from <code className="font-mono text-[12px] text-foreground">lead_status</code>. A lead that is not in the system is created; one that matches is updated.
         </p>
         <div className="flex items-center gap-2">
           <code className="text-[12px] text-primary bg-primary/10 px-2 py-0.5 rounded font-mono flex-1 break-all">{WEBHOOK_FN_URL}?key=…</code>
@@ -182,14 +219,14 @@ export default function SettingsInboundWebhooks() {
         <table className="w-full min-w-[860px] text-[13px]">
           <thead>
             <tr className="border-b border-border bg-muted/50">
-              {['Name', 'Event', 'API Key', 'Supplier', 'Enabled', 'Last Received', 'Receipts', 'Errors', 'Actions'].map((h) => (
+              {['Name', 'Purpose', 'Event', 'Match', 'API Key', 'Supplier', 'Enabled', 'Last Received', 'Receipts', 'Errors', 'Actions'].map((h) => (
                 <th key={h} className="text-left px-4 py-3 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider whitespace-nowrap">{h}</th>
               ))}
             </tr>
           </thead>
           <tbody className="divide-y divide-border">
             {routes.length === 0 && (
-              <tr><td colSpan={9} className="px-4 py-8 text-center text-muted-foreground">No inbound webhooks yet</td></tr>
+              <tr><td colSpan={11} className="px-4 py-8 text-center text-muted-foreground">No inbound webhooks yet</td></tr>
             )}
             {routes.map((r) => {
               const key = keyById[r.api_key_id];
@@ -197,9 +234,17 @@ export default function SettingsInboundWebhooks() {
               <tr key={r.id} className="hover:bg-accent/40 transition-colors">
                 <td className="px-4 py-3 font-medium text-foreground">{r.name || '-'}</td>
                 <td className="px-4 py-3 text-[12px]">
+                  <span className="inline-flex items-center rounded-full border border-border bg-card px-2.5 py-1 text-[11px] font-medium text-muted-foreground">
+                    {purposeMeta(WEBHOOK_PURPOSES, r.purpose || 'lead_outcome').label}
+                  </span>
+                </td>
+                <td className="px-4 py-3 text-[12px]">
                   {r.event_type
                     ? <span className="text-muted-foreground">{r.event_type}</span>
                     : <span className="inline-flex items-center rounded-full border border-border bg-card px-2.5 py-1 text-[11px] font-medium text-primary">dynamic</span>}
+                </td>
+                <td className="px-4 py-3 text-[12px] text-muted-foreground font-mono text-[11px]">
+                  {r.match_field ? `${r.match_field}${r.match_key ? ` (${r.match_key})` : ''}` : 'auto'}
                 </td>
                 <td className="px-4 py-3 text-[12px]">
                   {key
@@ -247,7 +292,7 @@ export default function SettingsInboundWebhooks() {
 
       {/* Create and edit */}
       <Dialog open={modalOpen} onOpenChange={(v) => { if (!v) { setModalOpen(false); setEditingId(null); } }}>
-        <DialogContent className="bg-popover border-border max-w-[520px]">
+        <DialogContent className="bg-popover border-border max-w-[560px] max-h-[86vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>{editingId ? 'Edit Webhook' : 'Create Webhook'}</DialogTitle>
           </DialogHeader>
@@ -255,6 +300,95 @@ export default function SettingsInboundWebhooks() {
             <div>
               <Label className="text-[12px]">Name *</Label>
               <Input value={form.name} onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))} placeholder="e.g. Inbounds Webhook" className="mt-1 bg-background" />
+            </div>
+            <div>
+              <Label className="text-[12px]">What is this webhook for *</Label>
+              <SearchableSelect
+                value={form.purpose}
+                onValueChange={(v) => setForm((p) => ({ ...p, purpose: v }))}
+                className="mt-1 bg-background"
+                options={WEBHOOK_PURPOSES.map((p) => ({ value: p.value, label: p.label }))}
+              />
+              <p className="text-[11px] text-muted-foreground mt-1">
+                {purposeMeta(WEBHOOK_PURPOSES, form.purpose).desc}
+              </p>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label className="text-[12px]">Match leads on</Label>
+                <SearchableSelect
+                  value={form.match_field}
+                  onValueChange={(v) => setForm((p) => ({ ...p, match_field: v }))}
+                  className="mt-1 bg-background"
+                  options={[{ value: AUTO_MATCH, label: 'Automatic (lead id, email, mobile)' }, ...MATCH_FIELDS]}
+                />
+              </div>
+              <div>
+                <Label className="text-[12px]">Payload key holding it</Label>
+                <Input
+                  value={form.match_key}
+                  onChange={(e) => setForm((p) => ({ ...p, match_key: e.target.value }))}
+                  placeholder="Blank uses the known aliases"
+                  className="mt-1 bg-background font-mono text-[12px]"
+                />
+              </div>
+            </div>
+            <div>
+              <Label className="text-[12px]">Date key</Label>
+              <Input
+                value={form.date_key}
+                onChange={(e) => setForm((p) => ({ ...p, date_key: e.target.value }))}
+                placeholder="Optional, e.g. Timestamp or spend_date"
+                className="mt-1 bg-background font-mono text-[12px]"
+              />
+            </div>
+            <div>
+              <div className="flex items-center justify-between">
+                <Label className="text-[12px]">Payload key map</Label>
+                <Button
+                  size="sm" variant="ghost" className="h-7 text-[11px] gap-1"
+                  onClick={() => setForm((p) => ({ ...p, field_map: [...p.field_map, { key: '', field: '' }] }))}
+                >
+                  <Plus className="w-3 h-3" /> Add
+                </Button>
+              </div>
+              <p className="text-[11px] text-muted-foreground mb-2">
+                Only needed when the sender uses its own column names. Left is their key, right is our field, for example "Consumer Phone" to mobile or "Buyer ID" to buyer_id.
+              </p>
+              <div className="space-y-2">
+                {form.field_map.length === 0 && (
+                  <div className="text-[11px] text-muted-foreground rounded-md border border-border bg-card px-3 py-2">
+                    No overrides. The built-in aliases handle sid, email, mobile, lead_status, buyer_id, revenue and the rest.
+                  </div>
+                )}
+                {form.field_map.map((row, i) => (
+                  <div key={`map-${i}`} className="flex items-center gap-2">
+                    <Input
+                      value={row.key}
+                      onChange={(e) => setForm((p) => {
+                        const next = [...p.field_map]; next[i] = { ...next[i], key: e.target.value }; return { ...p, field_map: next };
+                      })}
+                      placeholder="Their payload key"
+                      className="bg-background font-mono text-[12px]"
+                    />
+                    <span className="text-muted-foreground text-[12px]">to</span>
+                    <Input
+                      value={row.field}
+                      onChange={(e) => setForm((p) => {
+                        const next = [...p.field_map]; next[i] = { ...next[i], field: e.target.value }; return { ...p, field_map: next };
+                      })}
+                      placeholder="our field"
+                      className="bg-background font-mono text-[12px]"
+                    />
+                    <Button
+                      size="sm" variant="ghost" className="h-8 w-8 p-0 text-muted-foreground hover:text-foreground hover:bg-accent"
+                      onClick={() => setForm((p) => ({ ...p, field_map: p.field_map.filter((_, idx) => idx !== i) }))}
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </Button>
+                  </div>
+                ))}
+              </div>
             </div>
             <div>
               <Label className="text-[12px]">Event</Label>

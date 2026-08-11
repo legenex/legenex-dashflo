@@ -1,7 +1,13 @@
 import { callLLM } from '../integrations/llm.js';
 
 // Produces AI reconciliation insights over per-counterparty gaps. Admin-only.
-// Uses the configured LLM provider via the llm adapter.
+// Delegates to the shared client: OpenAI first, automatic failover to
+// Anthropic if OpenAI is unavailable for any reason.
+// The name is kept so existing call sites are untouched.
+async function callOpenAI({ prompt, system, model = 'gpt-4o-mini', temperature = 0.4, maxTokens } = {}) {
+  return await callLLM({ prompt, system, model, temperature, maxTokens });
+}
+
 export default async function reconInsights(ctx) {
   try {
     const user = ctx.user;
@@ -17,8 +23,7 @@ export default async function reconInsights(ctx) {
       `${g.name} (${g.type}): expected ${g.expected}, paid ${g.paid}, short ${g.short}`
     ).join('\n');
 
-    const result = await callLLM({
-      temperature: 0.4,
+    const result = await callOpenAI({
       prompt: `You are a finance ops analyst for a lead-gen business. Given open reconciliation gaps between what counterparties owe/were owed (expected) and what was actually paid, give a short, punchy set of insights (max 5 bullet points). Focus on biggest risks, patterns, and what to chase first. Be concrete.
 
 Open gaps:

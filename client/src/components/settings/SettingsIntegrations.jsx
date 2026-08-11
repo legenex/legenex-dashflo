@@ -14,13 +14,14 @@ import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
 import {
-  Mail, MessageCircle, HardDrive, FileSpreadsheet, Hash, CheckCircle2, Plug, Zap, ShieldAlert,
-  Send, Save, Megaphone, Music2, BarChart3, Facebook, Phone, PhoneCall, ShieldCheck,
-  CreditCard, Receipt, Webhook, Settings2, Landmark, Link2,
+  Mail, FileSpreadsheet, Hash, CheckCircle2, Plug, Zap, ShieldAlert,
+  Send, Save, Facebook, ShieldCheck,
+  CreditCard, Receipt, Settings2, Landmark, Link2,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import MetaConnectDialog from '@/components/settings/MetaConnectDialog';
 import MetaManageDialog from '@/components/settings/MetaManageDialog';
+import GoogleSheetsManageDialog from '@/components/settings/GoogleSheetsManageDialog';
 import { metaConnectionStatus } from '@/functions/metaConnectionStatus';
 
 const CATEGORIES = [
@@ -36,7 +37,7 @@ const CATEGORIES = [
 const CATALOG = [
   { type: 'meta', category: 'ads', name: 'Meta (Facebook) Ads', icon: Facebook, desc: 'Sync ad spend & map to campaigns for true CPL', live: 'meta' },
 
-  { type: 'googlesheets', category: 'delivery', name: 'Google Sheets', icon: FileSpreadsheet, desc: 'Write delivered leads to a spreadsheet', supported: true, oauth: true },
+  { type: 'googlesheets', category: 'delivery', name: 'Google Sheets', icon: FileSpreadsheet, desc: 'Read spreadsheets into leads, feedback, calls and cost', supported: true, oauth: true, sheets: true },
 
   { type: 'slack', category: 'notify', name: 'Slack', icon: Hash, desc: 'Channel notifications & alerts', supported: true, oauth: true },
   { type: 'gmail', category: 'notify', name: 'Gmail', icon: Mail, desc: 'Send & receive email notifications', supported: true, gmail: true },
@@ -163,6 +164,7 @@ export default function SettingsIntegrations() {
   };
 
   const handleConnect = (it) => {
+    if (it.sheets) return setSheetsManageOpen(true);
     if (it.type === 'whatsapp') return openWhatsapp();
     if (it.gmail) return openGmail();
     if (it.link) { window.location.href = it.link; return; }
@@ -173,6 +175,7 @@ export default function SettingsIntegrations() {
   const visible = CATALOG.filter(it => cat === 'all' || it.category === cat);
   const [metaConnectOpen, setMetaConnectOpen] = useState(false);
   const [metaManageOpen, setMetaManageOpen] = useState(false);
+  const [sheetsManageOpen, setSheetsManageOpen] = useState(false);
   const { data: metaStatus } = useQuery({ queryKey: ['meta-connection-status'], queryFn: async () => (await metaConnectionStatus({})).data });
   const metaConnected = (metaStatus?.connections?.length || 0) > 0;
 
@@ -241,6 +244,9 @@ export default function SettingsIntegrations() {
       {/* Meta connector dialogs */}
       <MetaConnectDialog open={metaConnectOpen} onOpenChange={setMetaConnectOpen} onConnected={() => qc.invalidateQueries({ queryKey: ['meta-connection-status'] })} />
       <MetaManageDialog open={metaManageOpen} onOpenChange={setMetaManageOpen} />
+
+      {/* Google Sheets: account, permissions and the sheets reading through it */}
+      <GoogleSheetsManageDialog open={sheetsManageOpen} onOpenChange={setSheetsManageOpen} />
 
       {/* API-key connectors (Mercury, Stripe, Xero) */}
       {apiKeyType && (

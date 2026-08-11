@@ -4,19 +4,20 @@ import { callLLM } from '../integrations/llm.js';
 // Ad Manager AI Analyst. The frontend sends a pre-aggregated summary of the
 // current scope (platform, account or portfolio, reported vs verified metrics,
 // per-campaign rows). We return a structured opportunity / risk / recommendation
-// object rendered by the AI insight card.
+// object rendered by the AI insight card. Uses OpenAI (OPENAI_API_KEY secret).
 //
 // This function is read-only. It never touches the lead pipeline, AdSpend rows,
 // or any entity. It only reads the JSON summary posted by the caller.
-async function callAnalyst({ prompt, system, temperature = 0.3 }) {
-  const answer = await callLLM({ prompt, system, temperature });
-  return typeof answer === 'string' ? answer : (answer?.content ?? answer?.text ?? '');
+// Delegates to the shared client: OpenAI first, automatic failover to
+// Anthropic (ANTHROPIC_API_KEY) if OpenAI is unavailable for any reason.
+// The name is kept so existing call sites are untouched.
+async function callOpenAI({ prompt, system, model = 'gpt-4o-mini', temperature = 0.4, maxTokens } = {}) {
+  return await callLLM({ prompt, system, model, temperature, maxTokens });
 }
 
 export default async function adManagerInsights(ctx) {
+  const user = requireUser(ctx);
   try {
-    requireUser(ctx);
-
     const body = ctx.body || {};
     const summary = body.summary || {};
     const scope = (body.scope || 'the selected scope').toString();
@@ -55,7 +56,7 @@ Return a single JSON object with exactly these keys:
 === AD PERFORMANCE DATA (JSON) ===
 ${JSON.stringify(summary)}`;
 
-    const answer = await callAnalyst({ prompt, system });
+    const answer = await callOpenAI({ prompt, system });
 
     let parsed;
     try {
@@ -66,7 +67,6 @@ ${JSON.stringify(summary)}`;
 
     return { insights: parsed };
   } catch (error) {
-    const status = error && error.status ? error.status : 500;
-    return ctx.json({ error: error.message }, status);
+    return ctx.json({ error: error.message }, 500);
   }
 }
