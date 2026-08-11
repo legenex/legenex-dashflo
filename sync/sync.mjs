@@ -459,15 +459,14 @@ function buildClient() {
 }
 
 function restartServer() {
-  const uid = process.getuid();
+  // Kill the running server; the launchd agent's KeepAlive respawns it with the
+  // new build. This avoids `launchctl kickstart -k`, which intermittently trips
+  // launchd EX_CONFIG (78) and takes the app down after a sync.
   try {
-    execFileSync('launchctl', ['kickstart', '-k', `gui/${uid}/com.legenex.dashos.server`], { encoding: 'utf8' });
-    log('server restarted via launchd');
+    execSync("pkill -f 'server/src/index.js'");
+    log('server restart signaled (KeepAlive respawns with new build)');
   } catch {
-    // Fallback: kill + detached start.
-    try { execSync("pkill -f 'node src/index.js'"); } catch {}
-    execSync('nohup node src/index.js > sync/state/server.log 2>&1 &', { cwd: path.join(ROOT, 'server'), shell: '/bin/bash' });
-    log('server restarted via fallback (pkill + nohup)');
+    log('server process not running; KeepAlive/launchd will start it');
   }
 }
 

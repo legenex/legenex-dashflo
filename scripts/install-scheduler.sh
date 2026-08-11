@@ -66,8 +66,8 @@ cat > "$SERVER_PLIST" <<PLIST
   </dict>
   <key>KeepAlive</key><true/>
   <key>RunAtLoad</key><true/>
-  <key>StandardOutPath</key><string>$ROOT/sync/state/server-agent.log</string>
-  <key>StandardErrorPath</key><string>$ROOT/sync/state/server-agent.log</string>
+  <key>StandardOutPath</key><string>$ROOT/sync/state/server-run.log</string>
+  <key>StandardErrorPath</key><string>$ROOT/sync/state/server-run.log</string>
 </dict>
 </plist>
 PLIST
