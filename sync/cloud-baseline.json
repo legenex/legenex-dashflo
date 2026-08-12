@@ -1,0 +1,4 @@
+{
+  "lastCommit": "83587f357e219088ea93a07688947742ea73b7c5",
+  "note": "Committed baseline for the GitHub Actions cloud updater (sync/sync.mjs reads it via DASHOS_STATE_FILE). Advanced by the Action each run."
+}

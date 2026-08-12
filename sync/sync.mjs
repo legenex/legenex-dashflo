@@ -31,7 +31,12 @@ const STATE_DIR = path.join(HERE, 'state');
 const BACKUP_DIR = path.join(STATE_DIR, 'backups');
 const PENDING_DIR = path.join(STATE_DIR, 'pending');
 const LOG_FILE = path.join(STATE_DIR, 'sync.log');
-const STATE_FILE = path.join(STATE_DIR, 'last-sync.json');
+// Baseline (last-synced commit) location. In CI/cloud runs sync/state is
+// ephemeral/gitignored, so set DASHOS_STATE_FILE to a committed path (e.g.
+// sync/cloud-baseline.json) so the run knows what's already been replicated.
+const STATE_FILE = process.env.DASHOS_STATE_FILE
+  ? path.resolve(ROOT, process.env.DASHOS_STATE_FILE)
+  : path.join(STATE_DIR, 'last-sync.json');
 const REPO_URL = 'https://github.com/legenex/legenex-dashboard';
 const BRANCH = 'main';
 
@@ -320,6 +325,48 @@ function claudePort(entrySrc, name) {
   return sanitizeGeneratedCode(out);
 }
 
+function portPrompt(entrySrc, name) {
+  const guide = fs.readFileSync(path.join(HERE, 'PORTING.md'), 'utf8');
+  return [
+    'Port ONE serverless function from Deno to a Node ESM module for a standalone app.',
+    'Follow this porting guide EXACTLY:',
+    '', '=== PORTING GUIDE ===', guide, '=== END GUIDE ===', '',
+    `The output module is server/src/functions/${name}.js and must default-export "async function ${name}(ctx)".`,
+    'ctx = { body, user, db, env, config, req, json }. Use requireUser/HttpError/json from "./_runtime.js",',
+    'callLLM/invokeLLM from "../integrations/llm.js", sendMail from "../lib/mailer.js" as needed.',
+    'Read credentials from ctx.config.integrations.* falling back to ctx.env.*; degrade gracefully when missing.',
+    'Preserve exact response body field names and status codes.',
+    'CRITICAL: Output ONLY the raw JavaScript file contents. Start immediately with the first import/const line.',
+    'No prose, no explanation, no markdown code fences.',
+    '', '=== ORIGINAL Deno source (entry.ts) ===', entrySrc,
+  ].join('\n');
+}
+
+// Port via the Anthropic API directly (no `claude` CLI) — used in CI/cloud runs
+// where ANTHROPIC_API_KEY is set. execSync of a curl keeps the large payload out
+// of argv limits.
+function anthropicAvailable() { return !!process.env.ANTHROPIC_API_KEY; }
+async function anthropicPort(entrySrc, name) {
+  const body = {
+    model: process.env.ANTHROPIC_MODEL || 'claude-opus-4-8',
+    max_tokens: 32000,
+    messages: [{ role: 'user', content: portPrompt(entrySrc, name) }],
+  };
+  const res = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'x-api-key': process.env.ANTHROPIC_API_KEY,
+      'anthropic-version': '2023-06-01',
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`Anthropic API ${res.status}: ${(await res.text()).slice(0, 200)}`);
+  const data = await res.json();
+  const text = (data.content || []).map((c) => c.text || '').join('');
+  return sanitizeGeneratedCode(text);
+}
+
 // Extract a clean JS module from an LLM response that may include a prose
 // preamble ("Here is the file:"), markdown fences, or trailing commentary.
 function sanitizeGeneratedCode(out) {
@@ -343,7 +390,7 @@ function sanitizeGeneratedCode(out) {
   return lines.join('\n').trim() + '\n';
 }
 
-function portBackendFunction(name, { hasClaude, isNew }) {
+async function portBackendFunction(name, { hasClaude, isNew }) {
   const entry = path.join(UPSTREAM, 'base44', 'functions', name, 'entry.ts');
   const dest = path.join(SERVER_FUNCS, `${name}.js`);
   if (!fs.existsSync(entry)) {
@@ -357,6 +404,9 @@ function portBackendFunction(name, { hasClaude, isNew }) {
   if (hasClaude) {
     try { ported = claudePort(src, name); mode = 'claude'; }
     catch (e) { warnings.push(`claude port failed for ${name}: ${e.message.split('\n')[0]} — used mechanical fallback`); }
+  } else if (anthropicAvailable()) {
+    try { ported = await anthropicPort(src, name); mode = 'anthropic'; }
+    catch (e) { warnings.push(`anthropic port failed for ${name}: ${e.message.split('\n')[0]} — used mechanical fallback`); }
   }
   if (!ported) ported = mechanicalPort(src, name);
 
@@ -495,6 +545,11 @@ function commitAndPush(oldRev, remoteRev) {
     git(['-c', `user.name=${name}`, '-c', `user.email=${email}`, 'commit', '-q', '-m', msg]);
     log(`committed ${actions.length} change(s)`);
 
+    // Rebase onto anything the cloud updater (GitHub Action) pushed while this
+    // machine was offline, so the push isn't rejected as non-fast-forward. Both
+    // apply the same transform, so an already-present change rebases to empty
+    // and is dropped cleanly.
+    try { git(['pull', '--rebase', 'origin', branch]); } catch { /* offline / no remote change */ }
     try {
       git(['push', 'origin', branch]);
       log(`pushed to origin/${branch}`);
@@ -571,7 +626,7 @@ async function main() {
   // Existing server function ports (to distinguish new vs changed).
   const existingFuncs = new Set(fs.readdirSync(SERVER_FUNCS).filter((f) => f.endsWith('.js') && !f.startsWith('_') && f !== 'index.js').map((f) => f.replace(/\.js$/, '')));
   const hasClaude = claudeAvailable();
-  if (changes.funcs.size && !hasClaude) warnings.push('claude CLI not found — backend function changes will use mechanical port / staging');
+  if (changes.funcs.size && !hasClaude && !anthropicAvailable()) warnings.push('no claude CLI or ANTHROPIC_API_KEY — backend function changes will use mechanical port / staging');
 
   // Apply.
   for (const rel of changes.clientFiles) syncClientFile(rel);
@@ -580,7 +635,7 @@ async function main() {
   if (changes.indexChanged || full) syncIndexHtml();
   for (const name of changes.schemas) syncSchema(name);
   regenShims();
-  for (const name of changes.funcs) portBackendFunction(name, { hasClaude, isNew: !existingFuncs.has(name) });
+  for (const name of changes.funcs) await portBackendFunction(name, { hasClaude, isNew: !existingFuncs.has(name) });
   syncSharedFunctionFiles();
 
   if (changes.depsChanged) installNewDeps();
