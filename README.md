@@ -1,141 +1,62 @@
-# Legenex DashOS
+# DashFlo autonomous build pack
 
-Standalone lead-distribution & finance dashboard. A React (Vite) frontend and a
-Node/Express + PostgreSQL backend. Fully self-contained — no external app
-platform. Designed to deploy on a Plesk server (Node app + PostgreSQL).
+Prepared against `legenex/legenex-dashflo` at commit `a63144cb0e1a2c000e873e94e5091565f6bbb1c6` on 15 August 2026.
 
-```
-Legenex DashOS/
-├── client/            # React + Vite + Tailwind + shadcn/ui frontend
-│   ├── src/api/client.js   # the API client (entities, auth, functions, integrations)
-│   └── src/functions/*     # thin wrappers that call backend functions
-├── server/            # Express API, auth, entity store, ported functions
-│   ├── src/schemas/entities/   # data-model definitions (drive the DB tables)
-│   ├── src/db/                 # pg pool, schema generation, document repository
-│   ├── src/routes/             # auth, entities, integrations, functions
-│   ├── src/functions/          # 34 backend functions (lead processing, syncs, AI, …)
-│   ├── src/integrations/       # LLM adapter, file upload/extract
-│   └── scripts/                # migrate, seed-admin
-├── Reference/         # original source (kept for reference; not used at runtime)
-└── package.json       # root orchestration scripts
-```
+This pack replaces the earlier 18-file plan. It keeps the useful two-week cutover structure, but corrects claims that do not match the self-hosted repository and adds the production security work that was missing.
 
-## Prerequisites
-- Node.js 18+ (developed on Node 22)
-- PostgreSQL 14+
+## The direct assessment
 
-## Local setup
+A safe LeadByte and Base44 cutover by 28 August is possible only as a focused production slice. A complete, dynamic, multi-tenant SaaS reporting platform is not a credible two-week promise. The pack therefore handles the work in this order:
 
-```bash
-# 1. Install dependencies (server + client)
-npm run install:all
+1. Make the self-hosted system safe to expose.
+2. Make intake durable and globally suppressible.
+3. Prove routing, delivery, billing, and portal isolation.
+4. Migrate configuration and twelve months of reporting data.
+5. Shadow and cut over one supplier at a time.
+6. Continue the broader reporting and SaaS build after the cutover is stable.
 
-# 2. Configure the server
-cp server/.env.example server/.env
-#   edit server/.env — set PG* connection vars, JWT_SECRET, and (optionally)
-#   ANTHROPIC_API_KEY / OPENAI_API_KEY and any integration credentials.
+## What is in the pack
 
-# 3. Create the database (once)
-createdb dashos            # or: psql -c 'CREATE DATABASE dashos;'
+- `MASTER-PROMPT.md`: paste this into a fresh Claude Code session.
+- `REPO-AUDIT-2026-08-15.md`: verified findings and corrections.
+- `CLAUDE.md`: concise operating contract for the repository root.
+- `docs/PRODUCT-BRIEF.md`: consolidated record of Bru's product answers.
+- `docs/REQUIREMENTS.md`: locked scope, priorities, and acceptance criteria.
+- `docs/EXECUTION-PLAN.md`: dependency-led implementation plan.
+- `docs/HUMAN-GATES.md`: the few actions that require Bru.
+- `docs/STATE.md`: persistent handoff state for long-running sessions.
+- `.claude/settings.json`: project permissions, hooks, and agent-team setting.
+- `.claude/agents/*.md`: bounded specialist agents.
+- `.claude/hooks/*.sh`: local change and task gates.
 
-# 4. Create tables (idempotent — also runs automatically on server start)
-npm run migrate
+## Install
 
-# 5. Create the first owner account
-npm run seed:admin -- you@example.com 'your-password' 'Your Name'
+Copy the pack contents into a clean checkout of the repository, preserving paths. Keep the audit report if you want it in the repo, or retain it beside the repo as review evidence.
 
-# 6a. Development (API on :4000, Vite on :5173 with proxy)
-npm run dev
-#     open http://localhost:5173
+Before starting Claude Code:
 
-# 6b. Production-style (single server serves the built app)
-npm run build              # builds client/dist
-npm start                  # serves API + app on :4000
-#     open http://localhost:4000
-```
+1. Disable or pause the hourly upstream auto-sync job.
+2. Confirm the working tree is clean.
+3. Create a cutover branch from the audited commit or from a reviewed newer commit.
+4. Make the hook files executable.
+5. Start an interactive Claude Code session at the repository root.
+6. Paste the entire contents of `MASTER-PROMPT.md` once.
 
-## LLM provider
-AI features (Overview briefing, DataBot, insights) use a provider-agnostic
-adapter. Set `LLM_PROVIDER=anthropic` (default) or `openai` in `server/.env` and
-supply the matching API key. Everything else works without an LLM key.
+Do not start from `main` while the auto-sync job is still writing to it. That creates an uncontrolled moving target and can overwrite autonomous work.
 
-## Integrations
-Third-party syncs (LeadByte, HLR, TrustedForm, Meta Ads, Mercury, Stripe, Xero,
-Google Sheets, Gmail/SMTP, WhatsApp) are ported and wired behind adapters. Each
-degrades gracefully — returning a clear "not configured" until you add its
-credentials to `server/.env` (or, for some, into the app's own config records).
+## Expected interaction level
 
-## Deploying to Plesk
-1. Create a PostgreSQL database in Plesk; note the connection details.
-2. Create a Node.js application pointing at `server/` with **Application Startup
-   File** = `src/index.js` and **Application Mode** = `production`.
-3. Set the environment variables from `server/.env.example` in the Plesk Node UI
-   (at minimum: `PG*`/`DATABASE_URL`, `JWT_SECRET`, `PUBLIC_BASE_URL`, and any
-   LLM/integration keys). Set `NODE_ENV=production`.
-4. Build the frontend (`npm run build`) and upload `client/dist`, or set
-   `CLIENT_DIST` to wherever you place it. The server serves it automatically.
-5. Run `npm run migrate` and `npm run seed:admin` once from the Plesk Node
-   console (or SSH).
+Claude should work without asking Bru for normal engineering choices. It should ask only through a single consolidated decision packet when a human gate is reached. Code changes to sensitive areas are allowed in an isolated branch. Production activation, live credentials, live buyer traffic, money movement, production data mutation, and final cutover remain human-gated.
 
-## Automatic upstream sync (hourly)
+## First success signal
 
-The app can track the source repo and replicate changes into this standalone
-build automatically. Two macOS `launchd` agents handle it:
+The first milestone is not a new feature. It is a green, repeatable baseline with:
 
-| Agent | What it does |
-|---|---|
-| `com.legenex.dashos.server` | Keeps the API server running (auto-restart, serves `client/dist`) |
-| `com.legenex.dashos.sync` | Every hour: pulls the repo, replicates changes, rebuilds, restarts the server, and commits + pushes to this project's repo |
+- all 47 test files collected from the self-hosted layout;
+- the current privacy masking failure fixed;
+- build and lint green;
+- all backend function modules loading cleanly;
+- production auth failing closed;
+- no live network calls in tests.
 
-**Install / update the agents:**
-```bash
-bash scripts/install-scheduler.sh     # idempotent; sets baseline to current commit
-```
-**Remove them:**
-```bash
-bash scripts/uninstall-scheduler.sh
-```
-
-**What the sync does** (`sync/sync.mjs`) on each run:
-1. `git fetch` the mirror at `.sync/upstream`; if no new commits, it exits.
-2. For changed **frontend** files: copies them in and applies the same
-   de-coupling transform (platform SDK → `@/api/client`). Files that were
-   hand-rewritten for standalone (`api/client.js`, `lib/app-params.js`,
-   `lib/AuthContext.jsx`) are never overwritten — if upstream touches their
-   originals, it logs a warning to reconcile manually.
-3. Syncs changed **entity schemas** (new entities auto-create tables on restart).
-4. Regenerates frontend **function shims**.
-5. Ports changed **backend functions** (Deno → Node). New functions are ported
-   with the `claude` CLI (mechanical fallback) and applied; changed existing
-   functions are ported into `sync/state/pending/` and flagged, so a careful
-   hand-port is never silently clobbered.
-6. Installs any new frontend dependencies the upstream added.
-7. Rebuilds `client/dist` and restarts the server (only if something changed and
-   the build succeeded — a failed build keeps the previous working `dist`).
-8. Commits the replicated changes and pushes them to `origin/main`, so the repo
-   stays current with the source automatically. Skips this on a failed build or
-   an empty change, and never crashes the sync on a git error (logs a warning and
-   retries next run). Disable with `--no-push` or `DASHOS_SYNC_NO_PUSH=1`; the
-   commit identity/branch is overridable via `DASHOS_GIT_NAME` / `DASHOS_GIT_EMAIL`
-   / `DASHOS_GIT_BRANCH`. Push auth uses the `gh`-configured git credentials.
-
-**Manual controls:**
-```bash
-node sync/sync.mjs            # run a sync now
-node sync/sync.mjs --force    # run even with no new commits
-node sync/sync.mjs --init     # set baseline to current commit (no transform)
-tail -f sync/state/sync.log   # watch sync activity
-launchctl list | grep legenex # agent status
-```
-
-Notes: the sync uses the `gh`-configured git credentials, and runs Node via
-Homebrew (`/opt/homebrew/bin/node`) under launchd. Backend-function changes are
-the one part that may need review — check `sync/state/pending/` and the log after
-a sync that touched `base44/functions/*`.
-
-## Notes
-- Data model: each entity is a PostgreSQL table with a `JSONB data` column plus
-  `id / created_date / updated_date / created_by`. The repository layer
-  (`server/src/db/repo.js`) provides the document-style API the app expects.
-- Auth: email/password with JWT (bcrypt hashes). The first registered user (or
-  the seeded admin) becomes the Owner. Google OAuth is left as an optional add-on.
+Only after that baseline is committed should Claude change intake or routing.
