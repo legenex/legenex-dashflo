@@ -21,8 +21,6 @@ export default function ApiStatus() {
     return () => { alive = false; };
   }, []);
 
-  const dotColor = state.loading ? '#FACC14' : state.ok ? '#3DD68C' : '#E5484D';
-  const label = state.loading ? 'Checking…' : state.ok ? 'Operational' : 'Unavailable';
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-background px-6">
