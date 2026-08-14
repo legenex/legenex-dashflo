@@ -58,6 +58,7 @@ export const PERMISSION_GROUPS = [
       { key: 'set_error_logs', label: 'Error Logs' },
       { key: 'set_users', label: 'Users and Roles' },
       { key: 'set_billing', label: 'Billing' },
+      { key: 'set_export_import', label: 'Export and Import (master admin)' },
     ],
   },
   {
@@ -94,7 +95,11 @@ const OPERATIONS_KEYS = ['operations', 'ad_manager'];
 // The Progress Control Center is internal only. It exposes findings, prompts,
 // migration risk and release gates, none of which a buyer or supplier may ever see.
 export const PROGRESS_KEYS = PERMISSION_GROUPS.find(g => g.group === 'Progress Control Center').items.map(i => i.key);
-export const RESTRICTED_FOR_PARTNERS = [...DIST_KEYS, ...FINANCE_KEYS, ...OPERATIONS_KEYS, ...PROGRESS_KEYS, 'buildbot'];
+// Whole-system export and import. Grantable to any internal user from the Users
+// and Roles checklist, but held by the Owner alone by default: it can read every
+// record in the app and seed another app from them.
+export const MASTER_ADMIN_KEY = 'set_export_import';
+export const RESTRICTED_FOR_PARTNERS = [...DIST_KEYS, ...FINANCE_KEYS, ...OPERATIONS_KEYS, ...PROGRESS_KEYS, 'buildbot', MASTER_ADMIN_KEY];
 
 const all = () => Object.fromEntries(ALL_KEYS.map(k => [k, true]));
 const only = (keys) => Object.fromEntries(keys.map(k => [k, true]));
@@ -102,8 +107,8 @@ const allExcept = (excluded) => Object.fromEntries(ALL_KEYS.filter(k => !exclude
 
 export const ROLE_PRESETS = {
   owner: { label: 'Owner', description: 'Everything. Can delete users, including the Owner.', canDeleteOwner: true, permissions: all() },
-  admin: { label: 'Admin', description: 'Everything except deleting the Owner. Finances & Bank Feed off by default.', canDeleteOwner: false, permissions: allExcept(['finances', 'bank_feed']) },
-  manager: { label: 'Manager', description: 'Most things except Finances & Bank Feed. No BuildBot.', canDeleteOwner: false, permissions: allExcept([...FINANCE_KEYS, 'buildbot', 'progress_admin', 'progress_prompts']) },
+  admin: { label: 'Admin', description: 'Everything except deleting the Owner and system export/import. Finances & Bank Feed off by default.', canDeleteOwner: false, permissions: allExcept(['finances', 'bank_feed', MASTER_ADMIN_KEY]) },
+  manager: { label: 'Manager', description: 'Most things except Finances & Bank Feed. No BuildBot, no system export/import.', canDeleteOwner: false, permissions: allExcept([...FINANCE_KEYS, 'buildbot', 'progress_admin', 'progress_prompts', MASTER_ADMIN_KEY]) },
   supplier: { label: 'Supplier', description: 'Own data only. No Lead Distribution, no Finances.', canDeleteOwner: false, permissions: only(['overview', 'leads_all', 'leads_sold', 'leads_unsold', 'reports', 'portal_access', 'databot']) },
   buyer: { label: 'Buyer', description: 'Own data only. No Lead Distribution, no Finances.', canDeleteOwner: false, permissions: only(['overview', 'leads_all', 'leads_sold', 'reports', 'portal_access', 'databot']) },
 };
@@ -178,6 +183,7 @@ export const SETTINGS_TAB_KEYS = {
   errors: 'set_error_logs',
   chatbot: null,
   billing: 'set_billing',
+  'export-import': MASTER_ADMIN_KEY,
 };
 
 // Resolve the permission key required for a given pathname + search string.

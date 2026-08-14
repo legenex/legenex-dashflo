@@ -1,33 +1,3 @@
-// Generic inbound lead webhook.
-//
-//   POST https://api.legenex.com/functions/webhook?key=<api_key>
-//
-// Replaces the per-route token model in leadbyteWebhook. One key (master, or a
-// supplier-scoped key) authenticates every sender, and the sender does not have
-// to be LeadByte: anything that can POST JSON works.
-//
-// WHAT IT DOES
-//   - Authenticates on ?key= against ApiKey. Master keys accept any supplier;
-//     a supplier-scoped key pins the lead to that supplier.
-//   - Resolves the supplier from the key, falling back to `sid` in the payload.
-//   - Reads the status from `lead_status` in the payload (dynamic). A route may
-//     pin a status instead, but nothing is required to.
-//   - Matches an existing lead on lead id, then email, then mobile.
-//   - No match: CREATES the lead. Not every lead reaches this system through
-//     processLead; affiliates post straight into their own platform, so this is
-//     the first this system hears of them.
-//   - Match: UPDATES revenue, buyer, status and any field the stored lead is
-//     missing.
-//
-// RESELL AFTER RETURN
-//   A lead can go Sold -> Returned -> Sold with a different buyer. `buyer_returned`
-//   is sticky: once true it stays true even when the lead is resold, so the lead
-//   counts once as Sold (its current status) and once as Returned (the flag).
-//   Resetting the flag on resale would erase the return from every report.
-//
-// Field names are matched loosely, so a sender may use flat keys (email, sid,
-// revenue) or the older prefixed ones (contact_email, supplier_sid, lead_revenue).
-
 const clean = (v) => {
   if (v === null || v === undefined) return null;
   const s = String(v).trim();
@@ -163,11 +133,11 @@ const MUTABLE_OUTCOME_FIELDS = new Set([
 // It is created INERT on purpose: status draft, active false, no pricing and no
 // state coverage. Those are operator decisions, and an auto-created buyer must
 // never become routable or billable on the strength of a webhook payload.
-async function ensureBuyer(svc, code, name) {
+async function ensureBuyer(db, code, name) {
   if (!code && !name) return null;
   const n = (v) => String(v ?? '').trim().toLowerCase();
   try {
-    const buyers = await svc.entities.Buyer.list();
+    const buyers = await db.entities.Buyer.list();
     const list = Array.isArray(buyers) ? buyers : [];
     const hit = list.find((b) => {
       if (code && n(b.buyer_code) && n(b.buyer_code) === n(code)) return true;
@@ -176,7 +146,7 @@ async function ensureBuyer(svc, code, name) {
     });
     if (hit) return { created: false, id: hit.id, name: hit.company_name, code: hit.buyer_code };
 
-    const created = await svc.entities.Buyer.create({
+    const created = await db.entities.Buyer.create({
       company_name: name || code,
       buyer_code: code || undefined,
       auto_created: true,
@@ -191,10 +161,10 @@ async function ensureBuyer(svc, code, name) {
 }
 
 // Same contract for a sid that matches no supplier.
-async function ensureSupplier(svc, sid) {
+async function ensureSupplier(db, sid) {
   if (!sid) return null;
   try {
-    const created = await svc.entities.Supplier.create({
+    const created = await db.entities.Supplier.create({
       name: sid,
       sid,
       supplier_type: 'External',
@@ -210,30 +180,19 @@ async function ensureSupplier(svc, sid) {
 }
 
 export default async function webhook(ctx) {
-  const svc = ctx.db;
   const reply = (status, payload) => ctx.json(payload, status);
-  const getHeader = (name) => {
-    const h = ctx.req?.headers || {};
-    const target = String(name).toLowerCase();
-    for (const k of Object.keys(h)) {
-      if (k.toLowerCase() === target) {
-        const v = h[k];
-        return Array.isArray(v) ? v[0] : v;
-      }
-    }
-    return null;
-  };
 
-  if (ctx.req?.method !== 'POST') {
+  if (ctx.req.method !== 'POST') {
     return reply(405, { ok: false, outcome: 'rejected', reason: 'method_not_allowed', message: 'POST a JSON body to this endpoint.' });
   }
 
-  // The body arrives already parsed; treat a non-object payload as empty.
   const body = (ctx.body && typeof ctx.body === 'object') ? ctx.body : {};
 
+  const db = ctx.db;
+
   // == Auth on ?key= (header accepted as an alternative) ==
-  const presented = clean(ctx.req?.query?.key)
-    || clean(getHeader('x-api-key'))
+  const presented = clean(ctx.req.query.key)
+    || clean(ctx.req.headers['x-api-key'])
     || clean(body.key);
 
   if (!presented) {
@@ -242,7 +201,7 @@ export default async function webhook(ctx) {
 
   let apiKey = null;
   try {
-    const found = await svc.entities.ApiKey.filter({ key: presented });
+    const found = await db.entities.ApiKey.filter({ key: presented });
     apiKey = (Array.isArray(found) ? found : [])[0] || null;
   } catch { /* fall through to the rejection below */ }
 
@@ -257,11 +216,11 @@ export default async function webhook(ctx) {
   // The key authenticates; `route` is optional and only identifies which
   // InboundWebhookRoute row gets the receipt, and whether that row pins a
   // status instead of reading lead_status off the payload.
-  const routeId = clean(ctx.req?.query?.route);
+  const routeId = clean(ctx.req.query.route);
   let route = null;
   if (routeId) {
     try {
-      const found = await svc.entities.InboundWebhookRoute.filter({ id: routeId });
+      const found = await db.entities.InboundWebhookRoute.filter({ id: routeId });
       route = (Array.isArray(found) ? found : [])[0] || null;
     } catch { /* an unknown route must not block a valid key */ }
   }
@@ -276,7 +235,7 @@ export default async function webhook(ctx) {
   const bumpRoute = async (ok, errText) => {
     if (!route) return;
     try {
-      await svc.entities.InboundWebhookRoute.update(route.id, ok
+      await db.entities.InboundWebhookRoute.update(route.id, ok
         ? {
             receipt_count: (Number(route.receipt_count) || 0) + 1,
             last_received_at: new Date().toISOString(),
@@ -329,41 +288,101 @@ export default async function webhook(ctx) {
     const autoCreated = [];
 
     // == Supplier resolution ==
-    // A supplier-scoped key pins the supplier. A master key resolves it from
-    // the sid on the payload, matched loosely against the Supplier records
-    // because a sid (LEADFLOW, INBNDS-SURVEY) and a name (LeadFlow, Inbounds)
-    // differ in case and suffix.
-    // A supplier-scoped key or the webhook row can supply a default. The sid on
-    // the payload wins when it resolves, because that is the per-lead truth.
-    const fallbackSupplier = clean(apiKey.supplier_name) || clean(route?.supplier_name);
-    let supplierName = fallbackSupplier;
-    if (c.sid) {
-      let resolved = null;
-      try {
-        const sups = await svc.entities.Supplier.list();
-        const n = (v) => String(v ?? '').trim().toLowerCase();
-        const s = n(c.sid);
-        const hit = (Array.isArray(sups) ? sups : []).find((x) => {
-          const name = n(x.name);
-          const sid = n(x.sid);
-          if (sid && s && sid === s) return true;
-          return name && s && (name === s || s.includes(name) || name.includes(s));
-        });
-        if (hit?.name) resolved = hit.name;
-      } catch { /* fall through to the raw sid below */ }
-      // Only fall back to the raw sid when there is nothing better to use.
-      supplierName = resolved || fallbackSupplier || c.sid;
-      if (!resolved && !fallbackSupplier) {
-        const madeSupplier = await ensureSupplier(svc, c.sid);
-        if (madeSupplier?.created) autoCreated.push({ type: 'supplier', name: madeSupplier.name, id: madeSupplier.id });
+    // The sid on the payload decides the supplier, always. An API key is a
+    // credential, not an attribution: letting a key name the supplier is what
+    // put live leads on a supplier literally called "Master", which is a key
+    // label and not a company. A key contributes nothing here.
+    //
+    // Senders routinely post a SupplierSource.source_code (INBNDS-PVL) in the
+    // sid field, because from their side that single value identifies them
+    // completely. So source_code is matched first and resolves the supplier and
+    // the ssid together, which is why INBNDS-PVL lands as supplier Inbounds
+    // with ssid INBNDS-PVL instead of inventing a supplier named INBNDS-PVL.
+    const HOUSE_SID = 'LGNX';
+    const HOUSE_NAME = 'Legenex';
+    const n = (v) => String(v ?? '').trim().toLowerCase();
+    const rawSid = clean(c.sid);
+    let supplierName = null;
+    let resolvedSid = null;
+    let resolvedSsid = null;
+    let sourceList = [];
+    let supplierList = [];
+    try {
+      const [srcs, sups] = await Promise.all([
+        db.entities.SupplierSource.list(),
+        db.entities.Supplier.list(),
+      ]);
+      // list() answers null for an empty entity, so guard both.
+      sourceList = Array.isArray(srcs) ? srcs : [];
+      supplierList = Array.isArray(sups) ? sups : [];
+    } catch { /* both stay empty and the branches below still resolve */ }
+
+    let supplierRec = null;
+    if (rawSid) {
+      const sidKey = n(rawSid);
+      // 1. The sid is a source code. Supplier and ssid fall out together.
+      const srcHit = sourceList.find((x) => n(x.source_code) && n(x.source_code) === sidKey);
+      if (srcHit) {
+        supplierRec = supplierList.find((x) => x.id === srcHit.supplier_id) || null;
+        if (supplierRec) resolvedSsid = clean(srcHit.source_code);
       }
+      // 2. The sid is a supplier sid, or failing that a supplier name. Exact
+      // only: a loose contains match here is how one supplier's sid can be read
+      // as another whose name happens to sit inside it.
+      if (!supplierRec) {
+        supplierRec = supplierList.find((x) => n(x.sid) && n(x.sid) === sidKey)
+          || supplierList.find((x) => n(x.name) && n(x.name) === sidKey)
+          || null;
+      }
+    } else {
+      // Nothing named itself, so this is house traffic and belongs to Legenex.
+      supplierRec = supplierList.find((x) => n(x.sid) === n(HOUSE_SID)) || null;
     }
+
+    // The supplier is known but the sid said nothing about which of its sources
+    // this came from. Brand is the documented fallback for exactly that case,
+    // but only when it is decisive. Several suppliers hold sources that share a
+    // brand and differ by channel (CMC-CALLS and CMC-LEADS are both Check My
+    // Claim), so a brand can name two sources priced differently. Taking the
+    // first would silently price the lead against the wrong one. Leaving ssid
+    // blank is honest and lands on the supplier level payout instead.
+    if (supplierRec && !resolvedSsid) {
+      const brandKey = n(c.supplier_brand);
+      const byBrand = brandKey
+        ? sourceList.filter((x) => x.supplier_id === supplierRec.id && n(x.brand) && n(x.brand) === brandKey)
+        : [];
+      if (byBrand.length === 1) resolvedSsid = clean(byBrand[0].source_code);
+    }
+
+    if (supplierRec) {
+      supplierName = clean(supplierRec.name) || rawSid || HOUSE_NAME;
+      resolvedSid = clean(supplierRec.sid) || rawSid || HOUSE_SID;
+    } else if (rawSid) {
+      // A sid this system has never seen. Bring an inert record into existence
+      // so the lead is attributed to something an operator can review and
+      // confirm, rather than being quietly filed under the wrong supplier.
+      const madeSupplier = await ensureSupplier(db, rawSid);
+      supplierName = madeSupplier?.name || rawSid;
+      resolvedSid = rawSid;
+      if (madeSupplier?.created) autoCreated.push({ type: 'supplier', name: madeSupplier.name, id: madeSupplier.id });
+    } else {
+      // No sid and no Legenex record to resolve against. Name it anyway so a
+      // lead is never written with a blank supplier.
+      supplierName = HOUSE_NAME;
+      resolvedSid = HOUSE_SID;
+    }
+
+    // These are the record of origin from here on. ssid is populated only from
+    // supplier sources: a sender's own ssid describes its campaign (MVA-AR),
+    // not the source this lead is priced against, so it is not carried over.
+    c.sid = resolvedSid || '';
+    c.ssid = resolvedSsid || clean(route?.ssid) || '';
 
     // Resolve the buyer named on the outcome, creating an inert record for review
     // when it is one this system has not seen.
     let buyerReview = null;
     if (c.buyer_id || c.buyer_name) {
-      buyerReview = await ensureBuyer(svc, c.buyer_id || null, c.buyer_name || null);
+      buyerReview = await ensureBuyer(db, c.buyer_id || null, c.buyer_name || null);
       if (buyerReview?.created) autoCreated.push({ type: 'buyer', name: buyerReview.name, code: buyerReview.code, id: buyerReview.id });
     }
 
@@ -388,8 +407,10 @@ export default async function webhook(ctx) {
           message: 'A cost webhook needs a date and a spend amount on the payload.',
         });
       }
-      const costSupplier = clean(apiKey.supplier_name) || clean(route?.supplier_name) || supplierName;
-      await svc.entities.AdSpend.create({
+      // Same rule as lead attribution: the key does not name the supplier, so
+      // cost lands on the resolved supplier rather than on a key label.
+      const costSupplier = supplierName || clean(route?.supplier_name);
+      await db.entities.AdSpend.create({
         date: isoDate,
         spend: spendNum,
         platform: 'webhook',
@@ -404,7 +425,7 @@ export default async function webhook(ctx) {
       // touchKey is declared below, after the match block, so the key counter
       // is bumped inline here rather than reaching forward into it.
       try {
-        await svc.entities.ApiKey.update(apiKey.id, {
+        await db.entities.ApiKey.update(apiKey.id, {
           last_used_at: new Date().toISOString(),
           request_count: (Number(apiKey.request_count) || 0) + 1,
         });
@@ -431,26 +452,26 @@ export default async function webhook(ctx) {
     // existing route relies on.
     const pinned = clean(route?.match_field);
     if (pinned === 'email' && email) {
-      existing = firstOf(await svc.entities.Lead.filter({ email }));
+      existing = firstOf(await db.entities.Lead.filter({ email }));
     } else if (pinned === 'mobile' && mobile) {
-      existing = firstOf(await svc.entities.Lead.filter({ mobile }));
+      existing = firstOf(await db.entities.Lead.filter({ mobile }));
     } else if (pinned === 'lead_id' && externalId !== null) {
-      existing = firstOf(await svc.entities.Lead.filter({ leadbyte_lead_id: externalId }));
+      existing = firstOf(await db.entities.Lead.filter({ leadbyte_lead_id: externalId }));
     }
     if (!existing && externalId !== null) {
-      existing = firstOf(await svc.entities.Lead.filter({ leadbyte_lead_id: externalId }));
+      existing = firstOf(await db.entities.Lead.filter({ leadbyte_lead_id: externalId }));
     }
     if (!existing && email) {
-      existing = firstOf(await svc.entities.Lead.filter({ email }));
+      existing = firstOf(await db.entities.Lead.filter({ email }));
     }
     if (!existing && mobile) {
-      existing = firstOf(await svc.entities.Lead.filter({ mobile }));
+      existing = firstOf(await db.entities.Lead.filter({ mobile }));
     }
 
     // Record the request against the key regardless of outcome.
     const touchKey = async () => {
       try {
-        await svc.entities.ApiKey.update(apiKey.id, {
+        await db.entities.ApiKey.update(apiKey.id, {
           last_used_at: new Date().toISOString(),
           request_count: (Number(apiKey.request_count) || 0) + 1,
         });
@@ -522,7 +543,7 @@ export default async function webhook(ctx) {
         });
       }
 
-      await svc.entities.Lead.update(existing.id, { ...patch, leadbyte_outcome_at: new Date().toISOString() });
+      await db.entities.Lead.update(existing.id, { ...patch, leadbyte_outcome_at: new Date().toISOString() });
 
       // A feedback or call route also leaves a BuyerFeedback record, so the
       // buyer's verdict is auditable per receipt rather than only as the
@@ -530,7 +551,7 @@ export default async function webhook(ctx) {
       if (routePurpose === 'buyer_feedback' || routePurpose === 'inbound_call') {
         const verdict = c.buyer_feedback || c.lead_status || status || '';
         if (verdict) {
-          await svc.entities.BuyerFeedback.create({
+          await db.entities.BuyerFeedback.create({
             lead_id: existing.id,
             buyer_id: c.buyer_id || existing.buyer_id || '',
             matched_by: pinned || (externalId !== null ? 'lead_id' : email ? 'email' : 'mobile'),
@@ -561,7 +582,7 @@ export default async function webhook(ctx) {
     const sidUpper = String(c.sid || '').trim().toUpperCase();
     const leadType = (sidUpper === 'LEADFLOW' || sidUpper === 'LGNX') ? 'Quiz' : 'Affiliate';
 
-    const created = await svc.entities.Lead.create({
+    const created = await db.entities.Lead.create({
       archived: false,
       first_name: c.first_name || undefined,
       last_name: c.last_name || undefined,
@@ -596,7 +617,7 @@ export default async function webhook(ctx) {
       message: 'Lead was not in this system and has been created from the payload.',
     });
   } catch (error) {
-    const message = error.message;
+    const message = error?.message;
     await bumpRoute(false, message);
     return reply(500, { ok: false, outcome: 'error', message });
   }

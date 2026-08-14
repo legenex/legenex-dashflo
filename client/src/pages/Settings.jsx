@@ -19,6 +19,7 @@ import SettingsIgnoreList from '@/components/settings/SettingsIgnoreList';
 import SettingsProfile from '@/components/settings/SettingsProfile';
 import SettingsAudits from '@/components/settings/SettingsAudits';
 import SettingsDashboard from '@/components/settings/SettingsDashboard';
+import SettingsExportImport from '@/components/settings/SettingsExportImport';
 import ErrorLogs from '@/pages/ErrorLogs';
 
 // NAV is built inside the component so items the user cannot access are
@@ -43,6 +44,7 @@ function buildNav(isAdmin, can) {
     { key: 'audits', label: 'Audits', perm: 'set_integrations' },
     { key: 'chatbot', label: 'ChatBot', perm: null },
     { key: 'billing', label: 'Billing and Plan', perm: 'set_billing' },
+    { key: 'export-import', label: 'Export and Import', perm: 'set_export_import' },
   ].filter((i) => allow(i.perm));
 
   return [
@@ -67,6 +69,7 @@ const PANELS = {
   audits: { title: 'Audits', subtitle: 'Read-only evaluation harness: runtime probes and findings.', node: <SettingsAudits /> },
   chatbot: { title: 'ChatBot', subtitle: 'AI assistant conversations, memories, and knowledge base.', node: <SettingsChatBot /> },
   billing: { title: 'Billing and Plan', subtitle: 'Plan and billing.', node: <SettingsBilling /> },
+  'export-import': { title: 'Export and Import', subtitle: 'Move the whole system into another app. Master admin only.', node: <SettingsExportImport /> },
   adaptive: { title: 'Ignore List', subtitle: 'Fields excluded from cataloging.', node: <SettingsIgnoreList /> },
 };
 
@@ -88,6 +91,7 @@ const TAB_PERMS = {
   chatbot: null,
   billing: 'set_billing',
   adaptive: 'set_custom_fields',
+  'export-import': 'set_export_import',
 };
 
 export default function Settings() {

@@ -1,0 +1,351 @@
+// System Transfer catalog.
+//
+// Single source of truth for what a system export bundle contains, how records
+// reference each other across entities, and what must never leave the app.
+//
+// Consumed by the Settings > Export / Import panel and, via
+// scripts/generate-transfer-catalog.mjs, by the systemExport and systemImport
+// backend functions (Deno functions cannot import outside their own folder, so
+// they receive a generated copy). Edit here, then regenerate.
+
+export const BUNDLE_VERSION = 1;
+export const REDACTED = '__REDACTED__';
+
+// ---------------------------------------------------------------------------
+// Sections: what the operator ticks in the UI. Every entity appears exactly once.
+// ---------------------------------------------------------------------------
+
+export const SECTIONS = [
+  {
+    key: 'schemas',
+    label: 'Entity schemas',
+    group: 'Foundation',
+    description: 'The entity definitions themselves. Required first when seeding an empty app.',
+    entities: [],
+    isSchemas: true,
+  },
+  {
+    key: 'settings',
+    label: 'Settings and workspace',
+    group: 'Foundation',
+    description: 'Workspace defaults, brands, verticals, dispositions, notification rules, templates.',
+    entities: ['AppSettings', 'Brand', 'Vertical', 'Disposition', 'ReferenceKey', 'EmailValidationSettings',
+      'HlrSettings', 'NotificationRule', 'OnboardingEmailTemplate', 'ImportTemplate', 'Report', 'BotConfig',
+      'KnowledgeDoc'],
+  },
+  {
+    key: 'fields',
+    label: 'Fields and calculations',
+    group: 'Foundation',
+    description: 'Custom field catalog, inbound field mapping, calculated fields, response mapping.',
+    entities: ['CustomField', 'FieldMapping', 'CustomCalculation', 'ResponseMapping'],
+  },
+  {
+    key: 'buyers',
+    label: 'Buyers',
+    group: 'Commercial',
+    description: 'Buyer records, CPL rules, per state pricing, wallets, onboarding, contracts.',
+    entities: ['Buyer', 'BuyerCplRule', 'BuyerStateCpl', 'BuyerWallet', 'BuyerOnboarding', 'ContractVersion'],
+  },
+  {
+    key: 'suppliers',
+    label: 'Suppliers',
+    group: 'Commercial',
+    description: 'Supplier records, sources, state coverage, ad accounts, lead sources, API keys.',
+    entities: ['Supplier', 'SupplierSource', 'SupplierStateCoverage', 'SupplierAdAccount', 'LeadSource', 'ApiKey'],
+  },
+  {
+    key: 'distribution',
+    label: 'Lead distribution',
+    group: 'Routing',
+    description: 'Campaigns, route groups and members, deliveries and endpoint tiers, published config, state status.',
+    entities: ['Campaign', 'RouteGroup', 'RouteMember', 'Delivery', 'SubDelivery', 'RouteConfigVersion', 'StateStatus'],
+  },
+  {
+    key: 'connectors',
+    label: 'Connectors and integrations',
+    group: 'Routing',
+    description: 'Outbound connectors, webhooks, pull sources, integrations. Always imported disabled.',
+    entities: ['LeadByteConnector', 'ApiConnector', 'Webhook', 'OutboundWebhook', 'InboundWebhookRoute',
+      'PullSource', 'IntegrationConfig', 'MetaConnection', 'MetaLeadFormMapping', 'AdSpendMapping'],
+  },
+  {
+    key: 'leads',
+    label: 'Leads and calls',
+    group: 'Transactional',
+    description: 'Lead records, call records, verification, returns, buyer feedback.',
+    entities: ['Lead', 'CallRecord', 'VerificationRecord', 'ReturnRequest', 'BuyerFeedback', 'CertBackupStore'],
+  },
+  {
+    key: 'finance',
+    label: 'Finance',
+    group: 'Transactional',
+    description: 'Invoices, billing runs and line items, payments, payouts, wallet ledger, bank feed, ad spend.',
+    entities: ['Invoice', 'BillingRun', 'BillingLineItem', 'BuyerPayment', 'SupplierPayout', 'WalletTransaction',
+      'BankTransaction', 'AdSpend', 'AdCreativeMeta'],
+  },
+  {
+    key: 'logs',
+    label: 'Logs and traces',
+    group: 'Transactional',
+    description: 'Delivery attempts, routing traces, error logs, audit trail, counters. Usually not worth moving.',
+    entities: ['ErrorLog', 'DeliveryAttempt', 'RouteDecisionTrace', 'DistributionAudit', 'AuditLog',
+      'NotificationEvent', 'MetaSyncRun', 'StateChangeEvent', 'BidAttempt', 'DestinationHealth', 'CapCounter',
+      'CapReservation', 'Counter', 'PayloadTest'],
+  },
+  {
+    key: 'users',
+    label: 'Users and roles',
+    group: 'Access',
+    description: 'User records with their permission maps, and pending invitations.',
+    entities: ['User', 'Invitation'],
+  },
+  {
+    key: 'progress',
+    label: 'Progress control centre',
+    group: 'Internal',
+    description: 'Findings, change requests, prompts, review threads, release gates, assistant memory.',
+    entities: ['ProgressPage', 'ProgressSnapshot', 'AuditRun', 'AuditFinding', 'ChangeRequest', 'PromptDraft',
+      'ReviewThread', 'ReleaseGate', 'MigrationRequirement', 'PageSnapshot', 'BenchmarkCriterion',
+      'ChatConversation', 'ChatMemory'],
+  },
+];
+
+export const ALL_SECTION_KEYS = SECTIONS.map((s) => s.key);
+export const ALL_ENTITIES = SECTIONS.flatMap((s) => s.entities);
+
+export function entitiesForSections(keys) {
+  const set = new Set(keys || []);
+  return SECTIONS.filter((s) => set.has(s.key)).flatMap((s) => s.entities);
+}
+
+// ---------------------------------------------------------------------------
+// Secrets. Never leave the app, in any bundle, for any operator.
+// ---------------------------------------------------------------------------
+
+// Exact field names whose value is replaced with REDACTED.
+export const SECRET_FIELDS = {
+  ApiKey: ['key'],
+  ApiConnector: ['fb_access_token'],
+  Buyer: ['buyer_api_key'],
+  BotConfig: ['bot_key'],
+  InboundWebhookRoute: ['token_hash'],
+  LeadSource: ['webhook_key'],
+  MetaConnection: ['token'],
+  OutboundWebhook: ['api_key'],
+  PullSource: ['api_key'],
+  Webhook: ['secret'],
+};
+
+// Free text blobs that in practice carry Authorization bearers and API keys.
+// Values are parsed and scrubbed key by key rather than dropped wholesale, so
+// the shape of the config survives the move.
+export const SECRET_BLOB_FIELDS = {
+  ApiConnector: ['headers'],
+  LeadByteConnector: ['headers'],
+  Webhook: ['headers'],
+  OutboundWebhook: ['headers'],
+  IntegrationConfig: ['config'],
+};
+
+// URL fields where credentials commonly ride in the query string.
+export const SECRET_URL_FIELDS = {
+  ApiConnector: ['target_url'],
+  LeadByteConnector: ['target_url'],
+  Webhook: ['url'],
+  OutboundWebhook: ['url'],
+  PullSource: ['url'],
+  SubDelivery: ['url'],
+};
+
+export const SECRET_KEY_PATTERN = /(auth|key|secret|token|password|passwd|pwd|bearer|sig|signature|credential)/i;
+
+// Fields stripped entirely: operational state that must never be carried into
+// another app. distribution_mode is set only by distributionSetMode, never by
+// an import.
+export const FIELD_STRIP = {
+  AppSettings: ['distribution_mode'],
+};
+
+// Imported records of these entities are forced to these values regardless of
+// what the bundle says, so nothing starts firing at a live endpoint on arrival.
+export const IMPORT_FORCE = {
+  LeadByteConnector: { enabled: false, is_default: false },
+  ApiConnector: { enabled: false },
+  Webhook: { enabled: false },
+  OutboundWebhook: { enabled: false },
+  PullSource: { enabled: false },
+  InboundWebhookRoute: { enabled: false },
+  Campaign: { status: 'draft' },
+  SubDelivery: { active: false },
+  Delivery: { active: false },
+};
+
+// ---------------------------------------------------------------------------
+// Reference graph. Import rewrites these before insert, in ENTITY_ORDER.
+//
+// kind 'id'        single record id, remapped old -> new
+// kind 'idsJson'   JSON array of record ids held in a string field
+// kind 'code'      NOT a record id. A natural key or an external system id.
+//                  Never remapped. Listed so the importer can validate it
+//                  resolves, and so nobody later mistakes it for a reference.
+//
+// Verified against live data 14 August 2026: Lead.buyer_id holds buyer CODES
+// (T1, AG1, AG2) despite its schema description claiming a record reference.
+// Remapping it would destroy attribution.
+// ---------------------------------------------------------------------------
+
+export const REFS = {
+  ApiKey: { supplier_id: { kind: 'id', target: 'Supplier' } },
+  BillingLineItem: {
+    billing_run_id: { kind: 'id', target: 'BillingRun' },
+    supplier_id: { kind: 'id', target: 'Supplier' },
+    campaign_id: { kind: 'id', target: 'Campaign' },
+  },
+  BillingRun: {
+    buyer_id: { kind: 'id', target: 'Buyer' },
+    supplier_id: { kind: 'id', target: 'Supplier' },
+    invoice_id: { kind: 'id', target: 'Invoice' },
+  },
+  Buyer: { campaign_ids: { kind: 'idsJson', target: 'Campaign' } },
+  BuyerCplRule: {
+    buyer_id: { kind: 'id', target: 'Buyer' },
+    campaign_id: { kind: 'id', target: 'Campaign' },
+  },
+  BuyerFeedback: {
+    buyer_id: { kind: 'id', target: 'Buyer' },
+    lead_id: { kind: 'id', target: 'Lead' },
+  },
+  BuyerOnboarding: { buyer_id: { kind: 'id', target: 'Buyer' } },
+  BuyerPayment: {
+    buyer_id: { kind: 'id', target: 'Buyer' },
+    invoice_id: { kind: 'id', target: 'Invoice' },
+  },
+  BuyerStateCpl: { buyer_id: { kind: 'id', target: 'Buyer' } },
+  BuyerWallet: { buyer_id: { kind: 'id', target: 'Buyer' } },
+  CallRecord: {
+    lead_id: { kind: 'id', target: 'Lead' },
+    source_id: { kind: 'id', target: 'PullSource' },
+    call_id: { kind: 'code' },
+    caller_id: { kind: 'code' },
+  },
+  Campaign: {
+    supplier_ids: { kind: 'idsJson', target: 'Supplier' },
+    campaign_id: { kind: 'code' },
+  },
+  ContractVersion: { campaign_id: { kind: 'id', target: 'Campaign' } },
+  Delivery: {
+    buyer_id: { kind: 'id', target: 'Buyer' },
+    vertical_id: { kind: 'id', target: 'Vertical' },
+  },
+  DeliveryAttempt: {
+    lead_id: { kind: 'id', target: 'Lead' },
+    sub_delivery_id: { kind: 'id', target: 'SubDelivery' },
+    destination_id: { kind: 'id', target: 'LeadByteConnector' },
+  },
+  InboundWebhookRoute: { api_key_id: { kind: 'id', target: 'ApiKey' } },
+  Invoice: { buyer_id: { kind: 'id', target: 'Buyer' } },
+  Lead: {
+    buyer_id: { kind: 'code' },
+    campaign_id: { kind: 'code' },
+    supplier_key_id: { kind: 'id', target: 'ApiKey' },
+    lead_id: { kind: 'code' },
+    leadbyte_lead_id: { kind: 'code' },
+    leadbyte_queue_id: { kind: 'code' },
+    leadbyte_rejection_id: { kind: 'code' },
+    import_batch_id: { kind: 'code' },
+  },
+  LeadSource: {
+    api_key_id: { kind: 'id', target: 'ApiKey' },
+    campaign_id: { kind: 'id', target: 'Campaign' },
+    sheet_id: { kind: 'code' },
+  },
+  MetaLeadFormMapping: {
+    supplier_id: { kind: 'id', target: 'Supplier' },
+    connection_id: { kind: 'id', target: 'MetaConnection' },
+    campaign_id: { kind: 'code' },
+    form_id: { kind: 'code' },
+    page_id: { kind: 'code' },
+  },
+  ReturnRequest: {
+    buyer_id: { kind: 'id', target: 'Buyer' },
+    lead_id: { kind: 'id', target: 'Lead' },
+  },
+  RouteConfigVersion: {
+    campaign_id: { kind: 'id', target: 'Campaign' },
+    route_group_id: { kind: 'id', target: 'RouteGroup' },
+  },
+  RouteGroup: {
+    campaign_id: { kind: 'id', target: 'Campaign' },
+    config_version_id: { kind: 'id', target: 'RouteConfigVersion' },
+  },
+  RouteMember: {
+    route_group_id: { kind: 'id', target: 'RouteGroup' },
+    buyer_id: { kind: 'id', target: 'Buyer' },
+    sub_delivery_id: { kind: 'id', target: 'SubDelivery' },
+    destination_id: { kind: 'id', target: 'LeadByteConnector' },
+  },
+  SubDelivery: { delivery_id: { kind: 'id', target: 'Delivery' } },
+  Supplier: { campaign_ids: { kind: 'idsJson', target: 'Campaign' } },
+  SupplierAdAccount: {
+    supplier_id: { kind: 'id', target: 'Supplier' },
+    connection_id: { kind: 'id', target: 'MetaConnection' },
+    ad_account_id: { kind: 'code' },
+    business_id: { kind: 'code' },
+  },
+  SupplierSource: { supplier_id: { kind: 'id', target: 'Supplier' } },
+  SupplierStateCoverage: { supplier_id: { kind: 'id', target: 'Supplier' } },
+  User: {
+    linked_buyer_id: { kind: 'id', target: 'Buyer' },
+    linked_supplier_id: { kind: 'id', target: 'Supplier' },
+  },
+  WalletTransaction: { buyer_id: { kind: 'id', target: 'Buyer' } },
+};
+
+// Natural keys give idempotent re-import: match on these before creating, so a
+// second import updates rather than duplicates.
+export const NATURAL_KEYS = {
+  Brand: 'brand_code',
+  Buyer: 'buyer_code',
+  Campaign: 'campaign_id',
+  CustomField: 'field_name',
+  Disposition: 'name',
+  Supplier: 'sid',
+  SupplierSource: 'source_code',
+  User: 'email',
+  Vertical: 'name',
+};
+
+// Import order. Parents before children so every reference resolves.
+export const ENTITY_ORDER = [
+  'AppSettings', 'Brand', 'Vertical', 'Disposition', 'ReferenceKey', 'EmailValidationSettings', 'HlrSettings',
+  'NotificationRule', 'OnboardingEmailTemplate', 'ImportTemplate', 'Report', 'BotConfig', 'KnowledgeDoc',
+  'CustomField', 'FieldMapping', 'CustomCalculation', 'ResponseMapping',
+  'Supplier', 'Buyer',
+  'MetaConnection', 'IntegrationConfig',
+  'ApiKey', 'SupplierSource', 'SupplierStateCoverage', 'SupplierAdAccount', 'LeadSource',
+  'BuyerWallet', 'BuyerOnboarding',
+  'Campaign', 'ContractVersion', 'BuyerCplRule', 'BuyerStateCpl',
+  'Delivery', 'SubDelivery',
+  'LeadByteConnector', 'ApiConnector', 'Webhook', 'OutboundWebhook', 'InboundWebhookRoute', 'PullSource',
+  'MetaLeadFormMapping', 'AdSpendMapping',
+  'RouteConfigVersion', 'RouteGroup', 'RouteMember', 'StateStatus',
+  'Lead', 'CallRecord', 'VerificationRecord', 'CertBackupStore', 'ReturnRequest', 'BuyerFeedback',
+  'Invoice', 'BillingRun', 'BillingLineItem', 'BuyerPayment', 'SupplierPayout', 'WalletTransaction',
+  'BankTransaction', 'AdSpend', 'AdCreativeMeta',
+  'ErrorLog', 'DeliveryAttempt', 'RouteDecisionTrace', 'DistributionAudit', 'AuditLog', 'NotificationEvent',
+  'MetaSyncRun', 'StateChangeEvent', 'BidAttempt', 'DestinationHealth', 'CapCounter', 'CapReservation',
+  'Counter', 'PayloadTest',
+  'User', 'Invitation',
+  'ProgressPage', 'ProgressSnapshot', 'AuditRun', 'AuditFinding', 'ChangeRequest', 'PromptDraft', 'ReviewThread',
+  'ReleaseGate', 'MigrationRequirement', 'PageSnapshot', 'BenchmarkCriterion', 'ChatConversation', 'ChatMemory',
+];
+
+// the backend assigns these. They are exported for reference resolution and audit,
+// and dropped on insert.
+export const SYSTEM_FIELDS = ['id', 'created_date', 'updated_date', 'created_by', 'created_by_id', 'is_sample'];
+
+export function sortForImport(entityNames) {
+  const rank = new Map(ENTITY_ORDER.map((n, i) => [n, i]));
+  return [...entityNames].sort((a, b) => (rank.get(a) ?? 999) - (rank.get(b) ?? 999));
+}
