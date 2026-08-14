@@ -1,28 +1,4 @@
-import { sendMail } from '../lib/mailer.js';
-
-// ── Inlined lead-identity helpers (canonical match-key normalization) ──────
-// normalizeEmail: lowercased, trimmed, validated email or null when unresolvable.
-function normalizeEmail(email) {
-  const s = String(email || '').trim().toLowerCase();
-  if (!s) return null;
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s)) return null;
-  return s;
-}
-
-// toE164Us: normalize a US phone to +1XXXXXXXXXX, or null when it cannot be resolved.
-function toE164Us(phone) {
-  let digits = String(phone || '').replace(/\D/g, '');
-  if (digits.length === 11 && digits.startsWith('1')) digits = digits.slice(1);
-  if (digits.length !== 10) return null;
-  return '+1' + digits;
-}
-
-// titleCaseName: Title Case a name, or null when empty.
-function titleCaseName(name) {
-  const s = String(name || '').trim();
-  if (!s) return null;
-  return s.toLowerCase().replace(/\b[\p{L}]/gu, (c) => c.toUpperCase());
-}
+import { normalizeEmail, toE164Us, titleCaseName } from './leadIdentity.generated.js';
 
 // Resolve phone_verified value from HLR result based on configured source
 function resolvePhoneVerified(hlrResult, source) {
@@ -737,11 +713,14 @@ function connectorMatchesConditions(conn, leadData) {
 }
 
 // Does the current lead_route match a verification settings' route filter?
-// Empty filter defaults to the original HLR/email routes (standard, direct, data).
+// Empty filter defaults to the original HLR/email routes (standard, direct, data)
+// plus gateway, which is the legacy standard behaviour under its own name and so
+// must verify identically.
 function routeMatchesFilter(settings, routeIs) {
-  if (!settings) return routeIs.standard || routeIs.direct || routeIs.data;
+  const defaultRoutes = (r) => r.standard || r.gateway || r.direct || r.data;
+  if (!settings) return defaultRoutes(routeIs);
   const routes = parseJsonArray(settings.filter_routes);
-  if (routes.length === 0) return routeIs.standard || routeIs.direct || routeIs.data;
+  if (routes.length === 0) return defaultRoutes(routeIs);
   return routes.some(r => routeIs[r]);
 }
 
@@ -844,7 +823,44 @@ function fireConnectors(db, connectors, trigger, leadData, leadId, supplierAttri
   }
 }
 
-// Fire matching Deliveries destinations (non-default connector records).
+// ── Native distribution helpers (ADDITIVE) ────────────────────────────────
+// Resolve an opaque SubDelivery credential_ref into real auth headers, server
+// side, at send time. The secret never enters a snapshot, a trace, an operator
+// response, or anything browser-facing. Returns {} when the secret store holds
+// nothing for the ref, so a misconfigured destination fails as an unauthenticated
+// rejection rather than leaking or crashing the pipeline.
+async function resolveSubDeliveryCredential(db, ref) {
+  if (!ref) return {};
+  try {
+    const rows = await db.entities.IntegrationConfig.filter({ key: ref });
+    const val = rows && rows[0] && rows[0].value;
+    if (val && typeof val === 'string') return { Authorization: val };
+  } catch { /* secret store not configured in this environment */ }
+  return {};
+}
+
+// Canary traffic allowlist. Canary sends NOTHING unless an explicit allowlist is
+// configured, so an operator who moves to canary without one keeps legacy fully
+// authoritative instead of quietly going live.
+function parseCanaryAllowlist(appSettings) {
+  try {
+    const raw = appSettings && appSettings.distribution_canary_allowlist;
+    if (!raw) return {};
+    const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch { return {}; }
+}
+
+// Whether the submitting key is allowed to see revenue on the response envelope.
+// Same rule the legacy LeadByte path applies further down; kept as one helper so
+// the native path can never diverge from it.
+function exposeRevenueFor(apiKeyRecord, supplierRecord) {
+  return apiKeyRecord.type === 'master'
+    || (apiKeyRecord.type === 'supplier' && supplierRecord?.supplier_type === 'Internal')
+    || apiKeyRecord.expose_revenue === true;
+}
+
+// Fire matching Deliveries destinations (non-default LeadByteConnector records).
 // Same filter/condition/trigger logic as Conversion Events connectors.
 function fireDeliveries(db, destinations, trigger, leadData, leadId, supplierAttribution, supplierRecord) {
   for (const dest of destinations) {
@@ -946,7 +962,7 @@ async function evaluateNotifications(db, conditionTypes, lead, supplierAttributi
       }).catch(() => {});
       if (channels.includes('email') && recipients.length > 0) {
         try {
-          await sendMail({
+          await db.integrations.Core.SendEmail({
             to: recipients[0],
             subject: `Legenex Alert: ${rule.name}`,
             body: `${summary}\n\nLead ID: ${lead.id}\nSupplier: ${supplierAttribution}`,
@@ -1269,11 +1285,17 @@ function bypassLeadStatus(finalForBypass) {
 
 export default async function processLead(ctx) {
   const db = ctx.db;
-  const method = ctx.req.method;
-  const headers = ctx.req?.headers || {};
+  const method = ctx.req?.method;
   const getHeader = (name) => {
-    const v = headers[String(name).toLowerCase()];
-    return v == null ? null : String(v);
+    const h = ctx.req?.headers || {};
+    const target = String(name).toLowerCase();
+    for (const k of Object.keys(h)) {
+      if (k.toLowerCase() === target) {
+        const v = h[k];
+        return Array.isArray(v) ? v[0] : v;
+      }
+    }
+    return null;
   };
 
   if (method === 'GET') return ctx.json({ status: 'ok' }, 200);
@@ -1442,20 +1464,31 @@ export default async function processLead(ctx) {
     await db.entities.Lead.update(leadId, { lead_id: systemLeadId });
 
     // ── Distribution engine SHADOW hook (ADDITIVE, flag-gated) ────────────────
-    // Runs ONLY when distribution_mode is past legacy_only. Calls the ONE
-    // canonical engine (via the generated bundle) through the snapshot loader and
-    // writes ONLY a RouteDecisionTrace. It sends/reserves/bills nothing and is
+    // Runs ONLY in shadow mode. Calls the ONE canonical engine (via the generated
+    // bundle) through the snapshot loader and writes ONLY a RouteDecisionTrace. It
+    // sends/reserves/bills nothing and is
     // fully isolated: the dynamic import runs only when enabled (so production on
     // legacy_only never loads it), and any error is caught so it can never alter
     // the legacy LeadByte outcome or the supplier response envelope. Deployment of
     // the generated bundle to the function runtime is verified in staging (CAP-2).
-    if (distributionMode !== 'legacy_only') {
+    //
+    // Delivering modes (canary, new_primary, new_only) are handled by the native
+    // distribution block further down, which writes its own trace for the same
+    // lead. Gating this to shadow keeps exactly one RouteDecisionTrace per lead so
+    // the comparison report is not double counted.
+    if (distributionMode === 'shadow') {
       try {
         const leadDist = await import('./routingEngine.generated.js');
+        // Resolve the campaign the same way the live path does. Suppliers post no
+        // campaign_id today, so without this every shadow trace would resolve to
+        // no campaign and report no_route_config, making a healthy shadow run look
+        // completely dead. A campaign IS a vertical, so the vertical picks it.
+        const shadowCampaigns = await db.entities.Campaign.filter({ active: true }, 'sort_order', 200, 0);
+        const shadowMatch = leadDist.resolveCampaign(leadPayload, shadowCampaigns || []);
         await leadDist.runShadow(db, {
           distributionMode,
           leadId,
-          campaignId: leadPayload.campaign_id || leadPayload._campaign || null,
+          campaignId: shadowMatch.campaignId,
           idempotencyKey: String(systemLeadId),
           leadData: leadPayload,
           nowMs: Date.now(),
@@ -1575,8 +1608,28 @@ export default async function processLead(ctx) {
       queue: leadRouteRaw.includes('queue'),
       test: leadRouteRaw.includes('test'),
       internal: leadRouteRaw.includes('internal'),
+      // GATEWAY route: the legacy behaviour. Enrich and qualify the lead here,
+      // then hand it to LeadByte to sell and read the value back. This is what
+      // 'standard' has always done; naming it explicitly lets 'standard' become
+      // the native distribution path without moving any live traffic. Phased out
+      // once LeadByte is retired.
+      gateway: leadRouteRaw.includes('gateway'),
     };
-    routeIs.standard = !routeIs.direct && !routeIs.data && !routeIs.event && !routeIs.queue && !routeIs.test && !routeIs.internal;
+    // STANDARD route: the native lead distribution path. The lead is enriched and
+    // qualified exactly as before, then sold through its Campaign to buyers.
+    // Remains the default for a lead that posts no lead_route at all.
+    //
+    // IMPORTANT: this does NOT move live traffic on its own. Native selling still
+    // requires distribution_mode to be past legacy_only; on legacy_only a standard
+    // lead falls through to the LeadByte post exactly as it does today.
+    routeIs.standard = !routeIs.direct && !routeIs.data && !routeIs.event && !routeIs.queue && !routeIs.test && !routeIs.internal && !routeIs.gateway;
+
+    // Record the resolved route on the lead so reporting and the shadow/canary
+    // comparison can answer "which path did this lead take". Reporting only: the
+    // live decision above still comes from the inbound payload.
+    const resolvedRouteName = ['test', 'internal', 'queue', 'event', 'data', 'direct', 'gateway']
+      .find((r) => routeIs[r]) || 'standard';
+    await db.entities.Lead.update(leadId, { lead_route: resolvedRouteName }).catch(() => {});
 
     // TEST route: save only - no processing, no triggers
     if (routeIs.test) {
@@ -2024,7 +2077,9 @@ export default async function processLead(ctx) {
     // reported as Qualified (not Sold) with no revenue. Connectors and
     // Conversion Events still fire where their own filters/conditions match,
     // but are passed the real lead payload, never a fabricated sold outcome.
-    if (!routeIs.standard) {
+    // standard (native distribution) and gateway (LeadByte) are the two selling
+    // routes, and both continue past this point to be sold.
+    if (!routeIs.standard && !routeIs.gateway) {
       fireConnectors(db, apiConnectors, 'on_sold', leadPayload, leadId, supplierAttribution, supplierRecord);
       if (!routeIs.event) {
         fireDeliveries(db, allDestinations, 'on_sold', leadPayload, leadId, supplierAttribution, supplierRecord);
@@ -2131,6 +2186,165 @@ export default async function processLead(ctx) {
         response_returned: JSON.stringify(skipResponse),
       });
       return ctx.json(skipResponse, 200);
+    }
+
+    // ── e2. NATIVE DISTRIBUTION (ADDITIVE, mode-gated) ──────────────────
+    // Past shadow, the canonical engine sells the lead itself instead of handing
+    // it to LeadByte. legacy_only and shadow never enter this block, so current
+    // production behaviour is unchanged until the mode is moved through the
+    // audited distributionSetMode function.
+    //
+    // DOUBLE-SEND SAFETY (the whole point of this block): a lead the engine
+    // delivered, or MIGHT have delivered, always returns from inside here and
+    // never reaches the LeadByte post below. Only a provably clean non-delivery
+    // falls through, and only in new_primary_with_legacy_fallback.
+    // ROUTE GATE: only the standard route distributes natively. A gateway lead is
+    // explicitly asking for the legacy LeadByte path and must never be sold here,
+    // in any mode, or the same lead could be sold twice across the two systems.
+    if (routeIs.standard && (distributionMode === 'canary'
+      || distributionMode === 'new_primary_with_legacy_fallback'
+      || distributionMode === 'new_only')) {
+      let nativeRun = null;
+      let resolvedCampaignId = null;
+      try {
+        const leadDist = await import('./routingEngine.generated.js');
+        const plan = leadDist.planExecution(distributionMode, enrichedData, {
+          canaryAllowlist: parseCanaryAllowlist(appSettings),
+        });
+        if (plan.native === 'deliver') {
+          // Resolve which campaign this lead belongs to. A posted campaign_id wins;
+          // otherwise the lead's vertical picks the campaign, since a campaign IS
+          // a vertical. Resolution never throws and never guesses: an unmatched
+          // lead resolves to null and simply finds no route config.
+          const activeCampaigns = await db.entities.Campaign.filter({ active: true }, 'sort_order', 200, 0);
+          const campaignMatch = leadDist.resolveCampaign(enrichedData, activeCampaigns || []);
+          resolvedCampaignId = campaignMatch.campaignId;
+          // Stamp the resolved campaign for reporting, whether or not it sold.
+          await db.entities.Lead.update(leadId, { campaign_id: resolvedCampaignId || '' }).catch(() => {});
+          if (!resolvedCampaignId) {
+            await db.entities.ErrorLog.create({
+              lead_id: leadId, stage: 'distribution', severity: 'info',
+              message: 'No campaign resolved for native distribution',
+              detail: String(campaignMatch.reason || '').slice(0, 300),
+              supplier_name: supplierAttribution,
+            }).catch(() => {});
+          }
+          nativeRun = await leadDist.runDistribution(db, {
+            distributionMode,
+            leadId,
+            campaignId: resolvedCampaignId,
+            idempotencyKey: String(systemLeadId),
+            leadData: enrichedData,
+            nowMs: Date.now(),
+            resolveCredential: (ref) => resolveSubDeliveryCredential(db, ref),
+          });
+        }
+      } catch (nativeErr) {
+        // Engine load or orchestration failure. runDistribution catches its own
+        // send failures, so reaching here means nothing was posted: clean.
+        nativeRun = null;
+        await db.entities.ErrorLog.create({
+          lead_id: leadId, stage: 'distribution', severity: 'error',
+          message: 'Native distribution failed to run; falling back to legacy path',
+          detail: String((nativeErr && nativeErr.message) || nativeErr).slice(0, 500),
+          supplier_name: supplierAttribution,
+        }).catch(() => {});
+      }
+
+      if (nativeRun && nativeRun.ran) {
+        const nativeStatus = nativeRun.status;
+        const legacyOff = distributionMode !== 'new_primary_with_legacy_fallback';
+        const finishNative = async (finalStatusStr, envelope, extra = {}) => {
+          await db.entities.Lead.update(leadId, {
+            final_status: finalStatusStr,
+            processed_at: new Date().toISOString(),
+            process_time_ms: Date.now() - startTime,
+            response_returned: JSON.stringify(envelope),
+            ...extra,
+          });
+          return ctx.json(envelope, 200);
+        };
+
+        if (nativeStatus === 'accepted') {
+          capturedRevenue = Number(nativeRun.revenue) || 0;
+          const soldEnvelope = buildEnvelope(traceId, {
+            ok: true, acceptance: 'accepted', lead_id: systemLeadId, lead_status: 'sold',
+            sold: true, revenue: capturedRevenue, code: 'SOLD',
+            message: 'Sold', Response: 'Sold',
+          });
+          if (exposeRevenueFor(apiKeyRecord, supplierRecord)) {
+            soldEnvelope.revenue_exposed = capturedRevenue.toFixed(2);
+          }
+          const soldData = { ...enrichedData, revenue: capturedRevenue };
+          fireConnectors(db, apiConnectors, 'on_sold', soldData, leadId, supplierAttribution, supplierRecord);
+          fireDeliveries(db, allDestinations, 'on_sold', soldData, leadId, supplierAttribution, supplierRecord);
+          return await finishNative('Sold', soldEnvelope, {
+            revenue: capturedRevenue, revenue_source: 'direct_route',
+            buyer_id: nativeRun.buyerId || '',
+          });
+        }
+
+        if (nativeStatus === 'duplicate') {
+          const dupEnvelope = buildEnvelope(traceId, {
+            ok: true, acceptance: 'duplicate', lead_id: systemLeadId, lead_status: 'duplicate',
+            code: 'DUPLICATE', reason: 'Buyer reported duplicate',
+            message: 'Duplicate', Response: 'Duplicate',
+          });
+          fireConnectors(db, apiConnectors, 'on_duplicates', enrichedData, leadId, supplierAttribution, supplierRecord);
+          fireDeliveries(db, allDestinations, 'on_duplicates', enrichedData, leadId, supplierAttribution, supplierRecord);
+          return await finishNative('Duplicate', dupEnvelope, {
+            queue_reason: 'Duplicate reported by buyer during native distribution',
+          });
+        }
+
+        if (nativeStatus === 'ambiguous') {
+          // A timeout or aborted request MIGHT have been received by the buyer.
+          // Re-sending through LeadByte could sell the same lead twice, so this
+          // always stops here and is queued for an operator, in every mode.
+          const ambigEnvelope = buildEnvelope(traceId, {
+            ok: true, acceptance: 'queued', lead_id: systemLeadId, lead_status: 'queued',
+            code: 'DELIVERY_AMBIGUOUS', reason: 'Delivery outcome unconfirmed',
+            message: 'Queued for review', Response: 'Unsold',
+          });
+          fireConnectors(db, apiConnectors, 'on_queued', enrichedData, leadId, supplierAttribution, supplierRecord);
+          fireDeliveries(db, allDestinations, 'on_queued', enrichedData, leadId, supplierAttribution, supplierRecord);
+          await evaluateNotifications(db, ['lead_queued'], { id: leadId, queue_reason: 'Ambiguous native delivery' },
+            supplierAttribution, { queue_reason: 'Ambiguous native delivery' }).catch(() => {});
+          return await finishNative('Queued', ambigEnvelope, {
+            queue_reason: 'Native delivery outcome unconfirmed (timeout); not re-sent to avoid a double sale',
+          });
+        }
+
+        if (legacyOff) {
+          // Clean non-delivery with legacy switched off for this lead: unsold.
+          const unsoldEnvelope = buildEnvelope(traceId, {
+            ok: true, acceptance: 'accepted', lead_id: systemLeadId, lead_status: 'unsold',
+            code: 'UNSOLD', reason: 'No buyer accepted the lead',
+            message: 'Unsold', Response: 'Unsold',
+          });
+          fireConnectors(db, apiConnectors, 'on_unsold', enrichedData, leadId, supplierAttribution, supplierRecord);
+          fireDeliveries(db, allDestinations, 'on_unsold', enrichedData, leadId, supplierAttribution, supplierRecord);
+          return await finishNative('Unsold', unsoldEnvelope);
+        }
+        // else: new_primary_with_legacy_fallback and a clean miss -> fall through.
+      } else if (nativeRun && !nativeRun.ran && distributionMode === 'new_only') {
+        // new_only with no usable config: nothing was sent and legacy is off.
+        const noCfgEnvelope = buildEnvelope(traceId, {
+          ok: true, acceptance: 'accepted', lead_id: systemLeadId, lead_status: 'unsold',
+          code: 'NO_ROUTE_CONFIG', reason: 'No active routing configuration',
+          message: 'Unsold', Response: 'Unsold',
+        });
+        fireConnectors(db, apiConnectors, 'on_unsold', enrichedData, leadId, supplierAttribution, supplierRecord);
+        fireDeliveries(db, allDestinations, 'on_unsold', enrichedData, leadId, supplierAttribution, supplierRecord);
+        await db.entities.Lead.update(leadId, {
+          final_status: 'Unsold',
+          queue_reason: 'No active routing configuration for this campaign',
+          processed_at: new Date().toISOString(),
+          process_time_ms: Date.now() - startTime,
+          response_returned: JSON.stringify(noCfgEnvelope),
+        });
+        return ctx.json(noCfgEnvelope, 200);
+      }
     }
 
     const leadBytePayload = await buildPayloadFromTemplate(leadByteConnector.payload_template, enrichedData);

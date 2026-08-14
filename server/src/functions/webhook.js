@@ -1,12 +1,10 @@
-import { HttpError } from './_runtime.js';
-
 // Generic inbound lead webhook.
 //
 //   POST https://api.legenex.com/functions/webhook?key=<api_key>
 //
-// One key (master, or a supplier-scoped key) authenticates every sender, and
-// the sender does not have to be any particular platform: anything that can POST
-// JSON works.
+// Replaces the per-route token model in leadbyteWebhook. One key (master, or a
+// supplier-scoped key) authenticates every sender, and the sender does not have
+// to be LeadByte: anything that can POST JSON works.
 //
 // WHAT IT DOES
 //   - Authenticates on ?key= against ApiKey. Master keys accept any supplier;
@@ -214,8 +212,19 @@ async function ensureSupplier(svc, sid) {
 export default async function webhook(ctx) {
   const svc = ctx.db;
   const reply = (status, payload) => ctx.json(payload, status);
+  const getHeader = (name) => {
+    const h = ctx.req?.headers || {};
+    const target = String(name).toLowerCase();
+    for (const k of Object.keys(h)) {
+      if (k.toLowerCase() === target) {
+        const v = h[k];
+        return Array.isArray(v) ? v[0] : v;
+      }
+    }
+    return null;
+  };
 
-  if (ctx.req.method !== 'POST') {
+  if (ctx.req?.method !== 'POST') {
     return reply(405, { ok: false, outcome: 'rejected', reason: 'method_not_allowed', message: 'POST a JSON body to this endpoint.' });
   }
 
@@ -223,8 +232,8 @@ export default async function webhook(ctx) {
   const body = (ctx.body && typeof ctx.body === 'object') ? ctx.body : {};
 
   // == Auth on ?key= (header accepted as an alternative) ==
-  const presented = clean(ctx.req.query.key)
-    || clean(ctx.req.headers['x-api-key'])
+  const presented = clean(ctx.req?.query?.key)
+    || clean(getHeader('x-api-key'))
     || clean(body.key);
 
   if (!presented) {
@@ -248,7 +257,7 @@ export default async function webhook(ctx) {
   // The key authenticates; `route` is optional and only identifies which
   // InboundWebhookRoute row gets the receipt, and whether that row pins a
   // status instead of reading lead_status off the payload.
-  const routeId = clean(ctx.req.query.route);
+  const routeId = clean(ctx.req?.query?.route);
   let route = null;
   if (routeId) {
     try {

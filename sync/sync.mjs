@@ -459,8 +459,8 @@ const IGNORE_API_PROPS = new Set([
   // embla carousel instance methods
   'on', 'off', 'canScrollNext', 'canScrollPrev', 'scrollTo', 'scrollNext', 'scrollPrev',
   'scrollSnapList', 'selectedScrollSnap', 'reInit', 'plugins', 'internalEngine',
-  // hostname fragments that survive as api.<tld>
-  'legenex', 'com', 'io', 'net', 'org', 'app', 'tiktok',
+  // hostname / URL / filename fragments that survive as api.<x>
+  'legenex', 'com', 'io', 'net', 'org', 'app', 'tiktok', 'js', 'json', 'html', 'php', 'google',
 ]);
 function checkNewSdkSurfaces() {
   const seen = new Set();
