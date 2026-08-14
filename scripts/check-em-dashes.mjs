@@ -10,7 +10,8 @@
 
 import { execFileSync } from 'node:child_process';
 
-const EM_DASH = '—';
+// Built from its code point so this file does not match its own check.
+const EM_DASH = String.fromCharCode(0x2014);
 
 function git(args) {
   return execFileSync('git', args, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
@@ -28,6 +29,15 @@ function baseRef() {
 
 const base = baseRef();
 // Committed changes on this branch plus anything still in the working tree.
+// Untracked files are added to the index intent-to-add first, otherwise a brand
+// new file is invisible to git diff and would skip the check entirely.
+try {
+  const untracked = git(['ls-files', '--others', '--exclude-standard', '-z'])
+    .split('\0')
+    .filter(Boolean);
+  if (untracked.length > 0) git(['add', '--intent-to-add', '--', ...untracked]);
+} catch { /* nothing to stage */ }
+
 const diff = base ? git(['diff', base, '--']) : git(['diff', 'HEAD', '--']);
 
 const findings = [];

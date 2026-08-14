@@ -108,14 +108,23 @@ const RULES = [
   },
 ];
 
-function trackedFiles() {
-  const out = execFileSync('git', ['ls-files', '-z'], { cwd: repoRoot, maxBuffer: 64 * 1024 * 1024 });
-  return out.toString('utf8').split('\0').filter(Boolean);
+// Tracked files plus untracked ones that are not ignored. A brand new file is
+// exactly where a pasted credential is most likely to land, so scanning only
+// what git already tracks would miss it until after it was committed.
+function filesToScan() {
+  const run = (args) =>
+    execFileSync('git', args, { cwd: repoRoot, maxBuffer: 64 * 1024 * 1024 })
+      .toString('utf8')
+      .split('\0')
+      .filter(Boolean);
+  const tracked = run(['ls-files', '-z']);
+  const untracked = run(['ls-files', '--others', '--exclude-standard', '-z']);
+  return [...new Set([...tracked, ...untracked])];
 }
 
 const findings = [];
 
-for (const rel of trackedFiles()) {
+for (const rel of filesToScan()) {
   if (SKIP_PATHS.some((re) => re.test(rel))) continue;
   const abs = path.join(repoRoot, rel);
   let content;
@@ -151,4 +160,4 @@ if (findings.length > 0) {
   process.exit(1);
 }
 
-console.log('[secret-scan] OK: no credential-shaped literals in tracked files.');
+console.log('[secret-scan] OK: no credential-shaped literals in scanned files.');

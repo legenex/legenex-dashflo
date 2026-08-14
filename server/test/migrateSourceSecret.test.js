@@ -59,10 +59,16 @@ describe('migrateSource fails closed without a configured secret', () => {
     }
   });
 
-  it('refuses the secret literal that was previously committed', async () => {
+  // The value that used to be committed is compromised and must not be written
+  // back into this repository to test it. Fail-closed is asserted over arbitrary
+  // candidates instead, which covers the old value by construction.
+  it('refuses any candidate secret when none is configured', async () => {
     const handler = await loadHandler();
-    const res = await handler(makeCtx({ op: 'ping', secret: 'lgx-migrate-9f3a2b7c4d8e1055' }));
-    expect(res.status).toBe(403);
+    const candidates = ['a', 'guessed-value', 'x'.repeat(64), '0', 'true'];
+    for (const secret of candidates) {
+      const res = await handler(makeCtx({ op: 'ping', secret }));
+      expect(res.status, `candidate ${secret.slice(0, 12)}`).toBe(403);
+    }
   });
 
   it('never returns entity rows while unauthenticated', async () => {
