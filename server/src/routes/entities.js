@@ -1,44 +1,49 @@
 import express from 'express';
 import { repo, entityExists } from '../db/repo.js';
-import { getSchema } from '../schemas/index.js';
 import { requireAuth } from '../middleware/auth.js';
+import { authorizeEntity, projectRead, sanitizeWrite } from '../lib/entityPolicy.js';
 
 const router = express.Router();
 
-// All entity access requires authentication. Row-level rules from the schema
-// (rls.read/create/update/delete with { user_condition: { role } }) are honored
-// at a coarse level: admin/owner pass everything; other roles are checked.
-function checkRls(schema, action, user) {
-  const rule = schema?.rls?.[action]?.user_condition;
-  if (!rule) return true; // no rule -> allow authenticated
-  const role = user.base_role || user.role;
-  if (role === 'owner' || role === 'admin') return true;
-  if (rule.role && rule.role !== role) return false;
-  return true;
-}
-
+// Resolve an entity for an action, or answer the request with the reason it is
+// not allowed. Authorization is deny by default: see lib/entityPolicy.js. An
+// entity absent from the policy table is refused for every role.
+//
+// The entity is checked for existence only after authorization passes, so this
+// route cannot be used to enumerate which entities exist.
 function resolve(req, res, action) {
   const { name } = req.params;
+
+  const decision = authorizeEntity(req.user, name, action);
+  if (!decision.allowed) {
+    res.status(decision.status).json({
+      error: decision.status === 401 ? 'Unauthorized' : 'Forbidden',
+      message: decision.reason,
+    });
+    return null;
+  }
+
   if (!entityExists(name)) {
     res.status(404).json({ error: `Unknown entity: ${name}` });
     return null;
   }
-  const schema = getSchema(name);
-  if (!checkRls(schema, action, req.user)) {
-    res.status(403).json({ error: 'Forbidden' });
-    return null;
-  }
+
   return repo(name);
 }
 
 const num = (v, d) => (v == null || v === '' ? d : parseInt(v, 10));
 
+// Bound how many rows one request can pull, so a single call cannot stream the
+// whole table out of the database.
+const MAX_LIMIT = 1000;
+const boundLimit = (v, d) => Math.min(Math.max(num(v, d) || d, 1), MAX_LIMIT);
+
 // GET /api/entities/:name?sort=&limit=&offset=
 router.get('/:name', requireAuth, async (req, res, next) => {
   try {
     const r = resolve(req, res, 'read'); if (!r) return;
-    const rows = await r.list(req.query.sort || '-created_date', num(req.query.limit, 100), num(req.query.offset, 0));
-    res.json(rows);
+    const rows = await r.list(req.query.sort || '-created_date', boundLimit(req.query.limit, 100), num(req.query.offset, 0));
+    res.json(projectRead(req.params.name, rows));
   } catch (e) { next(e); }
 });
 
@@ -47,8 +52,8 @@ router.post('/:name/query', requireAuth, async (req, res, next) => {
   try {
     const r = resolve(req, res, 'read'); if (!r) return;
     const { filter = {}, sort = '-created_date', limit = null, offset = 0 } = req.body || {};
-    const rows = await r.filter(filter, sort, limit, offset);
-    res.json(rows);
+    const rows = await r.filter(filter, sort, limit == null ? MAX_LIMIT : boundLimit(limit, 100), offset);
+    res.json(projectRead(req.params.name, rows));
   } catch (e) { next(e); }
 });
 
@@ -58,7 +63,7 @@ router.get('/:name/:id', requireAuth, async (req, res, next) => {
     const r = resolve(req, res, 'read'); if (!r) return;
     const row = await r.get(req.params.id);
     if (!row) return res.status(404).json({ error: 'Not found' });
-    res.json(row);
+    res.json(projectRead(req.params.name, row));
   } catch (e) { next(e); }
 });
 
@@ -66,9 +71,9 @@ router.get('/:name/:id', requireAuth, async (req, res, next) => {
 router.post('/:name', requireAuth, async (req, res, next) => {
   try {
     const r = resolve(req, res, 'create'); if (!r) return;
-    const body = req.body;
-    if (Array.isArray(body)) return res.json(await r.bulkCreate(body, req.user.id));
-    res.json(await r.create(body, req.user.id));
+    const body = sanitizeWrite(req.params.name, req.body);
+    if (Array.isArray(body)) return res.json(projectRead(req.params.name, await r.bulkCreate(body, req.user.id)));
+    res.json(projectRead(req.params.name, await r.create(body, req.user.id)));
   } catch (e) { next(e); }
 });
 
@@ -76,7 +81,8 @@ router.post('/:name', requireAuth, async (req, res, next) => {
 router.patch('/:name/:id', requireAuth, async (req, res, next) => {
   try {
     const r = resolve(req, res, 'update'); if (!r) return;
-    res.json(await r.update(req.params.id, req.body || {}));
+    const patch = sanitizeWrite(req.params.name, req.body || {});
+    res.json(projectRead(req.params.name, await r.update(req.params.id, patch)));
   } catch (e) { next(e); }
 });
 
@@ -84,7 +90,8 @@ router.patch('/:name/:id', requireAuth, async (req, res, next) => {
 router.post('/:name/bulk-update', requireAuth, async (req, res, next) => {
   try {
     const r = resolve(req, res, 'update'); if (!r) return;
-    res.json(await r.bulkUpdate(req.body || []));
+    const updates = sanitizeWrite(req.params.name, req.body || []);
+    res.json(projectRead(req.params.name, await r.bulkUpdate(updates)));
   } catch (e) { next(e); }
 });
 
@@ -92,7 +99,8 @@ router.post('/:name/bulk-update', requireAuth, async (req, res, next) => {
 router.post('/:name/update-many', requireAuth, async (req, res, next) => {
   try {
     const r = resolve(req, res, 'update'); if (!r) return;
-    res.json(await r.updateMany(req.body?.filter || {}, req.body?.update || {}));
+    const update = sanitizeWrite(req.params.name, req.body?.update || {});
+    res.json(await r.updateMany(req.body?.filter || {}, update));
   } catch (e) { next(e); }
 });
 

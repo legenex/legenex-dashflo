@@ -6,6 +6,8 @@ import path from 'node:path';
 import { config } from './config.js';
 import { ensureSchema } from './db/schema.js';
 import { attachUser } from './middleware/auth.js';
+import { csrfGuard, allowedOrigins } from './middleware/csrf.js';
+import { assertStartupConfig } from './lib/startupChecks.js';
 import { loadFunctions } from './functions/index.js';
 
 import authRoutes from './routes/auth.js';
@@ -14,19 +16,54 @@ import integrationRoutes from './routes/integrations.js';
 import functionRoutes from './routes/functions.js';
 
 async function main() {
+  // Refuse to boot a production deployment with a development secret, a
+  // missing public URL, or an unconfigured database. This runs before anything
+  // touches the database or binds a port.
+  assertStartupConfig(config);
+
   await ensureSchema();
   const loaded = await loadFunctions();
   console.log(`[dashos] loaded ${Object.keys(loaded).length} functions`);
 
   const app = express();
   app.set('trust proxy', 1);
-  app.use(cors({ origin: true, credentials: true }));
+  app.disable('x-powered-by');
+
+  // CORS used to reflect whatever Origin the caller sent while also allowing
+  // credentials, which lets any site on the internet make authenticated
+  // requests with the user's cookie. In production the allowed set is explicit.
+  const origins = allowedOrigins(config);
+  app.use(cors({
+    credentials: true,
+    origin(origin, callback) {
+      // Same-origin and non-browser callers send no Origin header.
+      if (!origin) return callback(null, true);
+      if (origins.size === 0) {
+        // No PUBLIC_BASE_URL configured. Production refuses to start in this
+        // state, so this branch is development only.
+        return callback(null, config.env !== 'production');
+      }
+      return callback(null, origins.has(origin));
+    },
+  }));
+
   app.use(cookieParser());
-  app.use(express.json({ limit: '25mb' }));
-  app.use(express.urlencoded({ extended: true }));
+
+  // Request bodies are bounded per surface rather than allowing 25mb
+  // everywhere. Auth payloads are tiny; only the function route carries bulk
+  // imports. The first parser that matches a path wins, so the specific mounts
+  // come before the general one.
+  app.use('/api/auth', express.json({ limit: '64kb' }));
+  app.use('/api/entities', express.json({ limit: '2mb' }));
+  app.use('/api/functions', express.json({ limit: '25mb' }));
+  app.use(express.json({ limit: '1mb' }));
+  app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 
   // Attach the current user (if any) to every request.
   app.use(attachUser);
+
+  // Cookie-authenticated writes must come from our own origin.
+  app.use('/api', csrfGuard(config));
 
   // Serve uploaded files.
   fs.mkdirSync(config.uploadDir, { recursive: true });

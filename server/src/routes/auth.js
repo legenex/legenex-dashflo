@@ -6,20 +6,43 @@ import { repo, newId } from '../db/repo.js';
 import { config } from '../config.js';
 import { signToken, requireAuth } from '../middleware/auth.js';
 import { sendMail } from '../lib/mailer.js';
+import { rateLimit } from '../middleware/rateLimit.js';
 
 const router = express.Router();
 
-const genOtp = () => String(Math.floor(100000 + Math.random() * 900000));
+// Anonymous auth endpoints are rate limited per address, and the ones that name
+// an account are also limited per address and email together, so guessing a
+// password or an OTP is bounded regardless of which dimension the attacker
+// varies.
+const byEmail = (req) => String(req.body?.email || '').trim().toLowerCase();
+
+const limitLogin = rateLimit({ name: 'login', limit: 10, windowMs: 15 * 60_000 });
+const limitLoginPerAccount = rateLimit({ name: 'login-account', limit: 5, windowMs: 15 * 60_000, by: byEmail });
+const limitRegister = rateLimit({ name: 'register', limit: 5, windowMs: 60 * 60_000 });
+const limitOtp = rateLimit({ name: 'otp', limit: 10, windowMs: 15 * 60_000, by: byEmail });
+const limitReset = rateLimit({ name: 'reset', limit: 5, windowMs: 60 * 60_000 });
+
+const genOtp = () => String(crypto.randomInt(100000, 1000000));
 const normalizeEmail = (e) => String(e || '').trim().toLowerCase();
+
+// Session cookie options. Secure is on whenever the deployment is not plain
+// local development, so a production token is never sent over cleartext.
+// SameSite lax keeps the cookie on top-level navigations back from an emailed
+// link while refusing it on cross-site form posts.
+function sessionCookieOptions() {
+  const production = config.env === 'production';
+  return {
+    httpOnly: true,
+    secure: production,
+    sameSite: 'lax',
+    path: '/',
+    maxAge: 30 * 864e5,
+  };
+}
 
 async function credByEmail(email) {
   const { rows } = await pool.query('SELECT * FROM auth_credentials WHERE lower(email) = lower($1)', [email]);
   return rows[0] || null;
-}
-
-async function userCount() {
-  const { rows } = await pool.query('SELECT count(*)::int AS n FROM auth_credentials');
-  return rows[0].n;
 }
 
 // Public app settings (branding, whether registration is open, etc.). Replaces
@@ -35,23 +58,108 @@ router.get('/public-settings', async (_req, res) => {
     public_settings: {
       name: settings.company_name || 'DashOS',
       public_base_url: settings.public_base_url || config.publicBaseUrl || '',
-      registration_open: settings.registration_open ?? true,
+      // Closed unless an operator has explicitly opened it. This used to
+      // default to open, and the register route did not enforce it either way,
+      // so every visitor could create a privileged account.
+      registration_open: settings.registration_open === true,
     },
   });
 });
 
-// Register: creates the User entity + credentials, issues an OTP.
-router.post('/register', async (req, res) => {
+// Is open registration switched on? Read from AppSettings on each attempt so
+// closing it takes effect immediately.
+async function registrationIsOpen() {
+  try {
+    const settings = (await repo('AppSettings').list('-created_date', 1))[0];
+    return settings?.registration_open === true;
+  } catch {
+    // If the setting cannot be read, refuse. Failing closed is the point.
+    return false;
+  }
+}
+
+// A fixed key for the advisory lock that serialises owner bootstrap. Any
+// constant works as long as nothing else in the application uses it.
+const BOOTSTRAP_LOCK_KEY = 4820157;
+
+// Register.
+//
+// Two distinct paths, and neither is open by default:
+//
+//   1. Owner bootstrap, when there are no accounts at all. In production this
+//      needs OWNER_BOOTSTRAP_TOKEN to be configured and presented, so the first
+//      person to find the URL cannot claim the instance. The whole check and
+//      insert run inside one transaction holding an advisory lock, so two
+//      simultaneous requests cannot both become owner.
+//   2. Ordinary registration, which requires an operator to have switched
+//      registration on. New accounts are never owners.
+router.post('/register', limitRegister, async (req, res) => {
   const email = normalizeEmail(req.body?.email);
   const password = req.body?.password;
   if (!email || !password) return res.status(400).json({ error: 'Email and password required' });
+  if (String(password).length < 12) {
+    return res.status(400).json({ error: 'Password must be at least 12 characters' });
+  }
   if (await credByEmail(email)) return res.status(409).json({ error: 'An account with this email already exists' });
 
-  const isFirst = (await userCount()) === 0;
-  const userId = newId();
   const hash = await bcrypt.hash(password, 10);
   const otp = genOtp();
+  const userId = newId();
 
+  const client = await pool.connect();
+  let isFirst = false;
+  try {
+    await client.query('BEGIN');
+    // Serialise every registration attempt that could be a bootstrap. Released
+    // automatically when the transaction ends.
+    await client.query('SELECT pg_advisory_xact_lock($1)', [BOOTSTRAP_LOCK_KEY]);
+
+    const { rows } = await client.query('SELECT count(*)::int AS n FROM auth_credentials');
+    isFirst = rows[0].n === 0;
+
+    if (isFirst) {
+      const expected = process.env.OWNER_BOOTSTRAP_TOKEN || '';
+      if (config.env === 'production') {
+        const provided = String(req.body?.bootstrap_token || '');
+        const ok =
+          expected.length > 0 &&
+          provided.length === expected.length &&
+          crypto.timingSafeEqual(Buffer.from(provided), Buffer.from(expected));
+        if (!ok) {
+          await client.query('ROLLBACK');
+          return res.status(403).json({
+            error: 'Owner bootstrap is not available',
+            message: 'Set OWNER_BOOTSTRAP_TOKEN and present it, or seed the first account with npm run seed:admin.',
+          });
+        }
+      }
+    } else if (!(await registrationIsOpen())) {
+      await client.query('ROLLBACK');
+      return res.status(403).json({
+        error: 'Registration is closed',
+        message: 'Ask an operator for an invitation.',
+      });
+    }
+
+    await client.query(
+      `INSERT INTO auth_credentials (user_id, email, password_hash, otp_code, otp_expires)
+       VALUES ($1, $2, $3, $4, now() + interval '15 minutes')`,
+      [userId, email, hash, otp]
+    );
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    // A unique violation means someone registered this email in the race.
+    if (err?.code === '23505') {
+      return res.status(409).json({ error: 'An account with this email already exists' });
+    }
+    throw err;
+  } finally {
+    client.release();
+  }
+
+  // The credential row is committed and owns the email, so creating the User
+  // record afterwards cannot hand a second caller the owner role.
   await repo('User').create({
     id: userId,
     email,
@@ -59,11 +167,6 @@ router.post('/register', async (req, res) => {
     role: isFirst ? 'admin' : 'user',
     base_role: isFirst ? 'owner' : 'manager',
   });
-  await pool.query(
-    `INSERT INTO auth_credentials (user_id, email, password_hash, otp_code, otp_expires)
-     VALUES ($1, $2, $3, $4, now() + interval '15 minutes')`,
-    [userId, email, hash, otp]
-  );
 
   await sendMail({
     to: email,
@@ -74,7 +177,7 @@ router.post('/register', async (req, res) => {
   res.json({ success: true, requires_verification: true });
 });
 
-router.post('/verify-otp', async (req, res) => {
+router.post('/verify-otp', limitOtp, async (req, res) => {
   const email = normalizeEmail(req.body?.email);
   const otpCode = String(req.body?.otpCode || req.body?.otp_code || '').trim();
   const cred = await credByEmail(email);
@@ -86,11 +189,11 @@ router.post('/verify-otp', async (req, res) => {
   const user = await repo('User').get(cred.user_id);
   const token = signToken({ id: cred.user_id, email });
   res
-    .cookie(config.auth.cookieName, token, { httpOnly: true, sameSite: 'lax', maxAge: 30 * 864e5 })
+    .cookie(config.auth.cookieName, token, sessionCookieOptions())
     .json({ access_token: token, user });
 });
 
-router.post('/resend-otp', async (req, res) => {
+router.post('/resend-otp', limitOtp, async (req, res) => {
   const email = normalizeEmail(req.body?.email);
   const cred = await credByEmail(email);
   if (!cred) return res.status(404).json({ error: 'Account not found' });
@@ -104,7 +207,7 @@ router.post('/resend-otp', async (req, res) => {
 });
 
 // Email + password login -> JWT.
-router.post('/login', async (req, res) => {
+router.post('/login', limitLogin, limitLoginPerAccount, async (req, res) => {
   const email = normalizeEmail(req.body?.email);
   const password = req.body?.password;
   const cred = await credByEmail(email);
@@ -115,7 +218,7 @@ router.post('/login', async (req, res) => {
   const user = await provisionUserOnLogin(cred, email);
   const token = signToken({ id: cred.user_id, email });
   res
-    .cookie(config.auth.cookieName, token, { httpOnly: true, sameSite: 'lax', maxAge: 30 * 864e5 })
+    .cookie(config.auth.cookieName, token, sessionCookieOptions())
     .json({ access_token: token, user });
 });
 
@@ -158,7 +261,10 @@ router.post('/update-me', requireAuth, async (req, res) => {
 });
 
 router.post('/logout', (_req, res) => {
-  res.clearCookie(config.auth.cookieName).json({ success: true });
+  // Clear with the same attributes it was set with, otherwise the browser
+  // keeps the original cookie.
+  const { maxAge, ...clearOpts } = sessionCookieOptions();
+  res.clearCookie(config.auth.cookieName, clearOpts).json({ success: true });
 });
 
 // Invite a user: admin-only. Creates a credential row with a set-password token
@@ -199,7 +305,7 @@ router.post('/invite', requireAuth, async (req, res) => {
   res.json({ success: true, user_id: userId });
 });
 
-router.post('/reset-password-request', async (req, res) => {
+router.post('/reset-password-request', limitReset, async (req, res) => {
   const email = normalizeEmail(req.body?.email);
   const cred = await credByEmail(email);
   // Always respond success (don't leak which emails exist).
@@ -219,7 +325,7 @@ router.post('/reset-password-request', async (req, res) => {
   res.json({ success: true });
 });
 
-router.post('/reset-password', async (req, res) => {
+router.post('/reset-password', limitReset, async (req, res) => {
   const resetToken = req.body?.resetToken || req.body?.reset_token;
   const newPassword = req.body?.newPassword || req.body?.new_password;
   if (!resetToken || !newPassword) return res.status(400).json({ error: 'Missing token or password' });

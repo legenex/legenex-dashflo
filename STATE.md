@@ -90,10 +90,10 @@ because dependencies changed.
 | F0 Freeze and branch | Done | Lead | cutover branch | `c247649` | Delta audit and auto-sync status above | |
 | F1 Truthful harness | Done | Lead | cutover branch | `c247649` | `npm run gate` PASS, 48 files, 480 tests | |
 | F2 Dependency baseline | In progress | Lead | cutover branch | `c247649` | Advisories classified below | High severity remediation not yet applied |
-| S1 Auth fail-closed | Ready | | | | | |
-| S2 Entity authorization | Ready | | | | | |
-| S3 Function authorization | Ready | | | | | |
-| S4 Secret storage | Ready | | | | | |
+| S1 Auth fail-closed | Done | Lead | cutover branch | `pending` | Live probe, 22 of 22 checks | |
+| S2 Entity authorization | Done | Lead | cutover branch | `pending` | Matrix plus route tests, 40 tests | |
+| S3 Function authorization | Done | Lead | cutover branch | `pending` | Route deny-by-default, 11 tests | Two public webhooks still lack own verification |
+| S4 Secret storage | In progress | Lead | cutover branch | `pending` | Read projection strips key and config | Hash-only at rest not yet done |
 | I1 Durable receipt module | Blocked | | | | | |
 | I2 Global DNC module | Blocked | | | | | |
 | I3 Pipeline integration | Blocked | Lead | | | | |
@@ -174,6 +174,65 @@ Client, 9 advisories, 4 high and 5 moderate:
   required at deploy time.
 
 No values appear in this repository, and none should be pasted into it.
+
+## Phase 1 evidence: production exposure fails closed
+
+Observed against a real server process and a disposable PostgreSQL 16
+database on loopback, not inferred from compilation. Probe script:
+`scratchpad/authProbe.mjs`, 22 of 22 checks passed.
+
+| Behaviour observed | Result |
+|---|---|
+| public-settings reports registration closed by default | `registration_open: false` |
+| First registration bootstraps the owner | 200 |
+| Second registration while closed | 403 Registration is closed |
+| Password under 12 characters | 400 |
+| Session cookie flags | HttpOnly, SameSite=Lax, Secure off in development |
+| Anonymous entity read | 401 |
+| Owner reading an unlisted entity | 403 |
+| Owner reading a policied entity | 200 |
+| Raw API key in create response | absent, prefix retained |
+| Raw API key in list response | absent, prefix retained |
+| Anonymous call to a non-public function | 401 |
+| Anonymous function index | 401 |
+| Anonymous call to a public function | 200 |
+| migrateSource with the previously committed secret | 403 |
+| Cross-site cookie-authenticated write | 403 |
+| Same-origin cookie-authenticated write | 200 |
+| Repeated failed logins | 429 |
+| 200 KB auth body | 413 |
+
+Production startup refusal was observed in a real process:
+`NODE_ENV=production node server/src/index.js` exits 1 and names the
+development JWT secret and the missing public base URL, without printing
+any secret value.
+
+Race-safe owner bootstrap was observed under real concurrency: eight
+simultaneous registrations against a completely empty instance produced
+one 200, four 403 and three 429, and the database ended with exactly one
+user holding `base_role` owner.
+
+## Known gaps carried forward from Phase 1
+
+- `leadbyteWebhook` and `buyerFeedbackWebhook` are on the public function
+  allowlist but do not verify their own caller. The signature contract
+  needs the third-party details, which is Gate B. The gap is asserted in
+  `server/test/functionRoute.test.js` so it stays visible.
+- Supplier API keys are still stored in cleartext. The route no longer
+  returns them, but hash-only at rest changes how `processLead`
+  authenticates a supplier and is the remainder of S4.
+- `IntegrationConfig.config` is no longer readable through the generic
+  route. The settings dialogs merge stored config on save, so moving these
+  credentials to a real store must land together with a service function
+  that supports that merge, or those forms will overwrite stored secrets
+  with blanks. Tracked as the remainder of S4.
+- Rate limiting is in-process. Correct for a single node, wrong the moment
+  a second node exists. Recorded here rather than assumed away.
+- Bearer tokens are still persisted in browser local storage by
+  `client/src/api/client.js`. The server now sets an HttpOnly cookie and
+  the CSRF guard exempts header-authenticated calls, so removing the local
+  storage token is a client change that can land next without a server
+  change.
 
 ## Corrections to historical assumptions
 
