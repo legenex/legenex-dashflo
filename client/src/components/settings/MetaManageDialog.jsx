@@ -13,7 +13,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
-import { Facebook, RefreshCw, Plus, Link2, MoreVertical, AlertTriangle, Clock, Loader2, History, Plug, Search } from 'lucide-react';
+import { Facebook, RefreshCw, Plus, Link2, MoreVertical, AlertTriangle, Clock, Loader2, Plug, Search } from 'lucide-react';
 import { toast } from 'sonner';
 
 const fmtWhen = (iso) => {

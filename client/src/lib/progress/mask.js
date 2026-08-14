@@ -13,6 +13,10 @@ const EMAIL = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi;
 const PHONE = /(\+?1[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}/g;
 // Long opaque tokens: TrustedForm and Jornaya identifiers, API keys, JWTs.
 const TOKEN = /\b[A-Za-z0-9_-]{24,}\b/g;
+// Credential-prefixed tokens are redacted at any length. A truncated or short
+// key still names the credential it belongs to, so length alone is not a safe
+// test for whether a value may appear in a screenshot.
+const KEYED_TOKEN = /\b(?:sk|pk|rk|ak|api|key|token|secret|bearer)_(?:live_|test_)?[A-Za-z0-9_-]+\b/gi;
 const CERT_URL = /https?:\/\/cert\.trustedform\.com\/\S+/gi;
 
 export const blockOut = (text) => (text || '').replace(/\S/g, '\u2022');
@@ -29,6 +33,9 @@ export function maskText(value) {
   apply(CERT_URL);
   apply(EMAIL);
   apply(PHONE);
+  // Credential-prefixed keys before the generic length rule so a short key is
+  // still caught and a long one is counted as a single hit.
+  apply(KEYED_TOKEN);
   apply(TOKEN);
   return { text: out, hits };
 }

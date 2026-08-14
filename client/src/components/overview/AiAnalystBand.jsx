@@ -1,7 +1,6 @@
 import React from 'react';
 import { Brain, Sparkle, RefreshCw } from 'lucide-react';
 import { motion } from 'framer-motion';
-import AnimatedPanel from '@/components/overview/AnimatedPanel';
 
 const CHIPS = [
   { label: 'Revenue', tone: 'neutral' },

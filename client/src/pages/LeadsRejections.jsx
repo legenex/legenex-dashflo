@@ -1,11 +1,10 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo } from 'react';
 import { api } from '@/api/client';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import PageHeader from '@/components/shared/PageHeader';
 import ErrorStatusPill from '@/components/leads/ErrorStatusPill';
 import LeadDetailModal from '@/components/leads/LeadDetailModal';
 import { Input } from '@/components/ui/input';
-import { Checkbox } from '@/components/ui/checkbox';
 import { SearchableSelect } from '@/components/ui/searchable-select';
 import { Search } from 'lucide-react';
 import { format } from 'date-fns';

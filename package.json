@@ -11,6 +11,16 @@
     "build": "npm --prefix client run build",
     "start": "npm --prefix server start",
     "migrate": "npm --prefix server run migrate",
-    "seed:admin": "npm --prefix server run seed:admin"
+    "seed:admin": "npm --prefix server run seed:admin",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "npm --prefix client run lint",
+    "verify:functions": "node scripts/verify-function-loader.mjs",
+    "scan:secrets": "node scripts/secret-scan.mjs",
+    "check:em-dashes": "node scripts/check-em-dashes.mjs",
+    "gate": "node scripts/gate.mjs"
+  },
+  "devDependencies": {
+    "vitest": "^3.2.7"
   }
 }

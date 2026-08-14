@@ -1,4 +1,4 @@
-import { MANIFEST } from './pageManifest.js';
+import { MANIFEST } from './_pageManifest.js';
 
 // Synchronises the generated page inventory into ProgressPage records.
 //

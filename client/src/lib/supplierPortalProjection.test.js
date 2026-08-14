@@ -1,7 +1,7 @@
-/* global process */
 import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 // The supplier portal projection is a deny-by-default surface. A supplier may see
 // the buyer CODE (so they can reference a specific sale when disputing or
@@ -9,9 +9,13 @@ import path from 'node:path';
 // directly.
 //
 // This is a static guard rather than a runtime test because the projection lives
-// in a Deno backend function. It is deliberately blunt: if someone adds
-// buyer_name to the supplier payload, this fails.
-const ENTRY = path.join(process.cwd(), 'api/functions/supplierPortalData/entry.ts');
+// in a backend function. It is deliberately blunt: if someone adds buyer_name to
+// the supplier payload, this fails.
+//
+// Resolved from this file rather than from the working directory so the check
+// runs identically from the repository root gate and from client/.
+const repoRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
+const ENTRY = path.join(repoRoot, 'server/src/functions/supplierPortalData.js');
 
 function safeLeadsBlock(src) {
   const start = src.indexOf('const safeLeads');

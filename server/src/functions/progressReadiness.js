@@ -7,7 +7,7 @@ import {
   gateSummary,
   recommend,
   verificationStateFor,
-} from './readiness.js';
+} from './_readiness.js';
 
 // Recalculates readiness across every ProgressPage, capability and release gate,
 // then writes the day's ProgressSnapshot.

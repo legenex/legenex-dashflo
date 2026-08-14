@@ -9,7 +9,26 @@
 //   { secret, op: 'filter', entity, query, skip, limit, fields? }
 //   { secret, op: 'ids',    entity, skip, limit }   -> [{ id, updated_date }]
 
-const SECRET = 'lgx-migrate-9f3a2b7c4d8e1055';
+import crypto from 'node:crypto';
+
+// The shared secret comes from the environment and has no default. A secret
+// committed to the repository is public, and this endpoint can read every
+// entity in the database, so an absent secret disables the endpoint entirely
+// rather than falling back to a known value.
+//
+// The previously committed literal must be treated as compromised and rotated.
+// See STATE.md, Gate B rotation list.
+const SECRET = process.env.MIGRATE_SOURCE_SECRET || '';
+
+// Constant-time comparison so a caller cannot recover the secret by measuring
+// how long a rejection takes.
+function secretMatches(provided) {
+  if (!SECRET) return false;
+  const a = Buffer.from(String(provided ?? ''), 'utf8');
+  const b = Buffer.from(SECRET, 'utf8');
+  if (a.length !== b.length) return false;
+  return crypto.timingSafeEqual(a, b);
+}
 
 // The entity API here exposes list(sort, limit) / filter(query, sort, limit)
 // with no native offset or projection, so emulate the original skip+fields
@@ -41,7 +60,7 @@ export default async function migrateSource(ctx) {
     if (ctx.req.method !== 'POST') return ctx.json({ error: 'POST only' }, 405);
 
     const body = ctx.body || {};
-    if (body.secret !== SECRET) return ctx.json({ error: 'Forbidden' }, 403);
+    if (!secretMatches(body.secret)) return ctx.json({ error: 'Forbidden' }, 403);
 
     const db = ctx.db;
 

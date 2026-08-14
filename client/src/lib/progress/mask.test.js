@@ -27,6 +27,15 @@ describe('personal data masking', () => {
   });
 
   it('redacts long opaque tokens such as api keys and Jornaya ids', () => {
+    // Synthetic 32 character placeholder, long enough to exercise the generic
+    // length rule without putting a credential-shaped literal in the repository.
+    const token = 'EXAMPLENOTAREALKEY0123456789abcd';
+    const { text, hits } = maskText(`key ${token}`);
+    expect(hits).toBeGreaterThan(0);
+    expect(text).not.toContain(token);
+  });
+
+  it('redacts credential-prefixed tokens even when short', () => {
     const token = 'sk_live_REDACTED';
     const { text, hits } = maskText(`key ${token}`);
     expect(hits).toBeGreaterThan(0);

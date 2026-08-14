@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { useOutletContext } from 'react-router-dom';
 import PeriodTabs from '@/components/shared/PeriodTabs';
-import { FileText, DollarSign, Wallet, TrendingUp } from 'lucide-react';
+import { FileText, DollarSign, Wallet } from 'lucide-react';
 import { filterByPeriod, portalMetrics, dailyBreakdown } from '@/lib/portalMetrics';
 import { money } from '@/lib/reportMetrics';
 

@@ -25,7 +25,10 @@ describe('redactRecord', () => {
   it('scrubs authorization out of a JSON headers blob but keeps the shape', () => {
     const { record } = redactRecord('LeadByteConnector', {
       api_name: 'buyer-post',
-      headers: JSON.stringify({ 'Content-Type': 'application/json', Authorization: 'Bearer sk_live_9f8a7b' }),
+      // Synthetic placeholder. A credential-shaped literal must not sit in the
+      // repository even in a fixture, and the redaction path does not care what
+      // the value is.
+      headers: JSON.stringify({ 'Content-Type': 'application/json', Authorization: 'Bearer example-token-value' }),
     });
     const parsed = JSON.parse(record.headers);
     expect(parsed['Content-Type']).toBe('application/json');

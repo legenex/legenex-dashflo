@@ -9,10 +9,8 @@ import { SearchableSelect } from '@/components/ui/searchable-select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { Badge } from '@/components/ui/badge';
 import { Plus, Copy, RefreshCw, Trash2, ShieldCheck, Terminal, Pencil, UserPlus } from 'lucide-react';
-import { motion } from 'framer-motion';
 import { format } from 'date-fns';
 import { toast } from 'sonner';
-import { Panel, riseIn } from '@/components/settings/settingsUi';
 
 function generateKey(type = 'supplier', supplierType = '') {
   const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';

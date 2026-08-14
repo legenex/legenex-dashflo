@@ -2,7 +2,6 @@ import React from 'react';
 import { useQueries } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
 import { AlertTriangle } from 'lucide-react';
-import StatusPill from '@/components/shared/StatusPill';
 import { runBillingPreview, money, integer } from './billingApi';
 
 // Variance cell. revenue_variance = contracted_gross minus captured_revenue.

@@ -3,7 +3,6 @@ import {
   AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle,
   AlertDialogDescription, AlertDialogFooter, AlertDialogCancel, AlertDialogAction,
 } from '@/components/ui/alert-dialog';
-import { STEP_LABELS } from './onboardingModel';
 
 // Steps whose completion means a real external record already exists.
 const EXTERNAL_STEPS = [

@@ -1,11 +1,8 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Textarea } from '@/components/ui/textarea';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
-import { Plus, Trash2, Wand2, Code2, Eye, EyeOff } from 'lucide-react';
+import { Plus, Trash2, Wand2, Code2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { HighlightedPayloadEditor } from '@/components/settings/HighlightedPayloadEditor';
 

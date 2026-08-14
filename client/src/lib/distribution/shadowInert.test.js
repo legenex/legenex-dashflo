@@ -10,8 +10,10 @@ import { dirname, join } from 'node:path';
 // the native distribution block, which writes its own trace, so exactly one
 // RouteDecisionTrace is produced per lead.
 // Combined with shadowHook.test.js proving runShadow is a no-op on legacy_only.
-const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
-const entry = readFileSync(join(root, 'api/functions/processLead/entry.ts'), 'utf8');
+// The pipeline now lives in the self-hosted server tree. The old Base44
+// api/functions/<name>/entry.ts layout was removed.
+const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..');
+const entry = readFileSync(join(root, 'server/src/functions/processLead.js'), 'utf8');
 
 const SHADOW_GUARD = "if (distributionMode === 'shadow')";
 

@@ -1,7 +1,7 @@
-/* global process */
 import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 // AutoCreatedReviewBanner drives both the buyer and supplier review surfaces from
 // one CONFIG object, and the component body calls cfg.<name> without checking.
@@ -14,7 +14,9 @@ import path from 'node:path';
 //
 // This is a static test on purpose. The component imports the api client, which
 // we do not want to pull into a node-environment test run just to assert a shape.
-const SRC = path.join(process.cwd(), 'src/components/operations/AutoCreatedReviewBanner.jsx');
+// Resolved from this file rather than from the working directory so the check
+// runs identically from the repository root gate and from client/.
+const SRC = path.join(path.dirname(fileURLToPath(import.meta.url)), 'AutoCreatedReviewBanner.jsx');
 const src = fs.readFileSync(SRC, 'utf8');
 
 // Slice a balanced { ... } block starting at the first brace after `label`.

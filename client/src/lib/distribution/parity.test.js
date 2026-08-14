@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import * as canonical from './engine.js';
-import * as generated from '../../../api/functions/_shared/routingEngine.generated.js';
+import * as generated from '../../../../server/src/functions/routingEngine.generated.js';
 
 // Proves the GENERATED backend engine bundle is the same engine as the canonical
 // source: identical routing decisions on the same inputs. Combined with the

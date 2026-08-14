@@ -3,7 +3,6 @@ import { api } from '@/api/client';
 import { useAuth } from '@/lib/AuthContext';
 import { sendGmail } from '@/functions/sendGmail';
 import { Button } from '@/components/ui/button';
-import { Label } from '@/components/ui/label';
 import { Save, Mail, CheckCircle2, Plug, Loader2, User as UserIcon, Lock } from 'lucide-react';
 import { toast } from 'sonner';
 import { Panel, Input, Tag } from '@/components/settings/settingsUi';
