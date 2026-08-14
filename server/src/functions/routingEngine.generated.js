@@ -1,7 +1,7 @@
 // GENERATED FILE - DO NOT EDIT BY HAND.
 // Source of truth: src/lib/distribution/backend-entry.js and its imports.
 // Regenerate: node scripts/generate-backend-engine.mjs
-// canonical-engine-sha256: eb76495564c186e4ae3848f3ec468f03a071ec0b413ace0c7aca292f8e1b9aa6
+// canonical-engine-sha256: 944a1aed37897d6bd14c8ed748c54fb58ba224d0c824ecfac5e8b381d189e3bd
 // src/lib/distribution/engine.js
 var REASON = {
   ELIGIBLE: "ELIGIBLE",
@@ -104,7 +104,7 @@ function evaluateMember(member, lead, opts = {}) {
   if (cap) return fail(cap);
   const price = resolvePrice(m);
   const wallet = m.wallet;
-  if (wallet) {
+  if (wallet && wallet.enforce !== false) {
     if (wallet.mode === "prepaid" && Number(wallet.balance || 0) < price) {
       return fail(REASON.LOW_BALANCE);
     }
@@ -565,10 +565,18 @@ function buildWallet(buyer) {
   if (!buyer) return null;
   const mode = String(buyer.billing_type || buyer.billing_mode || "").toLowerCase().startsWith("prepay") ? "prepaid" : String(buyer.billing_type || "").toLowerCase().startsWith("invoice") ? "postpaid" : null;
   if (!mode) return null;
+  const creditLimit = num(buyer.credit_limit);
+  const enforce = creditLimit != null && creditLimit > 0;
   if (mode === "prepaid") {
-    return { mode, balance: num(buyer.prepay_balance ?? buyer.balance) ?? 0, minBalance: num(buyer.min_balance) ?? 0 };
+    return {
+      mode,
+      enforce,
+      creditLimit,
+      balance: num(buyer.prepay_balance ?? buyer.balance) ?? 0,
+      minBalance: num(buyer.min_balance) ?? 0
+    };
   }
-  return { mode, outstanding: num(buyer.outstanding) ?? 0, creditLimit: num(buyer.credit_limit) };
+  return { mode, enforce, outstanding: num(buyer.outstanding) ?? 0, creditLimit };
 }
 function buildRoutingSnapshot(records, ctx = {}) {
   const { campaignId, configVersionId } = ctx;
@@ -1795,6 +1803,279 @@ function makeEntityAttemptStore(db) {
   };
 }
 
+// src/lib/distribution/distributeRun.js
+var RUN = {
+  ACCEPTED: "accepted",
+  DUPLICATE: "duplicate",
+  NO_ELIGIBLE: "no_eligible_member",
+  REJECTED: "rejected",
+  ERROR_CLEAN: "error_clean",
+  AMBIGUOUS: "ambiguous",
+  SKIPPED: "skipped"
+};
+var CAP_WINDOWS2 = ["total", "hourly", "daily", "weekly", "monthly"];
+function capScopesFor(member, nowMs, tzOffsetMinutes = 0) {
+  const scopes = [];
+  const caps = member.caps || {};
+  for (const w of CAP_WINDOWS2) {
+    const cfg = caps[w];
+    if (!cfg || cfg.limit == null) continue;
+    const bucket = w === "total" ? "all" : capWindowStart(nowMs, w, tzOffsetMinutes);
+    scopes.push({
+      key: `route_member:${member.id}:${w}:${bucket}`,
+      limit: Number(cfg.limit),
+      window: w,
+      windowStart: w === "total" ? null : bucket,
+      memberId: member.id
+    });
+  }
+  return scopes;
+}
+function walletPolicyFor(member) {
+  const w = member.wallet;
+  if (!w) return null;
+  if (w.enforce && w.creditLimit != null) return { creditLimit: Number(w.creditLimit) };
+  if (w.mode === "prepaid") return { creditLimit: Infinity };
+  return null;
+}
+function makeDeliver({ db, stores, ctx, sink }) {
+  const { attemptStore, capStore, walletStore } = stores;
+  return async function deliver(member, meta) {
+    const nowMs = ctx.nowMs;
+    const price = resolvePrice(member);
+    const memberKey = `${ctx.idempotencyKey}:${member.id}`;
+    const scopes = capScopesFor(member, nowMs, ctx.tzOffsetMinutes || 0);
+    let reservation = null;
+    if (scopes.length) {
+      const res = await reserve(capStore, {
+        idempotencyKey: ctx.idempotencyKey,
+        leadId: ctx.leadId,
+        memberId: member.id,
+        price,
+        scopes
+      });
+      if (!res.ok) {
+        return { status: ATTEMPT_STATUS.REJECTED, reason: res.code || RESERVE.CAP_EXCEEDED, revenue: 0, retryable: false };
+      }
+      reservation = res.reservation;
+      if (res.code === RESERVE.ALREADY_RESERVED) {
+        return { status: ATTEMPT_STATUS.REJECTED, reason: "ALREADY_RESERVED", revenue: 0, retryable: false };
+      }
+    }
+    const cfg = member.delivery;
+    if (!cfg || !cfg.targetUrl) {
+      if (reservation) await release(capStore, reservation);
+      return { status: ATTEMPT_STATUS.ERROR, errorClass: "no_endpoint", revenue: 0, retryable: false };
+    }
+    let out;
+    try {
+      out = await deliverDirectPost({
+        ...cfg,
+        destinationId: member.destinationId || null,
+        leadId: ctx.leadId,
+        leadData: ctx.leadData,
+        idempotencyKey: memberKey,
+        attemptNumber: meta.attemptNumber || 1,
+        isPrimary: (meta.attemptNumber || 1) === 1,
+        trigger: "primary"
+      }, {
+        store: attemptStore,
+        nowMs,
+        fetchImpl: ctx.fetchImpl,
+        testMode: !!ctx.testMode,
+        allowlistHosts: ctx.allowlistHosts || [],
+        resolveCredential: ctx.resolveCredential
+      });
+    } catch (err) {
+      if (reservation) await release(capStore, reservation);
+      return {
+        status: ATTEMPT_STATUS.ERROR,
+        errorClass: String(err && err.message || err).slice(0, 60),
+        revenue: 0,
+        retryable: false
+      };
+    }
+    if (out.status === ATTEMPT_STATUS.ACCEPTED) {
+      if (reservation) await finalize(capStore, reservation);
+      const policy = walletPolicyFor(member);
+      if (policy && price > 0) {
+        try {
+          const debit = await walletDebit(walletStore, {
+            buyerId: member.buyerId,
+            amount: price,
+            idempotencyKey: `sale:${memberKey}`,
+            creditLimit: policy.creditLimit,
+            type: "debit",
+            description: `lead ${ctx.leadId}`
+          });
+          out.balanceDecision = debit.applied ? "debited" : debit.duplicate ? "duplicate" : debit.code || "not_applied";
+        } catch {
+          out.balanceDecision = "debit_error";
+        }
+        if (sink) sink.balanceDecision = out.balanceDecision;
+      } else if (sink) {
+        sink.balanceDecision = "not_applicable";
+      }
+    } else if (reservation) {
+      await release(capStore, reservation);
+    }
+    return {
+      status: out.status,
+      revenue: out.revenue || 0,
+      httpStatus: out.httpStatus ?? null,
+      errorClass: out.errorClass ?? null,
+      retryable: !!out.retryable,
+      attemptId: out.attemptId,
+      buyerLeadId: out.buyerLeadId ?? null,
+      balanceDecision: out.balanceDecision ?? null
+    };
+  };
+}
+function toRunStatus(result) {
+  switch (result.finalStatus) {
+    case "Sold":
+      return RUN.ACCEPTED;
+    case "Duplicate":
+      return RUN.DUPLICATE;
+    case "NoEligibleDestination":
+      return RUN.NO_ELIGIBLE;
+    case "CampaignInactive":
+      return RUN.NO_ELIGIBLE;
+    case "Exhausted": {
+      const ambiguous = (result.attempts || []).some(
+        (a) => a.status === ATTEMPT_STATUS.ERROR && ["timeout", "network_error"].includes(String(a.error_class || ""))
+      );
+      if (ambiguous) return RUN.AMBIGUOUS;
+      const anyDelivered = (result.attempts || []).some((a) => a.status === ATTEMPT_STATUS.REJECTED);
+      return anyDelivered ? RUN.REJECTED : RUN.ERROR_CLEAN;
+    }
+    default:
+      return RUN.ERROR_CLEAN;
+  }
+}
+async function runDistribution(db, ctx) {
+  const nowMs = ctx.nowMs ?? 0;
+  const trace = async (patch) => {
+    try {
+      await db.entities.RouteDecisionTrace.create({
+        lead_id: ctx.leadId,
+        idempotency_key: ctx.idempotencyKey || null,
+        distribution_mode: ctx.distributionMode || "unknown",
+        created_at: new Date(nowMs).toISOString(),
+        ...patch
+      });
+    } catch {
+    }
+  };
+  try {
+    const hasGroups = ctx.snapshot ? true : await hasActiveRouteGroup(db, ctx.campaignId, nowMs);
+    if (!hasGroups) {
+      await trace({ result: "no_route_config", winner_member_id: "", evaluated_candidates: "[]", fallthrough_path: "[]" });
+      return { ran: false, status: RUN.NO_ELIGIBLE, reason: "no_route_config" };
+    }
+    const snap = ctx.snapshot || await loadRoutingSnapshot(db, { campaignId: ctx.campaignId, nowMs });
+    const stores = ctx.stores || {
+      attemptStore: makeEntityAttemptStore(db),
+      capStore: makeEntityCapStore(db),
+      walletStore: makeEntityWalletStore(db)
+    };
+    const t0 = nowMs;
+    const sink = {};
+    const result = await distributeLead({
+      campaign: ctx.campaign || null,
+      groups: snap.groups,
+      lead: ctx.leadData || {},
+      seed: { key: ctx.idempotencyKey || "" },
+      nowMs,
+      evalConditions: (t, d) => evalConditionTree(t, d, { nowMs }),
+      deliver: makeDeliver({ db, stores, ctx: { ...ctx, nowMs }, sink }),
+      maxAttemptsPerDest: ctx.maxAttemptsPerDest || 1
+    });
+    const status = toRunStatus(result);
+    const winnerRow = result.winner ? snap.groups.flatMap((g) => g.members).find((m) => m.id === result.winner) || null : null;
+    await trace({
+      result: status,
+      evaluated_candidates: JSON.stringify(result.candidates || []),
+      winner_member_id: result.winner || "",
+      price: result.price || 0,
+      fallthrough_path: JSON.stringify(result.ordered || []),
+      config_version: snap.configHash || null,
+      balance_decision: sink.balanceDecision || null,
+      eval_latency_ms: nowMs - t0
+    });
+    return {
+      ran: true,
+      status,
+      winnerMemberId: result.winner || null,
+      buyerId: winnerRow ? winnerRow.buyerId : null,
+      subDeliveryId: winnerRow ? winnerRow.subDeliveryId : null,
+      price: result.price || 0,
+      revenue: result.revenue || 0,
+      result
+    };
+  } catch (err) {
+    await trace({
+      result: "evaluation_error",
+      winner_member_id: "",
+      evaluated_candidates: "[]",
+      fallthrough_path: "[]",
+      error_message: String(err && err.message || err).slice(0, 300)
+    });
+    return { ran: false, status: RUN.ERROR_CLEAN, reason: "evaluation_error", error: String(err && err.message || err) };
+  }
+}
+
+// src/lib/distribution/campaignResolve.js
+var CAMPAIGN_MATCH = {
+  BY_CODE: "campaign_code",
+  BY_RECORD_ID: "campaign_record_id",
+  BY_NAME: "campaign_name",
+  BY_VERTICAL: "vertical",
+  NONE: "no_match",
+  UNKNOWN_CODE: "unknown_campaign_id"
+};
+function norm(v) {
+  return String(v ?? "").trim().toLowerCase();
+}
+function isLive(c) {
+  if (!c) return false;
+  if (c.active === false) return false;
+  const status = norm(c.status);
+  return status === "" || status === "active";
+}
+function resolveCampaign(lead, campaigns) {
+  const list = (campaigns || []).filter(isLive);
+  const posted = norm(lead && (lead.campaign_id ?? lead._campaign));
+  if (posted) {
+    const byCode = list.find((c) => norm(c.campaign_id) === posted);
+    if (byCode) return hit(byCode, CAMPAIGN_MATCH.BY_CODE);
+    const byRecordId = list.find((c) => norm(c.id) === posted);
+    if (byRecordId) return hit(byRecordId, CAMPAIGN_MATCH.BY_RECORD_ID);
+    const byName = list.find((c) => norm(c.name) === posted);
+    if (byName) return hit(byName, CAMPAIGN_MATCH.BY_NAME);
+    return {
+      campaign: null,
+      campaignId: null,
+      matchedBy: CAMPAIGN_MATCH.UNKNOWN_CODE,
+      reason: `Posted campaign_id "${String(lead && (lead.campaign_id ?? lead._campaign) || "").slice(0, 40)}" did not match an active campaign`
+    };
+  }
+  const vertical = norm(lead && (lead.vertical ?? lead.lead_vertical));
+  if (vertical) {
+    const byVertical = list.find((c) => norm(c.vertical) === vertical) || list.find((c) => norm(c.name) === vertical);
+    if (byVertical) return hit(byVertical, CAMPAIGN_MATCH.BY_VERTICAL);
+  }
+  return {
+    campaign: null,
+    campaignId: null,
+    matchedBy: CAMPAIGN_MATCH.NONE,
+    reason: vertical ? `No active campaign for vertical "${vertical}"` : "Lead carries no campaign_id and no vertical"
+  };
+}
+function hit(campaign, matchedBy) {
+  return { campaign, campaignId: campaign.id, matchedBy, reason: null };
+}
+
 // src/lib/distribution/retryWorker.js
 function seededUnit(str) {
   let h = 2166136261;
@@ -2185,6 +2466,7 @@ function buildModeAudit({ from, to, actorId, reason, nowMs }) {
 export {
   ATTEMPT_STATUS,
   BID_REASON,
+  CAMPAIGN_MATCH,
   CIRCUIT,
   COMPARE,
   MODES,
@@ -2193,6 +2475,7 @@ export {
   PING_ALLOWLIST,
   REASON,
   RESERVE,
+  RUN,
   WALLET,
   _clearActiveGroupCache,
   applyReturnAdjustment,
@@ -2203,6 +2486,7 @@ export {
   buildPingPayload,
   buildRoutingSnapshot,
   buildVersionSnapshot,
+  capScopesFor,
   capWindowStart,
   classifyResponse,
   compareDecision,
@@ -2243,10 +2527,12 @@ export {
   redact,
   release,
   reserve,
+  resolveCampaign,
   resolvePrice,
   resolveSubDeliveryCfg,
   resolveTraceVersion,
   routeWaterfall,
+  runDistribution,
   runPingPost,
   runRetryWorker,
   runShadow,

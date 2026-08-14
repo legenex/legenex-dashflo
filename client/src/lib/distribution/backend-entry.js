@@ -25,6 +25,8 @@ export { deliverDirectPost } from './directPost.js';
 export { resolveSubDeliveryCfg, projectSubDeliveryForClient } from './deliveryResolve.js';
 export { runPingPost, buildPingPayload, PING_ALLOWLIST } from './pingpostFlow.js';
 export { distributeLead, orderEligible } from './distribute.js';
+export { runDistribution, capScopesFor, RUN } from './distributeRun.js';
+export { resolveCampaign, CAMPAIGN_MATCH } from './campaignResolve.js';
 export { makeEntityAttemptStore, makeInMemoryAttemptStore } from './deliveryStore.js';
 export { applyTransform } from './transforms.js';
 export { runRetryWorker, manualRetry, backoffWithJitter } from './retryWorker.js';

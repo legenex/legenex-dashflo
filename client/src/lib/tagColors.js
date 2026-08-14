@@ -166,3 +166,14 @@ const VERDICT_TEXT = {
 export function verdictTextClass(v) {
   return VERDICT_TEXT[String(v || '').toLowerCase()] || 'text-muted-foreground';
 }
+
+// Webhook type pill. Direction is what an operator scans this table for, so the
+// two incoming kinds share a family and outbound reads distinctly against them.
+const WEBHOOK_TYPE_TAG = {
+  incoming_post: 'bg-status-sold status-sold border border-transparent',
+  incoming_get: 'bg-status-queued status-queued border border-transparent',
+  outbound_post: 'bg-status-converted status-converted border border-transparent',
+};
+export function webhookTypeClass(t) {
+  return WEBHOOK_TYPE_TAG[String(t || '').toLowerCase()] || 'tag-neutral';
+}

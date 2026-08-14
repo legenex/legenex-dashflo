@@ -155,8 +155,12 @@ export function evaluateMember(member, lead, opts = {}) {
 
   // 7. financial eligibility.
   const price = resolvePrice(m);
+  // Balance gating is OPT-IN. The snapshot sets enforce:false when the buyer has
+  // no explicit credit_limit, and such a buyer is never blocked on money here.
+  // An absent enforce flag (direct callers, simulator fixtures) still gates, so
+  // this narrows nothing that was previously configured deliberately.
   const wallet = m.wallet;
-  if (wallet) {
+  if (wallet && wallet.enforce !== false) {
     if (wallet.mode === 'prepaid' && Number(wallet.balance || 0) < price) {
       return fail(REASON.LOW_BALANCE);
     }

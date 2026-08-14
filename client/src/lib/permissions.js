@@ -54,7 +54,7 @@ export const PERMISSION_GROUPS = [
       { key: 'set_custom_fields', label: 'Custom Fields' },
       { key: 'set_field_mapping', label: 'Field Mapping' },
       { key: 'set_api_keys', label: 'API Keys' },
-      { key: 'set_inbound_webhooks', label: 'Inbound Webhooks' },
+      { key: 'set_inbound_webhooks', label: 'Webhooks' },
       { key: 'set_error_logs', label: 'Error Logs' },
       { key: 'set_users', label: 'Users and Roles' },
       { key: 'set_billing', label: 'Billing' },
@@ -119,6 +119,11 @@ export const PATH_KEYS = {
   '/leads/rejected': 'leads_rejected',
   '/leads/queued': 'leads_queued',
   '/leads/converted': 'leads_converted',
+  // Calls are their own section. Gated on leads_all so anyone who can see
+  // leads can see calls, rather than needing a key no stored user has yet.
+  '/calls': 'leads_all',
+  '/calls/converted': 'leads_all',
+  '/calls/rejected': 'leads_all',
   '/distribution': 'dist_dashboard',
   '/campaigns': 'dist_campaigns',
   '/campaigns/deliveries': 'dist_deliveries',

@@ -1,0 +1,63 @@
+name: Cloud updater (code)
+
+# Keeps this repo current with the upstream source app WITHOUT needing a local
+# machine. Runs daily in GitHub's cloud: pulls the upstream repo, replicates the
+# code changes (de-couple transform + shims + schemas + backend-function ports),
+# and commits + pushes the result here.
+#
+# Data is intentionally NOT handled here: the base44 data contains live secrets
+# and customer PII, and this repo is public. See sync/updater-prompt.md for the
+# data-refresh flow, which must run somewhere the data can be kept private.
+#
+# Backend-function porting: set an ANTHROPIC_API_KEY repo secret for
+# high-quality ports; without it, changed functions fall back to a mechanical
+# port and risky ones are skipped (frontend/schema/shim changes always apply).
+
+on:
+  schedule:
+    - cron: '0 6 * * *'   # daily 06:00 UTC
+  workflow_dispatch: {}    # allow manual runs from the Actions tab
+
+concurrency:
+  group: cloud-updater
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Configure git identity
+        run: |
+          git config user.name "legenex-cloud-updater"
+          git config user.email "team@legenex.com"
+
+      - name: Run code sync (no local build/restart; commit handled below)
+        env:
+          DASHOS_STATE_FILE: sync/cloud-baseline.json
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: node sync/sync.mjs --no-build --no-restart --no-push
+
+      - name: Commit and push if changed
+        run: |
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No upstream changes to replicate."
+            exit 0
+          fi
+          git commit -m "Cloud auto-sync upstream ($(date -u +%Y-%m-%dT%H:%MZ))"
+          # Rebase onto any commits the local sync pushed in the meantime, then push.
+          git pull --rebase origin main || true
+          git push origin main

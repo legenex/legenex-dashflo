@@ -50,15 +50,26 @@ function buildCaps(capsCfg, memberId, capCountsFor, onError) {
   return out;
 }
 
+// Balance enforcement is OPT-IN (approved 12 Aug 2026). A buyer is blocked on
+// money ONLY when an explicit positive credit_limit is set on the Buyer record.
+// With no credit_limit the lead is delivered and billed downstream, so an
+// unfunded prepay balance never silently stops distribution. The ledger still
+// records the movement either way; enforce controls blocking, not accounting.
 function buildWallet(buyer) {
   if (!buyer) return null;
   const mode = String(buyer.billing_type || buyer.billing_mode || '').toLowerCase().startsWith('prepay')
     ? 'prepaid' : (String(buyer.billing_type || '').toLowerCase().startsWith('invoice') ? 'postpaid' : null);
   if (!mode) return null;
+  const creditLimit = num(buyer.credit_limit);
+  const enforce = creditLimit != null && creditLimit > 0;
   if (mode === 'prepaid') {
-    return { mode, balance: num(buyer.prepay_balance ?? buyer.balance) ?? 0, minBalance: num(buyer.min_balance) ?? 0 };
+    return {
+      mode, enforce, creditLimit,
+      balance: num(buyer.prepay_balance ?? buyer.balance) ?? 0,
+      minBalance: num(buyer.min_balance) ?? 0,
+    };
   }
-  return { mode, outstanding: num(buyer.outstanding) ?? 0, creditLimit: num(buyer.credit_limit) };
+  return { mode, enforce, outstanding: num(buyer.outstanding) ?? 0, creditLimit };
 }
 
 // Main builder. Inputs are already-fetched arrays/maps (loader does the reads).

@@ -27,11 +27,29 @@
       "description": "The call platform's own ID for this call, e.g. Ringba CallId. Primary de-dupe key when present.",
       "type": "string"
     },
+    "call_status": {
+      "description": "Commercial outcome of the call, the equivalent of Lead.final_status. Converted means the call qualified and pays. Rejected means the buyer declined it, normally with a disposition. Error means the row could not be processed. Pending means no outcome yet. Deliberately has NO default: an unset value lets the app derive an outcome from the qualified flag and disposition, whereas a default of Pending would stamp every new call as Pending and suppress that.",
+      "enum": [
+        "Converted",
+        "Rejected",
+        "Error",
+        "Pending"
+      ],
+      "type": "string"
+    },
     "caller_id": {
       "description": "Caller ID number when it differs from the primary number",
       "type": "string"
     },
+    "campaign_name": {
+      "description": "Buyer campaign the call was routed to, e.g. the Campaign column on the call sheet",
+      "type": "string"
+    },
     "city": {
+      "type": "string"
+    },
+    "consumer_state": {
+      "description": "State the consumer called from, which can differ from the incident state held in state",
       "type": "string"
     },
     "custom_fields": {
@@ -40,6 +58,14 @@
     },
     "dedupe_key": {
       "description": "Marker used to stop the same sheet row being ingested twice",
+      "type": "string"
+    },
+    "disposition": {
+      "description": "Main disposition from the buyer, e.g. Did not meet pricing parameters, Already Represented, Outside SOL",
+      "type": "string"
+    },
+    "dispositions": {
+      "description": "Full semicolon separated disposition list when the buyer returns more than one reason",
       "type": "string"
     },
     "duration_seconds": {
@@ -58,6 +84,10 @@
     },
     "lead_id": {
       "description": "Lead record this call was matched to, when the number belongs to a known lead",
+      "type": "string"
+    },
+    "media_source": {
+      "description": "Trackable media source reported by the call platform",
       "type": "string"
     },
     "mobile": {
@@ -105,6 +135,11 @@
       "description": "Supplier credited with the call, resolved from a matched lead or an attribution feed",
       "type": "string"
     },
+    "unique_inquiry": {
+      "default": false,
+      "description": "Whether the call platform counted this as a unique inquiry rather than a repeat contact",
+      "type": "boolean"
+    },
     "vertical": {
       "description": "Law type or vertical, e.g. MVA, WC, Premise",
       "type": "string"
@@ -112,6 +147,11 @@
     "vertical_detail": {
       "description": "Narrow law type, e.g. Auto PI, Pedestrian, RideShare",
       "type": "string"
+    },
+    "web_lead": {
+      "default": false,
+      "description": "Whether the call platform flagged this inquiry as originating from a web lead",
+      "type": "boolean"
     },
     "zip": {
       "type": "string"

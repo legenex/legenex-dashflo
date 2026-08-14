@@ -115,7 +115,7 @@ export default function SettingsDashboard({ isAdmin }) {
     { perm: 'set_billing', tab: 'billing', icon: CreditCard, label: 'Billing and Plan',
       value: '\u2014', hint: 'plan and invoices' },
 
-    ...(isAdmin ? [{ perm: null, tab: 'inbound-webhooks', icon: Webhook, label: 'Inbound Webhooks',
+    ...(isAdmin ? [{ perm: null, tab: 'inbound-webhooks', icon: Webhook, label: 'Webhooks',
       value: '\u2014', hint: 'outcome routing' }] : []),
   ].filter((t) => t.perm === null || can(t.perm));
 

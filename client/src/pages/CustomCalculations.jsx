@@ -19,6 +19,7 @@ import { Plus, Pencil, Trash2, Calculator, GripVertical, ArrowDownUp } from 'luc
 import { toast } from 'sonner';
 import { OutputFieldPicker } from '@/components/calculations/OutputFieldPicker';
 import CalcConditionGroupEditor, { flattenCalcConditions } from '@/components/calculations/CalcConditionGroupEditor';
+import { useSupplierSourceOptions } from '@/hooks/useSupplierSourceOptions';
 import ReferenceKeyPanel from '@/components/calculations/ReferenceKeyPanel';
 import ImportExportDialog from '@/components/shared/ImportExportDialog';
 
@@ -53,6 +54,7 @@ const BLANK_FORM = {
 const CONDITION_FIELD_CONTEXT = [
   { value: 'supplier_type', label: 'Supplier Type' },
   { value: 'sid', label: 'Supplier SID' },
+  { value: 'ssid', label: 'Supplier SubID (SSID)' },
   { value: 'final_status', label: 'Final Status' },
   { value: 'supplier_name', label: 'Supplier Name' },
   { value: 'brand', label: 'Brand' },
@@ -382,6 +384,32 @@ export default function CustomCalculations() {
     ...customFields.map(f => ({ value: f.field_name, label: f.label || f.field_name })),
   ];
 
+  // Suppliers and their sources, read from the one shared source of truth.
+  const { suppliers: supplierRuleSuppliers, sources: supplierRuleSources } = useSupplierSourceOptions();
+
+  // A sid, an ssid and a supplier name are not free text: they are the codes
+  // created in Operations under a supplier. Offering them stops a condition
+  // that looks right but never fires because the code was typed slightly wrong.
+  const calcValueOptionsFor = (field) => {
+    const f = String(field || '').toLowerCase();
+    if (f === 'sid') {
+      return (supplierRuleSuppliers || [])
+        .filter((s) => s.sid)
+        .map((s) => ({ value: s.sid, label: `${s.sid}  \u00b7  ${s.name}` }));
+    }
+    if (f === 'ssid' || f === 'source_code' || f === 'supplier_subid') {
+      return (supplierRuleSources || [])
+        .filter((s) => s.source_code)
+        .map((s) => ({ value: s.source_code, label: s.source_code }));
+    }
+    if (f === 'supplier_name') {
+      return (supplierRuleSuppliers || [])
+        .filter((s) => s.name)
+        .map((s) => ({ value: s.name, label: s.name }));
+    }
+    return null;
+  };
+
   const conditionalValid =
     form.transform_type === 'conditional' &&
     form.conditional_rules.some(r => (r.output || '').trim() !== '' && flattenCalcConditions(r.conditions).some(c => (c.field || '').trim() !== ''));
@@ -626,6 +654,7 @@ export default function CustomCalculations() {
                         value={rule.conditions}
                         onChange={tree => updateRuleConditions(ri, tree)}
                         fieldOptions={conditionFieldOptions}
+                        valueOptionsFor={calcValueOptionsFor}
                       />
                       <div className="flex items-center gap-2 pt-1">
                         <Label className="text-[12px] whitespace-nowrap">Set output to</Label>

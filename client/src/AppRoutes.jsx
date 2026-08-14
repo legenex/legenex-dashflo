@@ -30,7 +30,8 @@ import { DOCS_ROUTES } from '@/components/docs/docsConfig';
 import AppLayout from '@/components/layout/AppLayout';
 import DistributionLayout from '@/components/distribution/DistributionLayout';
 import LeadsLayout from '@/components/leads/LeadsLayout';
-import Calls from '@/pages/Calls';
+import CallsLayout from '@/components/calls/CallsLayout';
+import CallsView from '@/pages/CallsView';
 import FinancesLayout from '@/components/finances/FinancesLayout';
 import OperationsLayout from '@/components/operations/OperationsLayout';
 import AdManagerLayout from '@/components/admanager/AdManagerLayout';
@@ -184,9 +185,16 @@ export function OperatorRoutes() {
             <Route path="/leads/rejected" element={<LeadsView view="rejected" />} />
             <Route path="/leads/queued" element={<LeadsView view="queued" />} />
             <Route path="/leads/converted" element={<LeadsView view="converted" />} />
-            <Route path="/leads/calls" element={<Calls />} />
           </Route>
           <Route path="/leads/rejections" element={<Navigate to="/leads/rejected" replace />} />
+          {/* Calls moved out of the Leads section into their own top-level
+              section. The old path stays as a redirect so bookmarks survive. */}
+          <Route path="/leads/calls" element={<Navigate to="/calls" replace />} />
+          <Route element={<CallsLayout />}>
+            <Route path="/calls" element={<CallsView view="all" />} />
+            <Route path="/calls/converted" element={<CallsView view="converted" />} />
+            <Route path="/calls/rejected" element={<CallsView view="rejected" />} />
+          </Route>
           <Route path="/queue-recovery" element={<QueueRecovery />} />
           <Route path="/errors" element={<Navigate to="/settings?tab=errors" replace />} />
           <Route element={<DistributionLayout />}>

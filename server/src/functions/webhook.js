@@ -1,3 +1,35 @@
+import { HttpError } from './_runtime.js';
+
+// Generic inbound lead webhook.
+//
+//   POST https://api.legenex.com/functions/webhook?key=<api_key>
+//
+// One key (master, or a supplier-scoped key) authenticates every sender, and
+// the sender does not have to be any particular platform: anything that can POST
+// JSON works.
+//
+// WHAT IT DOES
+//   - Authenticates on ?key= against ApiKey. Master keys accept any supplier;
+//     a supplier-scoped key pins the lead to that supplier.
+//   - Resolves the supplier from the key, falling back to `sid` in the payload.
+//   - Reads the status from `lead_status` in the payload (dynamic). A route may
+//     pin a status instead, but nothing is required to.
+//   - Matches an existing lead on lead id, then email, then mobile.
+//   - No match: CREATES the lead. Not every lead reaches this system through
+//     processLead; affiliates post straight into their own platform, so this is
+//     the first this system hears of them.
+//   - Match: UPDATES revenue, buyer, status and any field the stored lead is
+//     missing.
+//
+// RESELL AFTER RETURN
+//   A lead can go Sold -> Returned -> Sold with a different buyer. `buyer_returned`
+//   is sticky: once true it stays true even when the lead is resold, so the lead
+//   counts once as Sold (its current status) and once as Returned (the flag).
+//   Resetting the flag on resale would erase the return from every report.
+//
+// Field names are matched loosely, so a sender may use flat keys (email, sid,
+// revenue) or the older prefixed ones (contact_email, supplier_sid, lead_revenue).
+
 const clean = (v) => {
   if (v === null || v === undefined) return null;
   const s = String(v).trim();
@@ -187,19 +219,8 @@ export default async function webhook(ctx) {
     return reply(405, { ok: false, outcome: 'rejected', reason: 'method_not_allowed', message: 'POST a JSON body to this endpoint.' });
   }
 
-  // The body arrives already parsed. When a sender delivers a raw string, parse
-  // it here so an unparseable payload still returns the invalid_json rejection.
-  let body = {};
-  const rawBody = ctx.body;
-  if (typeof rawBody === 'string') {
-    try {
-      body = rawBody ? JSON.parse(rawBody) : {};
-    } catch {
-      return reply(400, { ok: false, outcome: 'rejected', reason: 'invalid_json', message: 'Body was not valid JSON.' });
-    }
-  } else if (rawBody && typeof rawBody === 'object' && !Array.isArray(rawBody)) {
-    body = rawBody;
-  }
+  // The body arrives already parsed; treat a non-object payload as empty.
+  const body = (ctx.body && typeof ctx.body === 'object') ? ctx.body : {};
 
   // == Auth on ?key= (header accepted as an alternative) ==
   const presented = clean(ctx.req.query.key)
@@ -281,6 +302,13 @@ export default async function webhook(ctx) {
     }
 
     const c = canonicalise(shaped);
+
+    // A route can be pinned to one supplier source, so a sender that posts no
+    // attribution of its own still lands on the right source. The payload
+    // always wins: a pin is a default for silence, never an override, because
+    // the per-post value is the truth about that specific lead.
+    if (!clean(c.sid) && clean(route?.sid)) c.sid = clean(route.sid);
+    if (!clean(c.ssid) && clean(route?.ssid)) c.ssid = clean(route.ssid);
     const email = c.email || null;
     const mobile = c.mobile || null;
     const externalId = num(c.lead_id);

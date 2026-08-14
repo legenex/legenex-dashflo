@@ -40,8 +40,10 @@ describe('runSimulation (real config, zero side effects)', () => {
     expect(db._updates).toHaveLength(0);
   });
 
+  // Balance gating is opt-in (12 Aug 2026): an explicit credit_limit is what
+  // turns an underfunded buyer into an ineligible one.
   it('reports per-candidate eligibility reasons (e.g. low balance)', async () => {
-    const db = mockDb({ groups: [g], members: [{ ...m, fixed_price: 50 }], buyers: [{ ...b, prepay_balance: 10 }], dests: [{ id: 'd1' }] });
+    const db = mockDb({ groups: [g], members: [{ ...m, fixed_price: 50 }], buyers: [{ ...b, prepay_balance: 10, credit_limit: 500 }], dests: [{ id: 'd1' }] });
     const out = await runSimulation(db, { campaignId: CAMPAIGN, leadData: { state: 'TX' }, nowMs: 1000 });
     expect(out.decision.winnerMemberId).toBe(null);
     expect(out.explanation[0].candidates[0].reason).toBe('LOW_BALANCE');

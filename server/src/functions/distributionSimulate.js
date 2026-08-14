@@ -1,10 +1,3 @@
-// Caller model: OPERATOR-ONLY. Route simulator against the REAL published config.
-// Loads the actual snapshot through the same loader as production, runs the ONE
-// canonical engine, and returns a redacted trace marked simulated. Performs ZERO
-// writes and ZERO sends (reads only). Authorization runs BEFORE any service-role
-// read. Rejected for supplier/buyer/portal accounts and callers without an
-// operator permission.
-
 const OPERATOR_PERMISSION_KEYS = ['leads', 'reports', 'overview', 'finances', 'distribution', 'operations'];
 
 async function assertOperator(db, user) {
@@ -22,7 +15,7 @@ async function assertOperator(db, user) {
 export default async function distributionSimulate(ctx) {
   try {
     const db = ctx.db;
-    const user = ctx.user || null;
+    const user = ctx.user;
     if (!user) return ctx.json({ error: 'Unauthorized' }, 401);
     if (!(await assertOperator(db, user))) return ctx.json({ error: 'Forbidden' }, 403);
 
@@ -34,7 +27,7 @@ export default async function distributionSimulate(ctx) {
     const engine = await import('./routingEngine.generated.js');
     // The snapshot loader pre-loads real cap counts internally (read-only).
     const result = await engine.runSimulation(db, { campaignId, leadData, nowMs: Date.now() });
-    return ctx.json(result);
+    return result;
   } catch (error) {
     return ctx.json({ error: error.message }, 500);
   }

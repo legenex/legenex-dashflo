@@ -1,4 +1,4 @@
-import { requireUser } from './_runtime.js';
+import { requireUser, HttpError } from './_runtime.js';
 
 // Runtime layer of the evaluation harness. See Settings > Audits.
 // auditRun. OPERATOR-ONLY, READ-ONLY evaluation harness (runtime layer).
@@ -15,9 +15,9 @@ import { requireUser } from './_runtime.js';
 // only sanctioned writer of that field is distributionSetMode. Every operational
 // entity below is reached through read methods (list / filter) exclusively.
 //
-// Authorization runs BEFORE any read. Rejected for supplier/buyer/portal accounts
-// and callers without an operator permission, mirroring operationsData and
-// distributionSimulate exactly.
+// Authorization runs BEFORE any service-role read. Rejected for supplier/buyer/
+// portal accounts and callers without an operator permission, mirroring
+// operationsData and distributionSimulate exactly.
 
 const OPERATOR_PERMISSION_KEYS = ['leads', 'reports', 'overview', 'finances', 'distribution', 'operations'];
 const VALID_MODES = ['legacy_only', 'shadow', 'canary', 'new_primary_with_legacy_fallback', 'new_only'];
@@ -41,15 +41,14 @@ const arr = (v) => (Array.isArray(v) ? v : []);
 
 export default async function auditRun(ctx) {
   const db = ctx.db;
-
-  // Authorization runs before any read. requireUser throws 401 when unauthenticated.
-  const user = requireUser(ctx);
-  if (!(await assertOperator(db, user))) return ctx.json({ error: 'Forbidden' }, 403);
-
   try {
+    const user = requireUser(ctx);
+    if (!(await assertOperator(db, user))) return ctx.json({ error: 'Forbidden' }, 403);
+
     const body = ctx.body || {};
     const trigger = ['manual', 'scheduled', 'post_change'].includes(body.trigger) ? body.trigger : 'manual';
 
+    const svc = db;
     const startedAtMs = Date.now();
     const startedAt = new Date(startedAtMs).toISOString();
     const runId = `run_${startedAtMs}_${Math.random().toString(36).slice(2, 8)}`;
@@ -61,10 +60,10 @@ export default async function auditRun(ctx) {
     let previous = null;
     let previousFindings = [];
     try {
-      const prevRuns = arr(await db.entities.AuditRun.filter({ status: 'completed', layers: layersSig }, '-started_at', 1));
+      const prevRuns = arr(await svc.entities.AuditRun.filter({ status: 'completed', layers: layersSig }, '-started_at', 1, 0));
       previous = prevRuns[0] || null;
       if (previous) {
-        previousFindings = arr(await db.entities.AuditFinding.filter({ run_id: previous.run_id }, '-created_at', 500));
+        previousFindings = arr(await svc.entities.AuditFinding.filter({ run_id: previous.run_id }, '-created_at', 500, 0));
       }
     } catch { /* first ever run: no previous */ }
     const prevVerdictByKey = new Map();
@@ -118,7 +117,7 @@ export default async function auditRun(ctx) {
       }
     };
 
-    // ===== PROBE 1: CAP-2, generated engine bundle imports in production ======
+    // ===== PROBE 1: CAP-2, generated engine bundle imports in production Node =
     await runProbe(async () => {
       const t = Date.now();
       const mod = await import('./routingEngine.generated.js');
@@ -131,11 +130,11 @@ export default async function auditRun(ctx) {
         verdict: ok ? 'pass' : 'fail',
         severity: ok ? 'info' : 'critical', category: 'correctness',
         surface: 'server/src/functions/routingEngine.generated.js',
-        expected: 'Generated engine imports in the production runtime and exposes runSimulation, buildRoutingSnapshot, MODES',
+        expected: 'Generated engine imports in production Node and exposes runSimulation, buildRoutingSnapshot, MODES',
         observed: ok
           ? 'Import succeeded; canonical exports present'
           : `Import returned but exports missing (runSimulation:${hasSim} buildRoutingSnapshot:${hasSnap} MODES:${!!hasModes})`,
-        detail: 'Parity gate guarantees this copy is byte-identical to distributionSimulate and processLead, so a successful import here proves the bundle imports in the production runtime. This is CAP-2.',
+        detail: 'Parity gate guarantees this copy is byte-identical to distributionSimulate and processLead, so a successful import here proves the bundle imports in production Node. This is CAP-2.',
         duration_ms: Date.now() - t,
       });
     });
@@ -143,7 +142,7 @@ export default async function auditRun(ctx) {
     // ===== PROBE 2: distribution_mode is legacy_only (READ ONLY) =============
     let observedMode = 'unset';
     await runProbe(async () => {
-      const settings = arr(await db.entities.AppSettings.list());
+      const settings = arr(await svc.entities.AppSettings.list());
       const s = settings[0] || {};
       const raw = String(s.distribution_mode || '').trim().toLowerCase();
       observedMode = raw || 'unset';
@@ -165,10 +164,10 @@ export default async function auditRun(ctx) {
     // ===== PROBE 3: distribution configuration state (READ ONLY) ============
     await runProbe(async () => {
       const [camps, groups, members, dels] = await Promise.all([
-        db.entities.Campaign.list().catch(() => null),
-        db.entities.RouteGroup.list().catch(() => null),
-        db.entities.RouteMember.list().catch(() => null),
-        db.entities.Delivery.list().catch(() => null),
+        svc.entities.Campaign.list().catch(() => null),
+        svc.entities.RouteGroup.list().catch(() => null),
+        svc.entities.RouteMember.list().catch(() => null),
+        svc.entities.Delivery.list().catch(() => null),
       ]);
       const c = arr(camps).length, g = arr(groups).length, m = arr(members).length, d = arr(dels).length;
       const configured = c + g + m + d > 0;
@@ -186,7 +185,7 @@ export default async function auditRun(ctx) {
 
     // ===== PROBE 4: live LeadByte connectors present (READ ONLY, do not touch)
     await runProbe(async () => {
-      const conns = arr(await db.entities.LeadByteConnector.list());
+      const conns = arr(await svc.entities.LeadByteConnector.list());
       const enabled = conns.filter((c) => c.enabled === true).length;
       emit({
         check_id: 'connector.live_traffic', layer: 'runtime', source: 'probe',
@@ -203,7 +202,7 @@ export default async function auditRun(ctx) {
       const pageSize = 500;
       let skip = 0; const buyers = [];
       while (true) {
-        const batch = arr(await db.entities.Buyer.list('-created_date', pageSize, skip));
+        const batch = arr(await svc.entities.Buyer.list('-created_date', pageSize, skip));
         buyers.push(...batch);
         if (batch.length < pageSize) break;
         skip += pageSize;
@@ -237,7 +236,7 @@ export default async function auditRun(ctx) {
 
     // ---- persist findings ---------------------------------------------------
     // create the run first so findings reference a real row
-    const runRecord = await db.entities.AuditRun.create({
+    const runRecord = await svc.entities.AuditRun.create({
       run_id: runId,
       layers: layersSig,
       trigger,
@@ -249,7 +248,7 @@ export default async function auditRun(ctx) {
     });
 
     for (const f of findings) {
-      await db.entities.AuditFinding.create(f);
+      await svc.entities.AuditFinding.create(f);
     }
 
     // ---- roll-ups and diff --------------------------------------------------
@@ -260,7 +259,7 @@ export default async function auditRun(ctx) {
     let resolved = 0; for (const k of prevFailKeys) if (!nowFailKeys.has(k)) resolved++;
 
     const finishedMs = Date.now();
-    const updated = await db.entities.AuditRun.update(runRecord.id, {
+    const updated = await svc.entities.AuditRun.update(runRecord.id, {
       status: 'completed',
       finished_at: new Date(finishedMs).toISOString(),
       duration_ms: finishedMs - startedAtMs,
@@ -273,7 +272,7 @@ export default async function auditRun(ctx) {
       resolved_since_previous: resolved,
     });
 
-    return {
+    return ctx.json({
       ok: true,
       run_id: runId,
       run: updated,
@@ -282,8 +281,9 @@ export default async function auditRun(ctx) {
         warn: count('warn'), needs_env: count('needs_env'),
         new_failures: newFailures, resolved_since_previous: resolved,
       },
-    };
+    }, 200);
   } catch (error) {
+    if (error instanceof HttpError) throw error;
     return ctx.json({ error: error.message }, 500);
   }
 }

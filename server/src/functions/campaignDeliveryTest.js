@@ -1,4 +1,4 @@
-import { requireUser, HttpError } from './_runtime.js';
+import { requireUser } from './_runtime.js';
 import * as engine from './routingEngine.generated.js';
 
 // Caller model: OPERATOR-ONLY. Live outbound test of a single SubDelivery endpoint.
@@ -19,12 +19,12 @@ import * as engine from './routingEngine.generated.js';
 // from the browser, never logged, and never returned in the response.
 
 // Resolve credential_ref -> real auth headers from server-side secret storage.
-// NEEDS-ENV: wired to the deployment secret store. Returns {} when unavailable so
-// the test still runs (unauthenticated) rather than leaking or crashing.
-async function resolveCredential(svc, ref) {
+// Wired to the deployment secret store. Returns {} when unavailable so the test
+// still runs (unauthenticated) rather than leaking or crashing.
+async function resolveCredential(db, ref) {
   if (!ref) return {};
   try {
-    const rows = await svc.entities.IntegrationConfig.filter({ key: ref });
+    const rows = await db.entities.IntegrationConfig.filter({ key: ref });
     const val = rows && rows[0] && rows[0].value;
     if (val && typeof val === 'string') return { Authorization: val };
   } catch { /* secret store not configured in this env */ }
@@ -32,15 +32,14 @@ async function resolveCredential(svc, ref) {
 }
 
 export default async function campaignDeliveryTest(ctx) {
+  const user = requireUser(ctx);
+  const db = ctx.db;
   try {
-    const user = requireUser(ctx);
-
-    const svc = ctx.db;
-    const record = await svc.entities.User.get(user.id).catch(() => null);
+    const record = await db.entities.User.get(user.id).catch(() => null);
     if (!engine.isOperator(record || user)) return ctx.json({ error: 'Forbidden' }, 403);
 
     // Mode gate: live tests are disabled unless distribution is past legacy_only.
-    const settingsArr = await svc.entities.AppSettings.list();
+    const settingsArr = await db.entities.AppSettings.list();
     const mode = String((settingsArr[0] && settingsArr[0].distribution_mode) || 'legacy_only');
     if (mode === 'legacy_only') {
       return ctx.json({ ok: false, error: 'Live delivery tests are disabled while distribution_mode is legacy_only.' }, 409);
@@ -53,13 +52,13 @@ export default async function campaignDeliveryTest(ctx) {
     const subId = String(body.sub_delivery_id || '');
     if (!subId) return ctx.json({ ok: false, error: 'sub_delivery_id required' }, 400);
 
-    const sd = await svc.entities.SubDelivery.get(subId).catch(() => null);
+    const sd = await db.entities.SubDelivery.get(subId).catch(() => null);
     if (!sd) return ctx.json({ ok: false, error: 'sub-delivery not found' }, 404);
-    const parent = await svc.entities.Delivery.get(sd.delivery_id).catch(() => null);
+    const parent = await db.entities.Delivery.get(sd.delivery_id).catch(() => null);
 
     // Audit the live test BEFORE sending.
     const nowIso = new Date().toISOString();
-    await svc.entities.DistributionAudit.create({
+    await db.entities.DistributionAudit.create({
       action: 'delivery_live_test', entity_type: 'SubDelivery', entity_id: subId,
       to_value: sd.target_url || '', reason: String(body.reason || 'operator live test'),
       actor_id: user.id, created_at: nowIso,
@@ -75,22 +74,23 @@ export default async function campaignDeliveryTest(ctx) {
         isPrimary: false, trigger: 'operator_test',
       },
       {
-        store: svc.entities.DeliveryAttempt
-          ? engine.makePersistentAttemptStore(svc)
+        store: db.entities.DeliveryAttempt
+          ? engine.makeDbAttemptStore(db)
           : engine.makeInMemoryAttemptStore(),
         nowMs: Date.parse(nowIso), fetchImpl: globalThis.fetch, testMode: false,
-        resolveCredential: (ref) => resolveCredential(svc, ref),
+        resolveCredential: (ref) => resolveCredential(db, ref),
       },
     );
 
     // Return ONLY a masked outcome. Never echo credentials or the raw request.
     return {
       ok: true, mode, buyer_id: parent ? parent.buyer_id : null,
-      result: { status: result.status, http_status: result.httpStatus, revenue: result.revenue,
-        buyer_lead_id: result.buyerLeadId, error_class: result.errorClass || null },
+      result: {
+        status: result.status, http_status: result.httpStatus, revenue: result.revenue,
+        buyer_lead_id: result.buyerLeadId, error_class: result.errorClass || null,
+      },
     };
   } catch (error) {
-    if (error instanceof HttpError) throw error;
     return ctx.json({ error: error.message }, 500);
   }
 }

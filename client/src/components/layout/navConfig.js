@@ -1,4 +1,4 @@
-import { LayoutDashboard, FileText, Share2, Wrench, Settings as SettingsIcon, BarChart3, Wallet, SlidersHorizontal, Megaphone, CheckCircle2, XCircle, Ban, Slash, Clock, Layers, Users, Truck, Zap, Webhook, TrendingUp, CalendarDays, Target, DollarSign, PieChart, UserCheck, Building2, Landmark, Receipt, CreditCard, HandCoins, BadgeDollarSign, Cog, Gauge, MapPin, FileBarChart, UserPlus, Bell, Calculator, ShieldCheck, FlaskConical, User, Plug, Database, ListTree, KeyRound, AlertTriangle, BookOpen, Wallet2, LineChart, ImageIcon, PenTool, ClipboardCheck, Sparkles, Activity, ArrowRightLeft, GitPullRequest, Trophy } from 'lucide-react';
+import { LayoutDashboard, FileText, Share2, Wrench, Settings as SettingsIcon, BarChart3, Wallet, SlidersHorizontal, Megaphone, CheckCircle2, XCircle, Ban, Slash, Clock, Layers, Users, Truck, Zap, Webhook, TrendingUp, CalendarDays, Target, DollarSign, PieChart, UserCheck, Building2, Landmark, Receipt, CreditCard, HandCoins, BadgeDollarSign, Cog, Gauge, MapPin, FileBarChart, UserPlus, Bell, Calculator, ShieldCheck, FlaskConical, User, Plug, Database, ListTree, KeyRound, AlertTriangle, BookOpen, Wallet2, LineChart, ImageIcon, PenTool, ClipboardCheck, Sparkles, Activity, ArrowRightLeft, GitPullRequest, Trophy, PhoneCall } from 'lucide-react';
 
 export const navGroups = [
   { label: 'Overview', icon: LayoutDashboard, path: '/', type: 'single', permKey: 'overview' },
@@ -11,6 +11,18 @@ export const navGroups = [
       { label: 'Rejected Leads', path: '/leads/rejected', icon: Slash, permKey: 'leads_rejected' },
       { label: 'Queued Leads', path: '/leads/queued', icon: Clock, permKey: 'leads_queued' },
       { label: 'Converted Leads', path: '/leads/converted', icon: Trophy, permKey: 'leads_converted' },
+    ],
+  },
+  {
+    // Calls are CallRecords, not leads, so they get their own section rather
+    // than a tab inside Leads. Gated on leads_all: anyone who can see leads
+    // can see calls, which avoids inventing a permission key that no existing
+    // user has stored yet.
+    label: 'Calls', icon: PhoneCall, type: 'dropdown', path: '/calls', permKey: 'leads_all',
+    children: [
+      { label: 'All Calls', path: '/calls', icon: PhoneCall, permKey: 'leads_all' },
+      { label: 'Converted Calls', path: '/calls/converted', icon: Trophy, permKey: 'leads_all' },
+      { label: 'Rejected Calls', path: '/calls/rejected', icon: Slash, permKey: 'leads_all' },
     ],
   },
   {

@@ -93,10 +93,10 @@ cat > "$SYNC_PLIST" <<PLIST
   </dict>
   <key>StartInterval</key><integer>3600</integer>
   <key>RunAtLoad</key><false/>
-  <!-- Must differ from the file sync.mjs appends to (sync.log); launchd opening
-       the same path the process also opens fails the job with EX_CONFIG. -->
-  <key>StandardOutPath</key><string>$ROOT/sync/state/sync-run.log</string>
-  <key>StandardErrorPath</key><string>$ROOT/sync/state/sync-run.log</string>
+  <!-- No StandardOut/ErrorPath on purpose: launchd failing to (re)open a fixed
+       log file was the recurring EX_CONFIG(78) cause that silently killed this
+       agent. sync.mjs writes its own log to sync/state/sync.log, so nothing is
+       lost. Do NOT add StandardOutPath back here. -->
 </dict>
 </plist>
 PLIST

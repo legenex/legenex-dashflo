@@ -8,13 +8,14 @@ import { Switch } from '@/components/ui/switch';
 import { SearchableSelect } from '@/components/ui/searchable-select';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
-import { Loader2, Sparkles, Check, ArrowLeft, FileSpreadsheet, Link2, List, FolderOpen, Plus, X, Wand2 } from 'lucide-react';
+import { Loader2, Sparkles, Check, ArrowLeft, FileSpreadsheet, Link2, List, FolderOpen, Wand2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { pickSpreadsheet as openGooglePicker } from '@/lib/googlePicker';
 import { useGooglePickerConfig } from '@/components/settings/GooglePickerSettings';
 import { CORE_LEAD_FIELDS, IGNORE } from '@/components/settings/leadSourceFields';
 import { SHEET_PURPOSES, MATCH_FIELDS, purposeMeta } from '@/components/settings/dataSourcePurposes';
 import MappingReviewTable from '@/components/settings/MappingReviewTable';
+import SupplierRulesEditor from '@/components/settings/SupplierRulesEditor';
 
 // Extract a spreadsheet ID from a full Google Sheets URL or return the raw ID.
 function extractSheetId(input) {
@@ -654,6 +655,17 @@ export default function SheetSourceDialog({ open, onOpenChange, source, onSaved 
                   </p>
                 </div>
                 <Switch checked={cfg.create_leads === true} onCheckedChange={(v) => setCfg((p) => ({ ...p, create_leads: v }))} />
+              </div>
+            )}
+
+            {(form.purpose === 'inbound_calls' || form.purpose === 'call_attribution') && (
+              <div className="rounded-lg border border-border bg-card p-4">
+                <SupplierRulesEditor
+                  value={cfg.supplier_rules}
+                  onChange={(v) => setCfg((p) => ({ ...p, supplier_rules: v }))}
+                  fieldOptions={columns.map((c) => ({ value: c, label: c }))}
+                  description="The sheet names the traffic its own way, e.g. a Publisher column reading CHECK-A-CASE-MVA, which is not our sid. Translate it into a supplier source here. A call matched to a known lead on its number always wins over a rule; rules only fill in what the row leaves blank."
+                />
               </div>
             )}
 

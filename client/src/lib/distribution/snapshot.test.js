@@ -90,8 +90,15 @@ describe('buildRoutingSnapshot -> engine (Phase 3 required fixtures)', () => {
     expect(decide(s).trace[0].candidates[0].reason).toBe(REASON.CAP_DAILY);
   });
 
-  it('low prepaid balance -> LOW_BALANCE', () => {
+  // Balance gating is opt-in (12 Aug 2026): without an explicit credit_limit an
+  // underfunded prepay buyer is still eligible and is billed downstream.
+  it('low prepaid balance and NO credit limit -> still ELIGIBLE', () => {
     const s = snap({ members: [member({ fixed_price: 50 })], buyers: [buyer({ prepay_balance: 10 })] });
+    expect(decide(s).trace[0].candidates[0].reason).toBe(REASON.ELIGIBLE);
+  });
+
+  it('low prepaid balance WITH a credit limit -> LOW_BALANCE', () => {
+    const s = snap({ members: [member({ fixed_price: 50 })], buyers: [buyer({ prepay_balance: 10, credit_limit: 500 })] });
     expect(decide(s).trace[0].candidates[0].reason).toBe(REASON.LOW_BALANCE);
   });
 

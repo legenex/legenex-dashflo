@@ -78,6 +78,7 @@ function matchesSearch(lead, q) {
 // Permanent filter dropdown options shown above every leads table.
 const STATUS_FILTER_OPTIONS = [
   { value: 'Sold', label: 'Sold' },
+  { value: 'Converted', label: 'Converted' },
   { value: 'Qualified', label: 'Qualified' },
   { value: 'Disqualified', label: 'Disqualified' },
   { value: 'Unsold', label: 'Unsold' },

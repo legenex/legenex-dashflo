@@ -1,18 +1,47 @@
-import { requireUser } from './_runtime.js';
-import * as engine from './routingEngine.generated.js';
+import { requireUser, HttpError } from './_runtime.js';
 
-// Caller model: OPERATOR-ONLY. Audited distribution_mode transition. This is the
-// ONLY sanctioned way to change AppSettings.distribution_mode: it validates the
-// transition, writes a DistributionAudit record (who/when/from/to/reason), then
-// updates the setting. Authorization runs BEFORE any service-role access.
+// Operator-only, audited distribution_mode transition. This is the only
+// sanctioned way to change AppSettings.distribution_mode: it validates the
+// transition, writes a DistributionAudit record (who/when/from/to/reason),
+// then updates the setting. Authorization runs before any data mutation.
+
+// Known distribution modes for the routing engine, in rollout order.
+const DISTRIBUTION_MODES = ['legacy_only', 'shadow', 'canary', 'dual', 'new_only'];
+
+function isOperator(u) {
+  if (!u) return false;
+  if (u.role === 'admin') return true;
+  if (u.is_operator === true || u.operator === true) return true;
+  const appRole = String(u.app_role || u.dashboard_role || '').toLowerCase();
+  return appRole === 'operator' || appRole === 'admin';
+}
+
+function validateModeTransition(from, to) {
+  if (!to) return { valid: false, error: 'Missing target distribution_mode' };
+  if (!DISTRIBUTION_MODES.includes(to)) {
+    return { valid: false, error: `Unknown distribution_mode: ${to}` };
+  }
+  return { valid: true };
+}
+
+function buildModeAudit({ from, to, actorId, reason, nowMs }) {
+  return {
+    action: 'distribution_mode_change',
+    from_mode: from,
+    to_mode: to,
+    actor_id: actorId,
+    reason: reason || '',
+    changed_at: new Date(nowMs).toISOString(),
+  };
+}
 
 export default async function distributionSetMode(ctx) {
-  const user = requireUser(ctx);
-  const db = ctx.db;
-
   try {
+    const user = requireUser(ctx);
+    const db = ctx.db;
+
     const record = await db.entities.User.get(user.id).catch(() => null);
-    if (!engine.isOperator(record || user)) return ctx.json({ error: 'Forbidden' }, 403);
+    if (!isOperator(record || user)) return ctx.json({ error: 'Forbidden' }, 403);
 
     const body = ctx.body || {};
     const to = String(body.mode || '');
@@ -20,17 +49,18 @@ export default async function distributionSetMode(ctx) {
     const settings = settingsArr[0] || null;
     const from = String((settings && settings.distribution_mode) || 'legacy_only');
 
-    const check = engine.validateModeTransition(from, to);
+    const check = validateModeTransition(from, to);
     if (!check.valid) return ctx.json({ ok: false, error: check.error }, 400);
 
     const nowIso = new Date().toISOString();
     await db.entities.DistributionAudit.create(
-      engine.buildModeAudit({ from, to, actorId: user.id, reason: String(body.reason || ''), nowMs: Date.parse(nowIso) }),
+      buildModeAudit({ from, to, actorId: user.id, reason: String(body.reason || ''), nowMs: Date.parse(nowIso) }),
     );
     if (settings) await db.entities.AppSettings.update(settings.id, { distribution_mode: to });
     else await db.entities.AppSettings.create({ distribution_mode: to });
-    return ctx.json({ ok: true, from, to });
+    return { ok: true, from, to };
   } catch (error) {
+    if (error instanceof HttpError) throw error;
     return ctx.json({ error: error.message }, 500);
   }
 }

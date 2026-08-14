@@ -1,4 +1,8 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef } from 'react';
+import SettingsPullSources from '@/components/settings/SettingsPullSources';
+import SettingsOutboundWebhooks from '@/components/settings/SettingsOutboundWebhooks';
+import { useSupplierSourceOptions } from '@/hooks/useSupplierSourceOptions';
+import { optionValueForRule, optionValueForSupplierName, resolutionForOption, describeStoredPairing } from '@/lib/supplierSourceOptions';
 import { api } from '@/api/client';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
@@ -11,10 +15,11 @@ import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
-import { Plus, Copy, Trash2, Pencil, Webhook, KeyRound, X } from 'lucide-react';
+import { Plus, Copy, Trash2, Pencil, Webhook, KeyRound, X, ArrowDownLeft, ArrowUpRight } from 'lucide-react';
 import { format } from 'date-fns';
 import { toast } from 'sonner';
 import { WEBHOOK_PURPOSES, MATCH_FIELDS, purposeMeta } from '@/components/settings/dataSourcePurposes';
+import { webhookTypeClass } from '@/lib/tagColors';
 
 const WEBHOOK_FN_URL = 'https://api.legenex.com/functions/webhook';
 
@@ -39,7 +44,7 @@ const NO_SUPPLIER = '__none__';
 const AUTO_MATCH = '__auto__';
 
 const blankForm = {
-  name: '', event_type: DYNAMIC, api_key_id: '', supplier_name: NO_SUPPLIER, notes: '',
+  name: '', event_type: DYNAMIC, api_key_id: '', supplier_source: NO_SUPPLIER, notes: '',
   purpose: 'lead_outcome', match_field: AUTO_MATCH, match_key: '', date_key: '', field_map: [],
 };
 
@@ -74,6 +79,14 @@ export default function SettingsInboundWebhooks() {
   const qc = useQueryClient();
   const [modalOpen, setModalOpen] = useState(false);
   const [editingId, setEditingId] = useState(null);
+  const pullsRef = useRef(null);
+  const outboundRef = useRef(null);
+  // Creating a webhook starts by saying which direction it runs and how, then
+  // opens the form for that combination. Incoming and outbound are the same
+  // idea pointed opposite ways, so they share one list and one entry point.
+  const [chooserOpen, setChooserOpen] = useState(false);
+  const [chooseDirection, setChooseDirection] = useState('incoming');
+  const [chooseMethod, setChooseMethod] = useState('POST');
   const [form, setForm] = useState(blankForm);
   const [deleteTarget, setDeleteTarget] = useState(null);
 
@@ -85,11 +98,6 @@ export default function SettingsInboundWebhooks() {
   const { data: apiKeys = [] } = useQuery({
     queryKey: ['api-keys'],
     queryFn: () => api.entities.ApiKey.list('-created_date', 200),
-  });
-
-  const { data: suppliers = [] } = useQuery({
-    queryKey: ['suppliers-for-webhooks'],
-    queryFn: () => api.entities.Supplier.list('name', 200),
   });
 
   const keyById = useMemo(() => {
@@ -105,10 +113,21 @@ export default function SettingsInboundWebhooks() {
       label: `${k.name}${k.type === 'master' ? ' (master)' : ''} - ${k.key_prefix}`,
     })), [apiKeys]);
 
+  // Supplier sources, from the one shared list. A route pins to a source
+  // (sid + ssid together) rather than to a supplier name, so two routes for the
+  // same supplier can be told apart, e.g. CAC-CALLS against DS-CALLS.
+  const { options: sourceOptions, index: sourceIndex } = useSupplierSourceOptions();
   const supplierOptions = useMemo(() => [
     { value: NO_SUPPLIER, label: 'Match from sid on the payload' },
-    ...(suppliers || []).map((s) => ({ value: s.name, label: s.name })),
-  ], [suppliers]);
+    ...sourceOptions,
+  ], [sourceOptions]);
+
+  // A route saved before this was a picker, or one whose source was renamed,
+  // holds a pairing that matches nothing. Surface it rather than hide it.
+  const editingRoute = editingId ? (routes || []).find((r) => r.id === editingId) : null;
+  const unknownPin = (editingRoute && form.supplier_source === NO_SUPPLIER)
+    ? describeStoredPairing(editingRoute)
+    : '';
 
   const invalidate = () => qc.invalidateQueries({ queryKey: ['inbound-webhook-routes'] });
 
@@ -125,7 +144,9 @@ export default function SettingsInboundWebhooks() {
       name: route.name || '',
       event_type: route.event_type || DYNAMIC,
       api_key_id: route.api_key_id || '',
-      supplier_name: route.supplier_name || NO_SUPPLIER,
+      supplier_source: optionValueForRule(route, sourceIndex)
+        || optionValueForSupplierName(route.supplier_name, sourceIndex)
+        || NO_SUPPLIER,
       notes: route.notes || '',
       purpose: route.purpose || 'lead_outcome',
       match_field: route.match_field || AUTO_MATCH,
@@ -143,7 +164,9 @@ export default function SettingsInboundWebhooks() {
       event_type: form.event_type === DYNAMIC ? '' : form.event_type,
       api_key_id: form.api_key_id || '',
       api_key_name: key?.name || '',
-      supplier_name: form.supplier_name === NO_SUPPLIER ? '' : form.supplier_name,
+      ...(form.supplier_source === NO_SUPPLIER
+        ? { sid: '', ssid: '', supplier_name: '' }
+        : resolutionForOption(form.supplier_source, sourceIndex)),
       notes: form.notes.trim(),
       purpose: form.purpose || 'lead_outcome',
       match_field: form.match_field === AUTO_MATCH ? '' : form.match_field,
@@ -199,7 +222,7 @@ export default function SettingsInboundWebhooks() {
       <div className="bg-card border border-border rounded-[10px] p-5 space-y-3">
         <div className="flex items-center gap-2">
           <Webhook className="w-4 h-4 text-primary" />
-          <div className="text-[12px] font-semibold text-muted-foreground uppercase tracking-wider">Inbound Webhooks</div>
+          <div className="text-[12px] font-semibold text-muted-foreground uppercase tracking-wider">Webhooks</div>
         </div>
         <p className="text-[13px] text-muted-foreground leading-relaxed">
           One endpoint takes posts from any platform that can send JSON: buyer dispositions, inbound call payouts, disqualifications, daily cost, or a Google Sheets Apps Script pushing rows. Each route says what it is for and which key identifies the lead. Authentication is an API key on the URL, so there are no per-webhook tokens to rotate: use the master key, or a supplier key to pin every payload to that supplier. The supplier is otherwise read from <code className="font-mono text-[12px] text-foreground">sid</code> on the payload. Leave Event blank and the status is read from <code className="font-mono text-[12px] text-foreground">lead_status</code>. A lead that is not in the system is created; one that matches is updated.
@@ -210,7 +233,7 @@ export default function SettingsInboundWebhooks() {
       </div>
 
       <div className="flex justify-end">
-        <Button size="sm" onClick={openCreate} className="gap-1.5"><Plus className="w-4 h-4" /> Create Webhook</Button>
+        <Button size="sm" onClick={() => setChooserOpen(true)} className="gap-1.5"><Plus className="w-4 h-4" /> Create Webhook</Button>
       </div>
 
       {/* Webhooks table */}
@@ -219,20 +242,25 @@ export default function SettingsInboundWebhooks() {
         <table className="w-full min-w-[860px] text-[13px]">
           <thead>
             <tr className="border-b border-border bg-muted/50">
-              {['Name', 'Purpose', 'Event', 'Match', 'API Key', 'Supplier', 'Enabled', 'Last Received', 'Receipts', 'Errors', 'Actions'].map((h) => (
+              {['Name', 'Type', 'Purpose', 'Event', 'Match', 'API Key / Secret', 'Supplier', 'Enabled', 'Last Received', 'Receipts', 'Errors', 'Actions'].map((h) => (
                 <th key={h} className="text-left px-4 py-3 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider whitespace-nowrap">{h}</th>
               ))}
             </tr>
           </thead>
           <tbody className="divide-y divide-border">
             {routes.length === 0 && (
-              <tr><td colSpan={11} className="px-4 py-8 text-center text-muted-foreground">No inbound webhooks yet</td></tr>
+              <tr><td colSpan={12} className="px-4 py-8 text-center text-muted-foreground">No webhooks yet</td></tr>
             )}
             {routes.map((r) => {
               const key = keyById[r.api_key_id];
               return (
               <tr key={r.id} className="hover:bg-accent/40 transition-colors">
-                <td className="px-4 py-3 font-medium text-foreground">{r.name || '-'}</td>
+                <td className="px-4 py-3 font-medium text-foreground whitespace-nowrap">{r.name || '-'}</td>
+                <td className="px-4 py-3 text-[12px]">
+                  <span className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-1 text-[11px] font-medium ${webhookTypeClass('incoming_post')}`}>
+                    <ArrowDownLeft className="w-3 h-3" /> Incoming POST
+                  </span>
+                </td>
                 <td className="px-4 py-3 text-[12px]">
                   <span className="inline-flex items-center rounded-full border border-border bg-card px-2.5 py-1 text-[11px] font-medium text-muted-foreground">
                     {purposeMeta(WEBHOOK_PURPOSES, r.purpose || 'lead_outcome').label}
@@ -255,7 +283,11 @@ export default function SettingsInboundWebhooks() {
                     )
                     : <span className="text-muted-foreground">unassigned</span>}
                 </td>
-                <td className="px-4 py-3 text-[12px] text-muted-foreground">{r.supplier_name || 'from sid'}</td>
+                <td className="px-4 py-3 text-[12px] text-muted-foreground">
+                  {r.ssid || r.sid || r.supplier_name
+                    ? <span className="font-mono text-[11px] text-foreground">{describeStoredPairing(r)}</span>
+                    : 'from sid'}
+                </td>
                 <td className="px-4 py-3">
                   <Switch checked={!!r.enabled} onCheckedChange={() => toggleEnabled(r)} />
                 </td>
@@ -285,6 +317,12 @@ export default function SettingsInboundWebhooks() {
               </tr>
               );
             })}
+            {/* Outbound GET rows share this table: still a webhook, just on
+                our clock rather than the sender's. */}
+            <SettingsPullSources ref={pullsRef} />
+            {/* We post out to another platform. Not buyer lead delivery: that
+                runs through Lead Distribution. */}
+            <SettingsOutboundWebhooks ref={outboundRef} />
           </tbody>
         </table>
         </div>
@@ -416,13 +454,20 @@ export default function SettingsInboundWebhooks() {
               </p>
             </div>
             <div>
-              <Label className="text-[12px]">Supplier</Label>
+              <Label className="text-[12px]">Supplier source</Label>
               <SearchableSelect
-                value={form.supplier_name}
-                onValueChange={(v) => setForm((p) => ({ ...p, supplier_name: v }))}
+                value={form.supplier_source}
+                onValueChange={(v) => setForm((p) => ({ ...p, supplier_source: v }))}
                 className="mt-1 bg-background"
                 options={supplierOptions}
+                emptyText="No supplier sources. Create them in Operations, Suppliers."
               />
+              <p className="text-[11px] text-muted-foreground mt-1">
+                Pins this route to one source when the sender posts nothing of its own. A payload sid or ssid wins.
+                {unknownPin && (
+                  <span className="status-unsold"> Set to {unknownPin}, which matches no current source.</span>
+                )}
+              </p>
             </div>
             <div>
               <Label className="text-[12px]">Notes</Label>
@@ -433,6 +478,113 @@ export default function SettingsInboundWebhooks() {
             <Button variant="ghost" onClick={() => { setModalOpen(false); setEditingId(null); }}>Cancel</Button>
             <Button onClick={handleSave} disabled={!form.name.trim() || !form.api_key_id}>
               {editingId ? 'Save Changes' : 'Create Webhook'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Step one of creating a webhook: which way the DATA travels, and how
+          it moves. Incoming covers both a platform posting to us and us going
+          and fetching on a schedule: either way data ends up in the system. */}
+      <Dialog open={chooserOpen} onOpenChange={setChooserOpen}>
+        <DialogContent className="max-w-[560px] bg-popover border-border">
+          <DialogHeader>
+            <DialogTitle>Create Webhook</DialogTitle>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label className="text-[12px]">Direction</Label>
+              <div className="grid grid-cols-2 gap-2">
+                {[
+                  { value: 'incoming', icon: ArrowDownLeft, title: 'Incoming', blurb: 'Data comes into the system, whether a platform sends it or we fetch it.' },
+                  { value: 'outbound', icon: ArrowUpRight, title: 'Outbound', blurb: 'We send data out of the system to another platform.' },
+                ].map((opt) => {
+                  const Icon = opt.icon;
+                  const active = chooseDirection === opt.value;
+                  return (
+                    <button
+                      key={opt.value}
+                      type="button"
+                      onClick={() => {
+                        setChooseDirection(opt.value);
+                        setChooseMethod('POST');
+                      }}
+                      className={`text-left rounded-lg border p-3 transition-colors ${active ? 'border-primary bg-primary/10' : 'border-border bg-card hover:bg-accent/40'}`}
+                    >
+                      <div className={`flex items-center gap-1.5 text-[13px] font-medium ${active ? 'text-primary' : 'text-foreground'}`}>
+                        <Icon className="w-3.5 h-3.5" /> {opt.title}
+                      </div>
+                      <div className="text-[11px] text-muted-foreground mt-1">{opt.blurb}</div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <Label className="text-[12px]">Method</Label>
+              <div className="grid grid-cols-2 gap-2">
+                {[
+                  {
+                    value: 'POST',
+                    blurb: chooseDirection === 'incoming'
+                      ? 'A platform posts to our endpoint'
+                      : 'We post a payload to their endpoint',
+                  },
+                  {
+                    value: 'GET',
+                    blurb: chooseDirection === 'incoming'
+                      ? 'We fetch from their API on a schedule'
+                      : 'Not a webhook, see the API docs',
+                  },
+                ].map((opt) => {
+                  const active = chooseMethod === opt.value;
+                  return (
+                    <button
+                      key={opt.value}
+                      type="button"
+                      onClick={() => setChooseMethod(opt.value)}
+                      className={`text-left rounded-lg border px-3 py-2 transition-colors ${active ? 'border-primary bg-primary/10' : 'border-border bg-card hover:bg-accent/40'}`}
+                    >
+                      <div className={`text-[13px] font-mono ${active ? 'text-primary' : 'text-muted-foreground'}`}>{opt.value}</div>
+                      <div className="text-[11px] text-muted-foreground mt-0.5">{opt.blurb}</div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Outbound GET is not a thing to configure: that is another system
+                reading our API, which is documentation rather than setup. */}
+            {chooseDirection === 'outbound' && chooseMethod === 'GET' && (
+              <div className="rounded-lg border border-border bg-card px-3 py-2.5 text-[12px] text-muted-foreground">
+                There is nothing to set up here. Another system reading data out of us uses our API, which is covered
+                by the API documentation, not by a webhook.
+              </div>
+            )}
+            {chooseDirection === 'outbound' && chooseMethod === 'POST' && (
+              <div className="rounded-lg border border-border bg-card px-3 py-2.5 text-[12px] text-muted-foreground">
+                For notifications and integrations. Delivering leads to buyers runs through Lead Distribution, which
+                owns caps, reservations and the wallet ledger, so do not rebuild that here.
+              </div>
+            )}
+          </div>
+
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setChooserOpen(false)}>Cancel</Button>
+            <Button
+              disabled={chooseDirection === 'outbound' && chooseMethod === 'GET'}
+              onClick={() => {
+                setChooserOpen(false);
+                // Both incoming kinds land data in the system. POST waits for a
+                // sender; GET goes and fetches on a schedule.
+                if (chooseDirection === 'outbound') outboundRef.current?.openCreate();
+                else if (chooseMethod === 'GET') pullsRef.current?.openCreate();
+                else openCreate();
+              }}
+            >
+              Continue
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -453,6 +605,7 @@ export default function SettingsInboundWebhooks() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
     </div>
   );
 }

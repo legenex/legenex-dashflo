@@ -1,10 +1,10 @@
-import * as engine from './routingEngine.generated.js';
+import { requireUser } from './_runtime.js';
 
 // Caller model: OPERATOR-ONLY. Read-only shadow-comparison report. Pairs recent
 // legacy Lead outcomes with their RouteDecisionTrace records and returns the full
-// discrepancy taxonomy. Authorization runs BEFORE any service-role read. Rejected
-// if base_role is supplier or buyer, or if linked_buyer_id / linked_supplier_id is
-// set (portal accounts), or without an operator permission. Never writes anything.
+// discrepancy taxonomy. Authorization runs BEFORE any privileged read. Rejected if
+// base_role is supplier or buyer, or if linked_buyer_id / linked_supplier_id is set
+// (portal accounts), or without an operator permission. Never writes anything.
 
 const OPERATOR_PERMISSION_KEYS = ['leads', 'reports', 'overview', 'finances', 'distribution', 'operations'];
 
@@ -27,11 +27,15 @@ function legacyOutcome(lead) {
 }
 
 export default async function distributionShadowReport(ctx) {
+  const db = ctx.db;
+
+  // Authorization runs before any read; throws 401 when unauthenticated.
+  const user = requireUser(ctx);
+  if (!(await assertOperator(db, user))) return ctx.json({ error: 'Forbidden' }, 403);
+
   try {
-    const db = ctx.db;
-    const user = ctx.user;
-    if (!user) return ctx.json({ error: 'Unauthorized' }, 401);
-    if (!(await assertOperator(db, user))) return ctx.json({ error: 'Forbidden' }, 403);
+    // Shared generated routing engine (summarizeComparisons); loaded like the original.
+    const engine = await import('./routingEngine.generated.js');
 
     const body = ctx.body || {};
     const limit = Math.min(Number(body.limit) || 500, 2000);
@@ -61,7 +65,7 @@ export default async function distributionShadowReport(ctx) {
     }
 
     const summary = engine.summarizeComparisons(pairs);
-    return ctx.json({ summary, sample_size: pairs.length });
+    return { summary, sample_size: pairs.length };
   } catch (error) {
     return ctx.json({ error: error.message }, 500);
   }

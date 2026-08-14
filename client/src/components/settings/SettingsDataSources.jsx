@@ -56,7 +56,7 @@ const VIEWS = {
   sheets: { title: 'Google Sheets', subtitle: 'Connected spreadsheets and what each one is for.' },
   csv: { title: 'CSV and Excel Import', subtitle: 'One-off uploads, repair and duplicate scanning.' },
   calls: { title: 'Call Platforms', subtitle: 'Ringba and TrueCall inbound call webhooks.' },
-  webhooks: { title: 'Inbound Webhooks', subtitle: 'Outcome, feedback and cost posts from any platform.' },
+  webhooks: { title: 'Webhooks', subtitle: 'Posts we receive, and pulls we make on a schedule.' },
   suppliers: { title: 'Suppliers', subtitle: 'Who sends leads, and how they are identified.' },
 };
 
@@ -159,7 +159,7 @@ export default function SettingsDataSources() {
         />
         <SourceTile
           icon={Webhook}
-          title="Inbound Webhooks"
+          title="Webhooks"
           description="Buyer dispositions, call payouts and cost posts from any platform that sends JSON."
           status={counts.routes === 0 ? 'idle' : 'ok'}
           stats={[

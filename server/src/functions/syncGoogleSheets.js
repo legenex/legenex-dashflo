@@ -1,4 +1,4 @@
-import processLead from './processLead.js';
+import { resolveSupplier, applySupplierResolution } from './supplierRules.generated.js';
 
 // Google Sheets data source sync.
 //
@@ -24,9 +24,6 @@ import processLead from './processLead.js';
 
 const ROW_BUDGET = 300; // new rows processed per run, so one big sheet cannot stall the queue
 
-const SHEETS_SCOPE = 'https://www.googleapis.com/auth/spreadsheets.readonly';
-const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.readonly';
-
 async function sha256Hex(message) {
   const buf = new TextEncoder().encode(message);
   const hash = await crypto.subtle.digest('SHA-256', buf);
@@ -45,89 +42,119 @@ function parseJsonObject(val) {
   try { const p = JSON.parse(val); return p && typeof p === 'object' ? p : {}; } catch { return {}; }
 }
 
-// URL-safe base64 without padding, for the JWT segments and signature.
-function base64UrlFromString(str) {
+// ---------------------------------------------------------------------------
+// Google authentication. The token for the connected Google account is read
+// from the integration config (or the environment). When only a service
+// account is configured, an access token is minted on demand with the JWT
+// bearer grant. Every failure path returns null so a missing or broken
+// credential degrades gracefully rather than crashing the sync.
+// ---------------------------------------------------------------------------
+
+let _serviceToken = null; // { token, exp } cached across calls in this process
+
+function b64url(str) {
   return btoa(str).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
-function base64UrlFromBytes(bytes) {
+function bufToB64url(buf) {
+  const bytes = new Uint8Array(buf);
   let bin = '';
-  for (const b of bytes) bin += String.fromCharCode(b);
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
   return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
-async function importPrivateKey(pem) {
-  const normalized = String(pem).replace(/\\n/g, '\n');
-  const body = normalized
-    .replace('-----BEGIN PRIVATE KEY-----', '')
-    .replace('-----END PRIVATE KEY-----', '')
+function pemToArrayBuffer(pem) {
+  const b64 = String(pem)
+    .replace(/-----BEGIN [^-]+-----/, '')
+    .replace(/-----END [^-]+-----/, '')
     .replace(/\s+/g, '');
-  const der = Uint8Array.from(atob(body), (c) => c.charCodeAt(0));
-  return crypto.subtle.importKey(
-    'pkcs8',
-    der.buffer,
-    { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
-    false,
-    ['sign'],
-  );
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out.buffer;
 }
 
-// Mint a Google OAuth access token for the given scope from the service account
-// credentials. Returns null when no credentials are configured, so callers can
-// degrade gracefully rather than crashing.
-async function getServiceAccountToken(ctx, scope) {
-  const integ = (ctx.config && ctx.config.integrations) || {};
-  const clientEmail = integ.googleClientEmail || (ctx.env && ctx.env.GOOGLE_CLIENT_EMAIL);
-  const rawKey = integ.googlePrivateKey || (ctx.env && ctx.env.GOOGLE_PRIVATE_KEY);
-  if (!clientEmail || !rawKey) return null;
+async function serviceAccountToken(ctx) {
+  const integ = ctx.config?.integrations || {};
+  const clientEmail = integ.googleClientEmail || ctx.env?.GOOGLE_CLIENT_EMAIL;
+  let privateKey = integ.googlePrivateKey || ctx.env?.GOOGLE_PRIVATE_KEY;
+  if (!clientEmail || !privateKey) return null;
+  privateKey = String(privateKey).replace(/\\n/g, '\n');
 
-  const now = Math.floor(Date.now() / 1000);
-  const encHeader = base64UrlFromString(JSON.stringify({ alg: 'RS256', typ: 'JWT' }));
-  const encClaims = base64UrlFromString(JSON.stringify({
-    iss: clientEmail,
-    scope,
-    aud: 'https://oauth2.googleapis.com/token',
-    iat: now,
-    exp: now + 3600,
-  }));
-  const signingInput = `${encHeader}.${encClaims}`;
+  const nowSec = Math.floor(Date.now() / 1000);
+  if (_serviceToken && _serviceToken.exp - 60 > nowSec) return _serviceToken.token;
 
-  let jwt;
   try {
-    const key = await importPrivateKey(rawKey);
-    const sigBuf = await crypto.subtle.sign(
-      { name: 'RSASSA-PKCS1-v1_5' },
-      key,
-      new TextEncoder().encode(signingInput),
+    const header = b64url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }));
+    const claim = b64url(JSON.stringify({
+      iss: clientEmail,
+      scope: 'https://www.googleapis.com/auth/spreadsheets.readonly https://www.googleapis.com/auth/drive.readonly',
+      aud: 'https://oauth2.googleapis.com/token',
+      iat: nowSec,
+      exp: nowSec + 3600,
+    }));
+    const signingInput = `${header}.${claim}`;
+    const key = await crypto.subtle.importKey(
+      'pkcs8',
+      pemToArrayBuffer(privateKey),
+      { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
+      false,
+      ['sign'],
     );
-    jwt = `${signingInput}.${base64UrlFromBytes(new Uint8Array(sigBuf))}`;
+    const sig = await crypto.subtle.sign('RSASSA-PKCS1-v1_5', key, new TextEncoder().encode(signingInput));
+    const jwt = `${signingInput}.${bufToB64url(sig)}`;
+
+    const resp = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
+        assertion: jwt,
+      }),
+    });
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    if (!data.access_token) return null;
+    _serviceToken = { token: data.access_token, exp: nowSec + (data.expires_in || 3600) };
+    return _serviceToken.token;
   } catch {
     return null;
   }
-
-  const resp = await fetch('https://oauth2.googleapis.com/token', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({
-      grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
-      assertion: jwt,
-    }),
-  });
-  if (!resp.ok) return null;
-  const data = await resp.json();
-  return data.access_token || null;
 }
 
 async function googleToken(ctx) {
-  return getServiceAccountToken(ctx, SHEETS_SCOPE);
+  const integ = ctx.config?.integrations || {};
+  const direct = integ.googleSheetsToken || integ.googleAccessToken
+    || ctx.env?.GOOGLE_SHEETS_TOKEN || ctx.env?.GOOGLE_ACCESS_TOKEN;
+  if (direct) return direct;
+  return await serviceAccountToken(ctx);
 }
 
-// Listing files is a Drive call, not a Sheets one, and needs a Drive scope on
-// the service account. The token is minted with the Drive scope; `via` records
-// how the listing was authorised so a broken connection is visible in the panel.
+// Listing files is a Drive call, not a Sheets one, and Drive scopes are
+// restricted. A dedicated Drive token is preferred when one is configured; the
+// Sheets/service-account token is only a fallback for the case where it already
+// has Drive access.
 async function driveToken(ctx) {
-  const token = await getServiceAccountToken(ctx, DRIVE_SCOPE);
-  return { token, via: 'service_account' };
+  const integ = ctx.config?.integrations || {};
+  const drive = integ.googleDriveToken || integ.googleDriveAccessToken || ctx.env?.GOOGLE_DRIVE_TOKEN;
+  if (drive) return { token: drive, via: 'googledrive' };
+  const token = await googleToken(ctx);
+  return { token, via: 'googlesheets' };
+}
+
+// Ingest a lead row through the standalone lead pipeline. Loaded lazily so a
+// missing pipeline module surfaces as a per-row error rather than crashing sync.
+async function invokeProcessLead(ctx, payload) {
+  const { default: processLead } = await import('./processLead.js');
+  return await processLead({
+    body: payload,
+    user: ctx.user,
+    db: ctx.db,
+    env: ctx.env,
+    config: ctx.config,
+    req: ctx.req,
+    json: ctx.json,
+  });
 }
 
 // Convert a 2D value grid (first row = headers) into an array of row objects.
@@ -286,7 +313,7 @@ function applyCustomFields(lead, row, cfg, patch) {
 // Per-purpose row writers. Each returns 'written', 'skipped' or throws.
 // ---------------------------------------------------------------------------
 
-async function writeLeadRow(db, ctx, source, row, mapping, dryRun) {
+async function writeLeadRow(ctx, source, row, mapping, dryRun) {
   const leadPayload = {};
   for (const [col, field] of Object.entries(mapping)) {
     if (!field || field === '__ignore__') continue;
@@ -297,7 +324,7 @@ async function writeLeadRow(db, ctx, source, row, mapping, dryRun) {
   if (source.campaign_id) leadPayload.campaign_id = source.campaign_id;
   leadPayload._supplier_key = source._supplier_key;
   if (dryRun) return 'written';
-  await processLead({ ...ctx, body: leadPayload });
+  await invokeProcessLead(ctx, leadPayload);
   return 'written';
 }
 
@@ -377,9 +404,10 @@ async function writeDisqualifiedRow(db, source, row, mapping, cfg, dryRun) {
   return 'written';
 }
 
-async function writeCallRow(db, ctx, source, row, mapping, cfg, dryRun) {
+async function writeCallRow(ctx, source, row, mapping, cfg, dryRun) {
+  const db = ctx.db;
   // A call sheet may simply be a lead feed wearing a different hat.
-  if (cfg.create_leads === true) return await writeLeadRow(db, ctx, source, row, mapping, dryRun);
+  if (cfg.create_leads === true) return await writeLeadRow(ctx, source, row, mapping, dryRun);
 
   const rawMobile = cfg.mobile_column ? row[cfg.mobile_column]
     : (source.match_column ? row[source.match_column] : undefined);
@@ -442,6 +470,17 @@ async function writeCallRow(db, ctx, source, row, mapping, cfg, dryRun) {
     custom_fields: Object.keys(custom).length ? JSON.stringify(custom) : undefined,
   };
 
+  // Supplier attribution rules. The sheet names the traffic its own way, e.g. a
+  // Publisher column reading CHECK-A-CASE-MVA, which is not our sid. The rules
+  // are the operator's translation table and run against the RAW row, so they
+  // can read any column whether or not it was mapped above. A lead matched on
+  // the number always wins, because that is a real join rather than a rule.
+  const resolved = resolveSupplier(row, cfg.supplier_rules);
+  Object.assign(record, applySupplierResolution(record, resolved));
+  if (!leadRef && resolved.matched && (resolved.sid || resolved.supplier_name)) {
+    record.attribution_status = 'matched_feed';
+  }
+
   // Upsert on the platform's own call id when there is one, so a sheet that is
   // re-read with updated commission updates the call rather than duplicating it.
   let existing = null;
@@ -463,7 +502,14 @@ async function writeCallAttributionRow(db, source, row, cfg, dryRun) {
 
   const sid = cfg.sid_column ? String(row[cfg.sid_column] || '').trim() : '';
   const ssid = cfg.ssid_column ? String(row[cfg.ssid_column] || '').trim() : '';
-  if (!sid && !ssid) return 'skipped';
+
+  // When the feed carries no sid column of its own, the operator's rules can
+  // derive one from whatever the feed does name the traffic, e.g. a Publisher
+  // column reading CHECK-A-CASE-MVA. An explicit sid column always wins.
+  const resolved = resolveSupplier(row, cfg.supplier_rules);
+  const effectiveSid = sid || resolved.sid;
+  const effectiveSsid = ssid || resolved.ssid;
+  if (!effectiveSid && !effectiveSsid && !resolved.supplier_name) return 'skipped';
 
   const calls = await db.entities.CallRecord.filter({ mobile });
   const target = (Array.isArray(calls) ? calls : [])[0];
@@ -473,23 +519,23 @@ async function writeCallAttributionRow(db, source, row, cfg, dryRun) {
 
   // A sid is a supplier code, so resolve it to the supplier's real name the same
   // way the inbound webhook does rather than storing a raw code as a name.
-  let supplierName = target.supplier_name || '';
-  if (sid && !supplierName) {
+  let supplierName = target.supplier_name || resolved.supplier_name || '';
+  if (effectiveSid && !supplierName) {
     const sups = await db.entities.Supplier.list();
     const n = (v) => String(v ?? '').trim().toLowerCase();
-    const s = n(sid);
+    const s = n(effectiveSid);
     const hit = (Array.isArray(sups) ? sups : []).find((x) => {
       const name = n(x.name);
       const xsid = n(x.sid);
       if (xsid && s && xsid === s) return true;
       return name && s && (name === s || s.startsWith(name) || name.startsWith(s));
     });
-    supplierName = hit?.name || sid;
+    supplierName = hit?.name || effectiveSid;
   }
 
   await db.entities.CallRecord.update(target.id, {
-    sid: sid || target.sid || undefined,
-    ssid: ssid || target.ssid || undefined,
+    sid: effectiveSid || target.sid || undefined,
+    ssid: effectiveSsid || target.ssid || undefined,
     supplier_name: supplierName || undefined,
     attribution_status: 'matched_feed',
   });
@@ -523,7 +569,8 @@ async function writeCostRow(db, source, row, cfg, dryRun) {
 
 // ---------------------------------------------------------------------------
 
-async function syncOne(db, ctx, source, dryRun) {
+async function syncOne(ctx, source, dryRun) {
+  const db = ctx.db;
   const purpose = source.purpose || 'leads';
   const mapping = parseJsonObject(source.mapping);
   const cfg = parseJsonObject(source.purpose_config);
@@ -532,7 +579,6 @@ async function syncOne(db, ctx, source, dryRun) {
   const dedupeCol = source.dedupe_column || '';
 
   const token = await googleToken(ctx);
-  if (!token) throw new Error('Google Sheets is not configured');
   const data = await fetchValues(token, source.sheet_id, source.worksheet);
   let rows = gridToObjects(data.values || []);
 
@@ -562,10 +608,10 @@ async function syncOne(db, ctx, source, dryRun) {
       let result;
       if (purpose === 'buyer_feedback') result = await writeFeedbackRow(db, source, row, mapping, cfg, dryRun);
       else if (purpose === 'disqualified') result = await writeDisqualifiedRow(db, source, row, mapping, cfg, dryRun);
-      else if (purpose === 'inbound_calls') result = await writeCallRow(db, ctx, source, row, mapping, cfg, dryRun);
+      else if (purpose === 'inbound_calls') result = await writeCallRow(ctx, source, row, mapping, cfg, dryRun);
       else if (purpose === 'call_attribution') result = await writeCallAttributionRow(db, source, row, cfg, dryRun);
       else if (purpose === 'cost') result = await writeCostRow(db, source, row, cfg, dryRun);
-      else result = await writeLeadRow(db, ctx, source, row, mapping, dryRun);
+      else result = await writeLeadRow(ctx, source, row, mapping, dryRun);
 
       if (result === 'written') {
         counts.written++;
@@ -615,22 +661,25 @@ export default async function syncGoogleSheets(ctx) {
     // The panel shows this beside the sheets so a broken connection is visible
     // where it matters, not buried in the Integrations tab.
     if (body.account_status) {
-      const integ = (ctx.config && ctx.config.integrations) || {};
-      const account = integ.googleClientEmail || (ctx.env && ctx.env.GOOGLE_CLIENT_EMAIL) || null;
-      const token = await googleToken(ctx);
-      const connected = !!token;
-      if (!connected) {
-        return ctx.json({ connected: false, account, can_list: false, error: 'Google Sheets is not configured' });
+      let account = null;
+      let connected = false;
+      try {
+        const token = await googleToken(ctx);
+        connected = !!token;
+        const integ = ctx.config?.integrations || {};
+        account = integ.googleClientEmail || integ.googleAccount || ctx.env?.GOOGLE_CLIENT_EMAIL || null;
+      } catch (err) {
+        return ctx.json({ connected: false, can_list: false, error: err.message });
       }
       let canList = false;
       let listVia = null;
       try {
-        const { token: dtoken, via } = await driveToken(ctx);
-        if (dtoken) {
+        const { token, via } = await driveToken(ctx);
+        if (token) {
           const probe = await fetch(
             'https://www.googleapis.com/drive/v3/files?pageSize=1&fields=files(id)'
             + '&q=' + encodeURIComponent("mimeType='application/vnd.google-apps.spreadsheet' and trashed=false"),
-            { headers: { Authorization: `Bearer ${dtoken}` } },
+            { headers: { Authorization: `Bearer ${token}` } },
           );
           canList = probe.ok;
           if (probe.ok) listVia = via;
@@ -640,8 +689,8 @@ export default async function syncGoogleSheets(ctx) {
     }
 
     // List the spreadsheets in the connected Drive so the operator picks from a
-    // dropdown instead of pasting a URL. Needs a Drive scope on the service
-    // account; without it the caller falls back to pasting a link.
+    // dropdown instead of pasting a URL. Needs a Drive scope on the credential;
+    // without it the caller falls back to pasting a link.
     if (body.list_spreadsheets) {
       const { token, via } = await driveToken(ctx);
       if (!token) {
@@ -674,7 +723,7 @@ export default async function syncGoogleSheets(ctx) {
     // Tab names for a chosen spreadsheet.
     if (body.list_worksheets) {
       const token = await googleToken(ctx);
-      if (!token) return ctx.json({ error: 'Google Sheets is not configured' }, 400);
+      if (!token) return ctx.json({ error: 'Google is not configured' }, 400);
       const url = `https://sheets.googleapis.com/v4/spreadsheets/${body.sheet_id}?fields=properties.title,sheets.properties.title`;
       const resp = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
       if (!resp.ok) {
@@ -691,7 +740,7 @@ export default async function syncGoogleSheets(ctx) {
     // Header row, a sample row and a row count, for mapping setup.
     if (body.preview) {
       const token = await googleToken(ctx);
-      if (!token) return ctx.json({ error: 'Google Sheets is not configured' }, 400);
+      if (!token) return ctx.json({ error: 'Google is not configured' }, 400);
       let data;
       try {
         data = await fetchValues(token, body.sheet_id, body.worksheet);
@@ -749,7 +798,7 @@ export default async function syncGoogleSheets(ctx) {
       }
 
       try {
-        results.push(await syncOne(db, ctx, source, dryRun));
+        results.push(await syncOne(ctx, source, dryRun));
       } catch (err) {
         if (!dryRun) {
           await db.entities.LeadSource.update(source.id, {

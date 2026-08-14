@@ -72,7 +72,7 @@ function newGroup() {
 // Receives a group object (or legacy array) in `value` and always calls
 // onChange with a group OBJECT. All edits are immutable: the tree is rebuilt
 // by path, never mutated in place, never stringified.
-export default function CalcConditionGroupEditor({ value, onChange, fieldOptions = [] }) {
+export default function CalcConditionGroupEditor({ value, onChange, fieldOptions = [], valueOptionsFor }) {
   const root = normalizeCalcTree(value);
 
   const setAtPath = (node, path, updater) => {
@@ -100,13 +100,14 @@ export default function CalcConditionGroupEditor({ value, onChange, fieldOptions
       depth={0}
       isRoot
       fieldOptions={fieldOptions}
+      valueOptionsFor={valueOptionsFor}
       setAtPath={(p, updater) => onChange(setAtPath(root, p, updater))}
       setChildrenAtPath={setChildrenAtPath}
     />
   );
 }
 
-function ConditionGroup({ group, path, depth, isRoot, fieldOptions, setAtPath, setChildrenAtPath }) {
+function ConditionGroup({ group, path, depth, isRoot, fieldOptions, valueOptionsFor, setAtPath, setChildrenAtPath }) {
   const children = Array.isArray(group.children) ? group.children : [];
   // Cap the indent so deep trees do not run off the right edge (stop after depth 4).
   const indentClass = depth > 0 ? (depth <= 4 ? 'pl-3 border-l border-border' : 'border-l border-border') : '';
@@ -170,6 +171,7 @@ function ConditionGroup({ group, path, depth, isRoot, fieldOptions, setAtPath, s
                   depth={depth + 1}
                   isRoot={false}
                   fieldOptions={fieldOptions}
+                  valueOptionsFor={valueOptionsFor}
                   setAtPath={setAtPath}
                   setChildrenAtPath={setChildrenAtPath}
                 />
@@ -186,6 +188,7 @@ function ConditionGroup({ group, path, depth, isRoot, fieldOptions, setAtPath, s
               onClone={() => cloneChild(i)}
               onDelete={() => deleteChild(i)}
               fieldOptions={fieldOptions}
+              valueOptionsFor={valueOptionsFor}
             />
           )}
         </div>
@@ -204,7 +207,7 @@ function ConditionGroup({ group, path, depth, isRoot, fieldOptions, setAtPath, s
   );
 }
 
-function ConditionRow({ cond, onChange, onClone, onDelete, fieldOptions }) {
+function ConditionRow({ cond, onChange, onClone, onDelete, fieldOptions, valueOptionsFor }) {
   const fieldSelectOptions = (() => {
     const opts = fieldOptions.map((f) => (typeof f === 'string' ? { value: f, label: f } : { value: f.value, label: f.label }));
     // Ensure a stored field not in the option list still displays.
@@ -213,6 +216,16 @@ function ConditionRow({ cond, onChange, onClone, onDelete, fieldOptions }) {
   })();
 
   const valueDisabled = CALC_VALUE_LESS_OPS.includes(cond.operator);
+
+  // Some fields have a known, closed set of legitimate values: a sid is one of
+  // the supplier codes, an ssid is one of the supplier sources. Offering those
+  // rather than a text box is the difference between a condition that matches
+  // and one that silently never fires because of a typo.
+  const knownValues = valueOptionsFor ? valueOptionsFor(cond.field) : null;
+  const valueIsKnownSet = Array.isArray(knownValues) && knownValues.length > 0;
+  const valueOptions = valueIsKnownSet && cond.value && !knownValues.some((o) => o.value === cond.value)
+    ? [...knownValues, { value: cond.value, label: `${cond.value} (not a known value)` }]
+    : knownValues;
 
   return (
     <div className="grid grid-cols-[1fr_130px_1fr_36px_36px] gap-2 items-center">
@@ -231,13 +244,23 @@ function ConditionRow({ cond, onChange, onClone, onDelete, fieldOptions }) {
           ))}
         </SelectContent>
       </Select>
-      <Input
-        value={cond.value || ''}
-        onChange={(e) => onChange('value', e.target.value)}
-        placeholder="Value"
-        className="bg-background text-[12px] h-9"
-        disabled={valueDisabled}
-      />
+      {valueIsKnownSet && !valueDisabled ? (
+        <SearchableSelect
+          value={cond.value || ''}
+          onValueChange={(v) => onChange('value', v)}
+          options={valueOptions}
+          placeholder="Value…"
+          className="text-[12px] h-9"
+        />
+      ) : (
+        <Input
+          value={cond.value || ''}
+          onChange={(e) => onChange('value', e.target.value)}
+          placeholder="Value"
+          className="bg-background text-[12px] h-9"
+          disabled={valueDisabled}
+        />
+      )}
       <Button variant="ghost" size="sm" onClick={onClone} className="h-9 w-9 p-0"><Copy className="w-3.5 h-3.5" /></Button>
       <Button variant="ghost" size="sm" onClick={onDelete} className="h-9 w-9 p-0 text-destructive"><Trash2 className="w-3.5 h-3.5" /></Button>
     </div>

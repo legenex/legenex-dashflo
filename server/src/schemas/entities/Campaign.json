@@ -2,6 +2,10 @@
   "name": "Campaign",
   "type": "object",
   "properties": {
+    "campaign_id": {
+      "type": "string",
+      "description": "Additive. Short, operator-facing public code suppliers post as campaign_id to target this campaign (e.g. MVA, WC). Matched case-insensitively during campaign resolution, ahead of the vertical fallback. Distinct from the internal record id."
+    },
     "name": {
       "type": "string",
       "description": "Campaign display name. A campaign IS a vertical: the campaign name defines the vertical."

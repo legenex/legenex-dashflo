@@ -80,6 +80,14 @@
       "description": "Optional supplier attribution when the payload carries no sid. The sid on the payload always wins.",
       "type": "string"
     },
+    "sid": {
+      "description": "Optional supplier code this route is pinned to, taken from the chosen supplier source. Used only when the payload carries no sid of its own; the payload always wins.",
+      "type": "string"
+    },
+    "ssid": {
+      "description": "Optional supplier source code (SSID) this route is pinned to. Used only when the payload carries no ssid of its own; the payload always wins. Lets one supplier's routes be told apart, e.g. CAC-CALLS against DS-CALLS.",
+      "type": "string"
+    },
     "token_hash": {
       "description": "DEPRECATED. SHA-256 of the old per-route token. Retained so legacy leadbyteWebhook routes keep working during cutover.",
       "type": "string"

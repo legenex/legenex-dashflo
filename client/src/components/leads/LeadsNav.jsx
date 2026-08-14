@@ -1,6 +1,6 @@
 import React, { useMemo } from 'react';
 import { Link, useLocation, useSearchParams } from 'react-router-dom';
-import { List, CheckCircle2, XCircle, Ban, Slash, Clock, AlertTriangle, Trophy, PhoneCall } from 'lucide-react';
+import { List, CheckCircle2, XCircle, Ban, Slash, Clock, AlertTriangle, Trophy } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '@/api/client';
 import { differenceInHours } from 'date-fns';
@@ -16,8 +16,8 @@ const ITEMS = [
   { label: 'Rejected', path: '/leads/rejected', icon: Slash, view: 'rejected' },
   { label: 'Queued', path: '/leads/queued', icon: Clock, view: 'queued' },
   { label: 'Converted', path: '/leads/converted', icon: Trophy, view: 'converted' },
-  // Calls are CallRecords rather than leads, so they carry their own count.
-  { label: 'Calls', path: '/leads/calls', icon: PhoneCall, view: 'calls' },
+  // Calls are CallRecords rather than leads and now live in their own
+  // top-level Calls section, so they are no longer listed here.
 ];
 
 function matchesView(lead, view) {
@@ -76,11 +76,6 @@ export default function LeadsNav() {
     },
   });
 
-  const { data: calls = [] } = useQuery({
-    queryKey: ['call-records-count'],
-    queryFn: async () => (await api.entities.CallRecord.list('-call_at', 500)) || [],
-  });
-
   const counts = useMemo(() => {
     const { start, end } = resolvePeriod(period, customPeriod);
     const inWindow = leads.filter((l) => {
@@ -91,19 +86,11 @@ export default function LeadsNav() {
     });
     const c = {};
     for (const item of ITEMS) {
-      if (item.view === 'calls') continue;
       c[item.view] = inWindow.filter(l => matchesView(l, item.view)).length;
     }
-    c.calls = (calls || []).filter((call) => {
-      if (!start && !end) return true;
-      const inst = call.call_at ? new Date(call.call_at) : (call.created_date ? new Date(call.created_date) : null);
-      if (start && (!inst || inst < start)) return false;
-      if (end && (!inst || inst > end)) return false;
-      return true;
-    }).length;
     return c;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [leads, calls, period, customPeriod.from, customPeriod.to]);
+  }, [leads, period, customPeriod.from, customPeriod.to]);
 
   const queuedOld = useMemo(() => {
     const now = new Date();

@@ -86,6 +86,7 @@
         "leads",
         "buyer_feedback",
         "inbound_calls",
+        "call_attribution",
         "disqualified",
         "cost"
       ],

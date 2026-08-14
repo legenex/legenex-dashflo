@@ -71,7 +71,7 @@ export default function CampaignsList({ onCreate, onOpen }) {
     const q = search.trim().toLowerCase();
     return campaigns
       .filter((c) => {
-        if (q && !(c.name || '').toLowerCase().includes(q) && !(c.vertical || '').toLowerCase().includes(q)) return false;
+        if (q && !(c.name || '').toLowerCase().includes(q) && !(c.vertical || '').toLowerCase().includes(q) && !(c.campaign_id || '').toLowerCase().includes(q)) return false;
         if (statusFilter === 'active' && c.active === false) return false;
         if (statusFilter === 'disabled' && c.active !== false) return false;
         return true;
@@ -153,6 +153,7 @@ export default function CampaignsList({ onCreate, onOpen }) {
         <table className="w-full text-[13px]">
           <thead>
             <tr className="border-b border-border text-muted-foreground text-left">
+              <th className="px-3 py-2.5 font-medium whitespace-nowrap">Campaign ID</th>
               <th className="px-3 py-2.5 font-medium min-w-[200px]">Campaign Name</th>
               <th className="px-3 py-2.5 font-medium">Status</th>
               <th className="px-3 py-2.5 font-medium">Method</th>
@@ -161,14 +162,19 @@ export default function CampaignsList({ onCreate, onOpen }) {
             </tr>
           </thead>
           <tbody className="divide-y divide-border">
-            {isLoading && <tr><td colSpan={cols.length + 4} className="px-3 py-10 text-center text-muted-foreground"><Loader2 className="w-5 h-5 animate-spin mx-auto" /></td></tr>}
+            {isLoading && <tr><td colSpan={cols.length + 5} className="px-3 py-10 text-center text-muted-foreground"><Loader2 className="w-5 h-5 animate-spin mx-auto" /></td></tr>}
             {!isLoading && rows.length === 0 && (
-              <tr><td colSpan={cols.length + 4} className="px-3 py-12 text-center text-muted-foreground"><Megaphone className="w-7 h-7 mx-auto mb-2 opacity-50" />No campaigns yet. Create one to configure routing.</td></tr>
+              <tr><td colSpan={cols.length + 5} className="px-3 py-12 text-center text-muted-foreground"><Megaphone className="w-7 h-7 mx-auto mb-2 opacity-50" />No campaigns yet. Create one to configure routing.</td></tr>
             )}
             {rows.map(({ campaign: c, counts, m }) => {
               const active = c.active !== false;
               return (
                 <tr key={c.id} onClick={() => onOpen(c)} className="hover:bg-accent/30 cursor-pointer">
+                  <td className="px-3 py-2.5 font-mono text-[12px] whitespace-nowrap">
+                    {c.campaign_id
+                      ? <span className="text-foreground">{c.campaign_id}</span>
+                      : <span className="text-muted-foreground">--</span>}
+                  </td>
                   <td className="px-3 py-2.5">
                     <div className="font-medium truncate">{c.name || c.id}</div>
                     <div className="text-[11px] text-muted-foreground truncate">{verticalName(c.vertical)}</div>

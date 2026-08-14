@@ -129,6 +129,14 @@
       ],
       "default": "Processing"
     },
+    "lead_route": {
+      "type": "string",
+      "description": "Additive. The resolved processing route this lead took (standard, gateway, direct, data, event, queue, internal, test). Recorded for reporting and for reading shadow/canary comparisons; the live decision still comes from the inbound payload."
+    },
+    "campaign_id": {
+      "type": "string",
+      "description": "Additive. Internal Campaign record id this lead resolved to, from the posted campaign_id when supplied, otherwise matched on vertical. Empty when no campaign matched."
+    },
     "queue_reason": {
       "type": "string",
       "description": "Reason the lead was queued for manual handling"
