@@ -9,16 +9,34 @@ import { describe, it, expect, afterAll, beforeEach } from 'vitest';
 // never the application database. Connection is loopback only, which the
 // outbound network guard in vitest.setup.js permits.
 //
-// If no PostgreSQL is reachable the suite skips rather than failing, and says
-// so, because a machine without a database is not a broken build. A skipped
-// run is not evidence: see STATE.md, which records where this was proven.
+// The suite creates its own disposable database, so an absent database is not
+// a reason to skip. Only an unreachable PostgreSQL is, because a machine with
+// no database server at all is not a broken build. That distinction matters:
+// these fifteen tests are the only executed evidence for invariant 3, so a
+// skip that reads like a pass is worse than a failure.
+//
+// The application database is never touched. The suite refuses to run at all
+// unless it is connected to the disposable database by name, because every
+// test here begins by truncating the table it is about to use.
 
 const TEST_DB = 'dashflo_receipt_test';
+const MAINTENANCE_DB = 'postgres';
 
-process.env.PGHOST = process.env.PGHOST || '127.0.0.1';
-process.env.PGPORT = process.env.PGPORT_TEST || '5433';
-process.env.PGUSER = process.env.PGUSER || process.env.USER || 'postgres';
+// Databases this suite must never open, whatever the environment says.
+const FORBIDDEN_DATABASES = new Set(['dashos', 'postgres', 'template0', 'template1']);
+
+const PGHOST = process.env.PGHOST || '127.0.0.1';
+const PGPORT = process.env.PGPORT_TEST || '5433';
+const PGUSER = process.env.PGUSER || process.env.USER || 'postgres';
+
+process.env.PGHOST = PGHOST;
+process.env.PGPORT = PGPORT;
+process.env.PGUSER = PGUSER;
 process.env.PGDATABASE = TEST_DB;
+// A DATABASE_URL takes priority over the discrete PG vars in config.js, so any
+// inherited one would silently redirect this suite at whatever it names. It is
+// removed here, and the connected database is verified by name below in case a
+// later dotenv load puts one back.
 delete process.env.DATABASE_URL;
 
 // The availability probe has to run at module scope, not in beforeAll. Vitest
@@ -30,9 +48,47 @@ let receipts = null;
 let available = false;
 let skipReason = '';
 
+// Creates the disposable database if it is absent. Connects to the maintenance
+// database only long enough to issue CREATE DATABASE, and treats "already
+// exists" as success so concurrent runs do not race each other.
+async function ensureTestDatabaseExists() {
+  const pg = (await import('pg')).default;
+  const admin = new pg.Client({
+    host: PGHOST, port: Number(PGPORT), user: PGUSER, database: MAINTENANCE_DB,
+    password: process.env.PGPASSWORD || undefined,
+  });
+  await admin.connect();
+  try {
+    const { rows } = await admin.query('SELECT 1 FROM pg_database WHERE datname = $1', [TEST_DB]);
+    if (rows.length === 0) {
+      // TEST_DB is a literal in this file, not input, and an identifier cannot
+      // be parameterized. It is quoted so the statement is well formed.
+      await admin.query(`CREATE DATABASE "${TEST_DB}"`);
+      process.stderr.write(`\n[durableReceipt] created disposable database ${TEST_DB}\n`);
+    }
+  } catch (err) {
+    if (err.code !== '42P04') throw err; // duplicate_database, another run won
+  } finally {
+    await admin.end();
+  }
+}
+
 try {
+  await ensureTestDatabaseExists();
   ({ pool } = await import('../src/db/pool.js'));
-  await pool.query('SELECT 1');
+
+  // Prove what we are connected to before anything destructive runs. This is
+  // the guard that stops a stray DATABASE_URL or PGDATABASE from pointing the
+  // truncate in beforeEach at the real application database.
+  const { rows } = await pool.query('SELECT current_database() AS db');
+  const connected = rows[0].db;
+  if (connected !== TEST_DB || FORBIDDEN_DATABASES.has(connected)) {
+    throw new Error(
+      `Refusing to run: connected to "${connected}", expected the disposable "${TEST_DB}". `
+      + 'These tests truncate the table they use, so they never run against another database.',
+    );
+  }
+
   const { ensureReceiptSchema } = await import('../src/db/receiptSchema.js');
   await ensureReceiptSchema();
   receipts = await import('../src/lib/receipts.js');
@@ -42,8 +98,8 @@ try {
   available = false;
   process.stderr.write(
     `\n[durableReceipt] PostgreSQL not reachable, database tests SKIPPED. ${skipReason}\n`
-    + '[durableReceipt] Start PostgreSQL and create the disposable database to run them:\n'
-    + '[durableReceipt]   createdb -h 127.0.0.1 -p 5433 dashflo_receipt_test\n\n',
+    + `[durableReceipt] Expected a server on ${PGHOST}:${PGPORT}. The disposable database\n`
+    + `[durableReceipt] ${TEST_DB} is created automatically once one is reachable.\n\n`,
   );
 }
 
@@ -53,6 +109,21 @@ afterAll(async () => {
 
 beforeEach(async () => {
   if (available) await pool.query('TRUNCATE lead_receipts');
+});
+
+describe('the suite runs against a disposable database, never the application one', () => {
+  it('is connected to the disposable database, or has said why it is not', async () => {
+    if (!available) {
+      // Make the skip loud rather than silent. A run with no database is not
+      // evidence for invariant 3, and this assertion records that in the
+      // report instead of leaving fifteen quiet skips behind.
+      expect(skipReason, 'database unavailable and no reason captured').not.toBe('');
+      return;
+    }
+    const { rows } = await pool.query('SELECT current_database() AS db');
+    expect(rows[0].db).toBe(TEST_DB);
+    expect(FORBIDDEN_DATABASES.has(rows[0].db)).toBe(false);
+  });
 });
 
 const maybe = () => (available ? it : it.skip);
