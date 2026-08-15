@@ -706,6 +706,127 @@ REMAINING RISK: One real defect was found while exercising this against a
   and a Gate B packet built from it today would be incomplete.
 ```
 
+## Recovery session, 15 August 2026: branch landing, localhost, live URL
+
+### Recovered work that was nearly lost
+
+The local worktree at `/Users/nickallen/Documents/Projects/dashflo-cutover`
+carried four commits that existed nowhere else. Its `.git` file pointed at the
+deleted pre-rename path, so it presented as a broken record that the plan said
+to prune. It was not empty. `git worktree repair` restored it, and the branch
+`cutover-local` held `84a5798` (S4), `3c568d0` (I1 and I2), `bbf25a3` (R1 and
+C1) and `772589d` (Gate A negative control): 41 files and about 4450 lines,
+including `lib/apiKeys.js`, `lib/integrationConfig.js`, `lib/receipts.js`,
+`db/receiptSchema.js`, `lib/dnc.js`, `DncEntry.json`, `lib/buyerIdentity.js`,
+`lib/configRecovery.js` and seven test files.
+
+Protected three ways before any branch operation: the `cutover-local` ref, a
+`refs/backup/cutover-local-20260815` ref, and a verified bundle. The feature
+branch was then fast-forwarded onto that work, so nothing was recreated.
+
+LESSON: a worktree whose gitdir points at a renamed path looks prunable and is
+not. Prove emptiness with `git worktree repair` and `git status` before removing
+any record.
+
+### Branch landing
+
+- Landed `claude/dashflo-production-cutover-e1tgel` in the main folder.
+- `c247649`, `07bb061`, `00eeab1` confirmed ancestors, then fast-forwarded to
+  `772589d`.
+- Uncommitted `ToolsDashboard.jsx` preserved through the checkout, checksum
+  `6ddcc9f1` before and after. Still uncommitted, pending its own tested commit.
+- `npm ci` against the branch lockfile, not `npm install`.
+
+### Gate baseline
+
+`9157f73`: 60 test files, 686 passed, 15 skipped, loader 94 functions, lint,
+build, secret-scan and em-dash all PASS.
+
+The gate had been reporting `FAIL secret-scan` for a reason unrelated to
+secrets. `scripts/secret-scan.mjs` derived its root from
+`new URL(import.meta.url).pathname`, which keeps percent-encoding, so under a
+folder named "Legenex Dashflo" the cwd resolved to a `Legenex%20Dashflo` path
+that does not exist and every git call failed with `spawnSync git ENOENT`.
+Fixed with `fileURLToPath`, which `gate.mjs` already used.
+
+### Localhost restored, `519a01f`
+
+- Service identity is now `com.legenex.dashflo.server`, running from the
+  renamed folder, working directory verified.
+- `scripts/install-server-agent.sh` is the server-only path. Both
+  `install-scheduler.sh` and `uninstall-scheduler.sh` remain forbidden: the
+  first revives the mutating sync and updater, the second stops the API server.
+- Old `com.legenex.dashos.server.plist` renamed to `.disabled`, reversible, and
+  only after the replacement was proven serving.
+- `/` and `/api/health` both 200, verified across a stop and restart.
+- Title renders DashFlo.
+- Production startup now accepts plain http for loopback only. Non-loopback
+  hosts still require https, compared on parsed hostname so
+  `http://localhost.attacker.example` is refused.
+- Retired host fallbacks removed from executable code and routed through
+  `server/src/lib/urls.js` and `client/src/lib/urls.js`.
+  `server/test/retiredHosts.test.js` fails if one returns. Docs pages are not
+  exempt, because the curl example there is what suppliers copy.
+
+### Gate A evidence
+
+`com.legenex.dashos.sync` and `com.legenex.dashos.updater`: both report
+"Could not find service" and neither appears in `launchctl list`. They stopped
+at the rename, which is why this checkout fell 3 commits behind `origin/main`.
+No crontab, no `.github/workflows`, no other scheduler writes here. Residual
+risk: the plists still exist, so anyone running `install-scheduler.sh` revives
+them.
+
+### Base44 boundary
+
+No SDK dependency in any manifest, no runtime endpoint, no fetch. The 165
+`base44` strings in the bundle are all
+`client/src/lib/progress/backendSummary.json`, a stored snapshot of MVP function
+paths used for read-only porting progress. Observe-only, as required.
+
+## LIVE URL GATE: dashflo.co is not registered
+
+Phase D cannot proceed. This is a domain and hosting gate, not an engineering
+blocker, and no credential value is requested here.
+
+1. MISSING ACCESS: the domain `dashflo.co` does not exist. The .co registry
+   returns `DOMAIN NOT FOUND` for a direct query to `whois.registry.co`, and the
+   authoritative nameservers return no delegation. `dashflo.co`,
+   `api.dashflo.co`, `progress.dashflo.co` and `www.dashflo.co` all resolve to
+   nothing: no A record, no NS, no SOA. Separately, this machine has no Plesk
+   configuration, no deployment credentials, no CI workflow and no TLS
+   certificate for any dashflo.co host.
+2. HOSTS REQUIRING IT: `dashflo.co` (application), `api.dashflo.co` (lead
+   posting, webhooks, OAuth callbacks), `progress.dashflo.co` (Progress Control
+   Center), and optionally `www.dashflo.co` to redirect.
+3. RECOMMENDED ACTION: register `dashflo.co`, then create A records for the
+   apex and the three subdomains pointing at the host that will serve DashFlo,
+   then issue TLS for all of them, then provide Plesk or equivalent deployment
+   access. Registration is a money action and an external commitment, so it is
+   Bru's to make, not mine.
+4. WHY: the URL contract requires https for every non-loopback host, and the
+   startup checks enforce it. Without a registered and delegated domain there is
+   no host to certify and no origin to configure, so a public preview cannot be
+   stood up without inventing a URL, which is forbidden.
+5. ALREADY COMPLETE: the application is verified working at
+   `http://localhost:4000`, the build is green, all URLs resolve through the
+   environment-aware module, and the preview is a configuration change rather
+   than a code change once a domain exists. Requirement: the preview must use a
+   separate database with no production data, outbound integrations disabled,
+   native delivery disabled, and the writer agents left unloaded.
+6. VERIFICATION THAT WILL RUN AFTERWARDS: valid TLS and 200 on
+   `https://dashflo.co`; DashFlo rendered; login loads; unauthenticated operator
+   routes refused; `https://api.dashflo.co/api/health` returns the safe health
+   response; non-allowlisted functions refuse anonymous access;
+   `https://progress.dashflo.co` refuses unauthenticated access outside its
+   login flow; no retired host in redirects, HTML, JavaScript, API responses,
+   cookies or links; no Base44 request while loading or using the application;
+   all outbound business integrations still disabled.
+
+DECISION FOR BRU: confirm `dashflo.co` is the intended domain and register it,
+or name the domain you already control and I will target that instead. A
+temporary tunnel is not used as the final live URL without separate approval.
+
 ## Next human packet
 
-None yet. Build it only when a human gate is genuinely reached.
+The LIVE URL GATE above. Everything else continues locally.
