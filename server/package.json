@@ -10,7 +10,9 @@
     "dev": "node --watch src/index.js",
     "migrate": "node scripts/migrate.js",
     "seed:admin": "node scripts/seed-admin.js",
-    "backfill:api-key-hashes": "node scripts/backfill-api-key-hashes.js"
+    "backfill:api-key-hashes": "node scripts/backfill-api-key-hashes.js",
+    "backfill:buyer-identity": "node scripts/backfill-buyer-identity.js",
+    "recover:config": "node scripts/recover-configuration.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

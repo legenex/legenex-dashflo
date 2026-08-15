@@ -14,6 +14,14 @@
       "type": "string",
       "description": "Reference to the Buyer record this lead was delivered to (set on sold delivery or by feedback matching)"
     },
+    "buyer_record_id": {
+      "type": "string",
+      "description": "Task R1. The Buyer record id, always. buyer_id is overloaded across legacy imports, LeadByte feedback matching and native routing, so it may hold a record id, a buyer_code or a legacy bid. This field is unambiguous. Populated by server/src/lib/buyerIdentity.js. Additive: buyer_id is not redefined and not removed."
+    },
+    "buyer_code": {
+      "type": "string",
+      "description": "Task R1. The Buyer.buyer_code, always. Companion to buyer_record_id, kept denormalized so reports can group by the human facing code without a join."
+    },
     "buyer_feedback": {
       "type": "string",
       "description": "Latest buyer feedback disposition (from our taxonomy) for this lead, used by reporting"

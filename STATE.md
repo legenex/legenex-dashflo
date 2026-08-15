@@ -199,12 +199,12 @@ because dependencies changed.
 | I1 Durable receipt module | Review | Lead | cutover branch | `pending` | 18 tests against real PostgreSQL 16 on loopback | Not wired into processLead; that is I3 |
 | I2 Global DNC module | Review | Lead | cutover branch | `pending` | 35 tests, keyed hashing and fail-closed proven | Not wired into processLead; operator UI not built |
 | I3 Pipeline integration | Blocked | Lead | | | | |
-| R1 Buyer identity normalization | Blocked by F1 | | | | | |
+| R1 Buyer identity normalization | Review | Lead | cutover branch | `pending` | 18 tests plus an observed apply and rerun on a disposable database | Not run against production data |
 | R2 Routing and caps | Blocked | | | | | |
 | R3 Delivery and parsing | Blocked | | | | | |
 | M1 Billing and returns | Blocked | | | | | |
 | P1 Portal isolation | Blocked | | | | | |
-| C1 Configuration recovery | Blocked by F0 | | | | | |
+| C1 Configuration recovery | Review | Lead | cutover branch | `pending` | 23 tests plus an observed run producing real blockers | Recovery of routes, caps, schedules and response rules not yet implemented |
 | D1 History import | Blocked | | | | | |
 | O1 Shadow comparison | Blocked | | | | | |
 | O2 Reliability | Blocked | | | | | |
@@ -629,6 +629,77 @@ REMAINING RISK: DNC_HASH_KEY is a new credential reference for Gate B, and it
   `UNPROVEN`: the operator UI and audited export are not built, and
   enforcement across every intake source is I3, so "identical across every
   real intake source" is not yet demonstrated.
+```
+
+```
+TASK: R1 Buyer identity normalization
+CONTRACT: Add buyer_record_id and buyer_code without deleting or redefining
+  legacy buyer_id. Reconcile and backfill legacy and native leads with an
+  exception report.
+FILES: server/src/lib/buyerIdentity.js,
+  server/scripts/backfill-buyer-identity.js,
+  server/src/schemas/entities/Lead.json, server/package.json,
+  server/test/buyerIdentity.test.js
+COMMANDS: npx vitest run server/test/buyerIdentity.test.js;
+  node scripts/backfill-buyer-identity.js; then --apply; then a plain rerun
+RESULTS: 18 tests passing. Observed on a disposable database seeded with one
+  lead per identifier shape.
+OBSERVED BEHAVIOR: The resolver reads all three things buyer_id actually
+  holds. A lead carrying the legacy bid 1002 and a lead carrying the code
+  ALPHA both resolved to the right Buyer record.
+  Verified directly in SQL after the apply run: buyer_id still reads
+  "", "1002", "ALPHA", "who_is_this" exactly as before, and only
+  buyer_record_id and buyer_code were added. Nothing was redefined.
+  The rerun reported "already correct 2, to write 0", so the backfill is
+  idempotent and an interrupted run is resumed by running it again.
+  A duplicated buyer_code, a duplicated company name and an unknown
+  identifier all become exceptions rather than guesses, because attaching a
+  lead to the wrong buyer delivers to the wrong customer and charges the
+  wrong account. The exception report carries lead ids and buyer identifiers
+  only, asserted to contain no contact fields.
+REVIEWERS: Pending independent review plus reconciliation evidence.
+COMMIT: pending
+ROLLBACK: The change is purely additive. To undo, clear buyer_record_id and
+  buyer_code; buyer_id was never modified, so every existing reader is
+  unaffected in both directions.
+REMAINING RISK: `UNPROVEN` against production data. The resolution mix on
+  twelve months of real history is unknown, and the exception rate is the
+  number that decides whether R1 is done or needs another identifier source.
+  Run the report-only mode against a production restore before D1.
+```
+
+```
+TASK: C1 Configuration recovery
+CONTRACT: Recover existing configuration automatically where possible and
+  produce an artifact listing only the exceptions a human must resolve.
+FILES: server/src/lib/configRecovery.js,
+  server/scripts/recover-configuration.js, server/package.json,
+  server/test/configRecovery.test.js
+COMMANDS: npx vitest run server/test/configRecovery.test.js;
+  node scripts/recover-configuration.js
+RESULTS: 23 tests passing. Observed against a disposable database, both empty
+  and seeded with deliberately broken configuration.
+OBSERVED BEHAVIOR: On the seeded database it reported two blockers, an active
+  supplier with no API key and a campaign routing to a buyer id that does not
+  exist, and three credential references by name. It correctly refused to
+  declare the configuration ready for Gate B while the blockers stood.
+  Credential findings carry a name and a null value, asserted.
+REVIEWERS: Pending independent review.
+COMMIT: pending
+ROLLBACK: Read-only reporting. Nothing to roll back.
+REMAINING RISK: One real defect was found while exercising this against a
+  database rather than only against fixtures. The liveness test was
+  `active !== false`, and Buyer.active defaults to false in the schema while
+  Supplier.active and Campaign.active default to true, so every buyer rule was
+  dead and the report read as clean because the check never ran. It is now
+  `active === true` everywhere, with a regression test that asserts each rule
+  both stays quiet and fires. A silently dead rule in a Gate B artifact is
+  worse than no rule, so the other checks deserve the same scrutiny during
+  review.
+  `UNPROVEN`: routes, destinations, caps, schedules, mappings and response
+  rules are not yet recovered. Only buyers, suppliers, campaigns and
+  credential references are covered, so this is not yet the full C1 surface
+  and a Gate B packet built from it today would be incomplete.
 ```
 
 ## Next human packet
