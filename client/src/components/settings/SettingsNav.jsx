@@ -1,5 +1,6 @@
 import React, { useRef, useEffect } from 'react';
 import { PulseDot } from '@/components/settings/settingsUi';
+import { resolveApiBaseUrl } from '@/lib/urls';
 
 // Settings section navigation.
 //
@@ -10,6 +11,8 @@ import { PulseDot } from '@/components/settings/settingsUi';
 // content below the fold and is the regression this replaces.
 export default function SettingsNav({ groups, active, onSelect }) {
   const activeRef = useRef(null);
+  // The host this install actually answers on, not a fixed label.
+  const apiHostLabel = new URL(resolveApiBaseUrl()).host;
 
   // Flatten both groups into one rail order for mobile.
   const flat = groups.flatMap(g => g.items);
@@ -81,7 +84,7 @@ export default function SettingsNav({ groups, active, onSelect }) {
             <div className="text-[9.5px] font-semibold tracking-[0.11em] uppercase text-muted-foreground/70 mb-1.5">Gateway</div>
             <div className="flex items-center gap-2">
               <PulseDot />
-              <span className="text-[12px] font-mono status-sold">api.legenex.com - live</span>
+              <span className="text-[12px] font-mono status-sold">{apiHostLabel} - live</span>
             </div>
           </div>
         </div>

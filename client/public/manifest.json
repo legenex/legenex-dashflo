@@ -1,6 +1,6 @@
 {
-  "name": "Legenex DashOS",
-  "short_name": "DashOS",
+  "name": "DashFlo",
+  "short_name": "DashFlo",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#0b0f17",

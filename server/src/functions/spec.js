@@ -8,6 +8,8 @@
 // mapping that processLead enforces, so it always reflects what is needed to
 // accept and sell a lead.
 
+import { resolveBaseUrl } from '../lib/urls.js';
+
 function parseJsonArray(val) {
   if (!val) return [];
   if (Array.isArray(val)) return val;
@@ -98,7 +100,7 @@ export default async function spec(ctx) {
       db.entities.Buyer.list(),
     ]);
     const appSettings = appSettingsArr[0] || {};
-    const baseUrl = (appSettings.public_base_url || 'https://api.legenex.com').replace(/\/+$/, '');
+    const baseUrl = resolveBaseUrl(appSettings.public_base_url);
 
     const specResult = buildSpec({
       supplier, key, baseUrl,

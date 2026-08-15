@@ -53,7 +53,7 @@ export default function DocsLayout() {
 
         <div className="px-3 py-3 border-t border-sidebar-border">
           <a
-            href="https://dashboard.legenex.com"
+            href="/"
             className="flex items-center justify-between px-2.5 py-2 rounded-md text-[12px] text-muted-foreground hover:text-foreground hover:bg-sidebar-accent transition-colors"
           >
             Go to Dashboard <ArrowUpRight className="w-3.5 h-3.5" />

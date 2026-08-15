@@ -1,5 +1,6 @@
 import React from 'react';
 import { DocPage, Section, CodeBlock, FieldTable, InlineCode, Endpoint, Callout } from '@/components/docs/DocsUI';
+import { resolveApiBaseUrl } from '@/lib/urls';
 
 export default function Overview() {
   return (
@@ -27,8 +28,7 @@ export default function Overview() {
             { key: 'url', label: 'Base URL' },
           ]}
           rows={[
-            { env: 'Production', url: <InlineCode>https://api.legenex.com</InlineCode> },
-            { env: 'Docs', url: <InlineCode>https://docs.legenex.com</InlineCode> },
+            { env: 'Production', url: <InlineCode>{resolveApiBaseUrl()}</InlineCode> },
           ]}
         />
         <Callout>
@@ -38,10 +38,10 @@ export default function Overview() {
 
       <Section title="Quickstart: post your first lead">
         <p>Send a single lead with your supplier API key in the <InlineCode>X-API-KEY</InlineCode> header:</p>
-        <Endpoint method="POST" path="https://api.legenex.com/functions/leads" />
+        <Endpoint method="POST" path={`${resolveApiBaseUrl()}/functions/leads`} />
         <CodeBlock
           language="bash"
-          code={`curl -X POST https://api.legenex.com/functions/leads \\
+          code={`curl -X POST ${resolveApiBaseUrl()}/functions/leads \\
   -H "Content-Type: application/json" \\
   -H "X-API-KEY: lgnx_int_xxxxxxxxxxxx" \\
   -d '{

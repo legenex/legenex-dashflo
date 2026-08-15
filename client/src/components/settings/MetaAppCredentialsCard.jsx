@@ -8,12 +8,13 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Facebook, CheckCircle2, Copy, Loader2, ShieldCheck } from 'lucide-react';
 import { toast } from 'sonner';
+import { resolveApiBaseUrl } from '@/lib/urls';
 
 // Admin-facing home for the Meta (Facebook) app credentials that power the
 // Meta Ads connector OAuth login. Lives under Settings > Data Sources so the
 // secret is not exposed on the connector card. The secret is stored server-side
 // in IntegrationConfig(meta_app); only the last 4 is ever read back.
-const FALLBACK_REDIRECT_URI = 'https://api.legenex.com/functions/metaOauthCallback';
+const FALLBACK_REDIRECT_URI = `${resolveApiBaseUrl()}/functions/metaOauthCallback`;
 
 function RedirectRow({ uri }) {
   const copy = async () => {

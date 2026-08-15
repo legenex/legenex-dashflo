@@ -1,9 +1,9 @@
 {
-  "name": "dashos-server",
+  "name": "dashflo-server",
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "DashOS standalone backend — API, auth, entities, integrations",
+  "description": "DashFlo standalone backend: API, auth, entities, integrations",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",

@@ -15,7 +15,9 @@ function isOperator(caller) {
 // Fallback callback URL (Legenex production custom domain). The wizard normally
 // passes the current host's callback URL so the flow works on any domain,
 // including preview environments.
-const DEFAULT_REDIRECT_URI = 'https://api.legenex.com/functions/metaOauthCallback';
+import { functionUrl } from '../lib/urls.js';
+
+const DEFAULT_REDIRECT_URI = functionUrl('metaOauthCallback');
 
 // Loads the Meta app credentials from IntegrationConfig(name='meta_app') first
 // (set via the in-app credentials field), falling back to environment vars.

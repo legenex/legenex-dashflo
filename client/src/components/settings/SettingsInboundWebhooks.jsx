@@ -20,8 +20,9 @@ import { format } from 'date-fns';
 import { toast } from 'sonner';
 import { WEBHOOK_PURPOSES, MATCH_FIELDS, purposeMeta } from '@/components/settings/dataSourcePurposes';
 import { webhookTypeClass } from '@/lib/tagColors';
+import { resolveApiBaseUrl } from '@/lib/urls';
 
-const WEBHOOK_FN_URL = 'https://api.legenex.com/functions/webhook';
+const WEBHOOK_FN_URL = `${resolveApiBaseUrl()}/functions/webhook`;
 
 // Blank event means dynamic: the status comes from lead_status on the payload.
 const DYNAMIC = '__dynamic__';

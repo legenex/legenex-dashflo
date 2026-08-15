@@ -1,5 +1,6 @@
 import React from 'react';
 import { DocPage, Section, CodeBlock, FieldTable, InlineCode, Endpoint, Callout } from '@/components/docs/DocsUI';
+import { resolveApiBaseUrl } from '@/lib/urls';
 
 export default function PostLead() {
   return (
@@ -60,7 +61,7 @@ export default function PostLead() {
       <Section title="cURL">
         <CodeBlock
           language="bash"
-          code={`curl -X POST https://api.legenex.com/functions/leads \\
+          code={`curl -X POST ${resolveApiBaseUrl()}/functions/leads \\
   -H "Content-Type: application/json" \\
   -H "X-API-KEY: lgnx_int_xxxxxxxxxxxx" \\
   --data @lead.json`}

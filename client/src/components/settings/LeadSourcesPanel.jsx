@@ -7,6 +7,7 @@ import { Phone, Plus, Pencil, Trash2, Copy } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { toast } from 'sonner';
 import CallSourceDialog from '@/components/settings/CallSourceDialog';
+import { resolveApiBaseUrl } from '@/lib/urls';
 
 // Call platform webhooks (Ringba, TrueCall). Google Sheets sources live in
 // GoogleSheetsPanel, because a sheet now serves several purposes and needs its
@@ -28,7 +29,7 @@ export default function LeadSourcesPanel() {
     queryKey: ['app-settings'],
     queryFn: async () => (await api.entities.AppSettings.list()) || [],
   });
-  const baseUrl = appSettingsArr[0]?.public_base_url || 'https://api.legenex.com';
+  const baseUrl = resolveApiBaseUrl(appSettingsArr[0]?.public_base_url);
 
   const sources = useMemo(
     () => (allSources || []).filter((s) => s.kind === 'ringba' || s.kind === 'truecall'),

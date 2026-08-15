@@ -9,6 +9,7 @@ import SupplierSourcesTab from './SupplierSourcesTab';
 import PortalEnablementCard from '@/components/shared/PortalEnablementCard';
 import PostingSpecs from '@/components/suppliers/PostingSpecs';
 import SupplierMetaCosts from '@/components/suppliers/SupplierMetaCosts';
+import { resolveApiBaseUrl } from '@/lib/urls';
 
 // Operations owns the supplier surface. These are the tabs that previously only
 // existed on the standalone /suppliers/:id page, brought here so a supplier is
@@ -51,7 +52,7 @@ export default function SupplierDetailPage({ supplier, onBack, initialTab }) {
   const { data: appSettingsArr = [] } = useQuery({ queryKey: ['app-settings'], queryFn: () => api.entities.AppSettings.list() });
 
   const apiKey = apiKeys.find((k) => k.supplier_id === supplier.id || k.supplier_name === supplier.name);
-  const baseUrl = appSettingsArr[0]?.public_base_url || 'https://api.legenex.com';
+  const baseUrl = resolveApiBaseUrl(appSettingsArr[0]?.public_base_url);
 
   return (
     <div className="flex flex-col gap-4">

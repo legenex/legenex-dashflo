@@ -12,6 +12,7 @@ import { Badge } from '@/components/ui/badge';
 import { Plus, Copy, RefreshCw, Trash2, ShieldCheck, Terminal, Pencil, UserPlus } from 'lucide-react';
 import { format } from 'date-fns';
 import { toast } from 'sonner';
+import { resolveApiBaseUrl } from '@/lib/urls';
 
 // Task S4. Key generation used to happen here, in the browser, using
 // Math.random(). A supplier key authenticates inbound leads, and Math.random()
@@ -74,7 +75,7 @@ export default function SettingsApiKeys() {
     queryFn: () => api.entities.AppSettings.list(),
   });
 
-  const baseUrl = appSettingsArr[0]?.public_base_url || 'https://api.legenex.com';
+  const baseUrl = resolveApiBaseUrl(appSettingsArr[0]?.public_base_url);
   const endpointUrl = `${baseUrl}/functions/leads`;
 
   const openCreate = () => {

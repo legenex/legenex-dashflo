@@ -13,6 +13,7 @@ import { Badge } from '@/components/ui/badge';
 import { Plus, Copy, RefreshCw, Eye, EyeOff, Trash2 } from 'lucide-react';
 import { format } from 'date-fns';
 import { toast } from 'sonner';
+import { resolveApiBaseUrl } from '@/lib/urls';
 
 function generateKey(supplierType = '') {
   const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
@@ -81,11 +82,11 @@ export default function SettingsSuppliers() {
   const verticalOptions = verticalList.map(v => ({ value: v.code, label: v.name }));
 
   const appSettings = appSettingsArr[0] || {};
-  const savedBaseUrl = appSettings.public_base_url || 'https://api.legenex.com';
+  const savedBaseUrl = resolveApiBaseUrl(appSettings.public_base_url);
 
   React.useEffect(() => {
     if (appSettingsArr.length > 0 && !baseUrl) {
-      setBaseUrl(appSettings.public_base_url || 'https://api.legenex.com');
+      setBaseUrl(resolveApiBaseUrl(appSettings.public_base_url));
     }
   }, [appSettingsArr]);
 

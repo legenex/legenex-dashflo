@@ -1,8 +1,8 @@
 {
-  "name": "legenex-dashos",
+  "name": "dashflo",
   "version": "1.0.0",
   "private": true,
-  "description": "Legenex DashOS — standalone lead-distribution & finance dashboard (client + server)",
+  "description": "DashFlo, self-hosted lead distribution and finance dashboard (client + server)",
   "scripts": {
     "install:all": "npm --prefix server install && npm --prefix client install",
     "dev:server": "npm --prefix server run dev",

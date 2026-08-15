@@ -9,6 +9,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '
 import { Loader2, Check, Copy, Phone, Plus, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { CALL_LEAD_FIELDS, CALL_DEFAULT_MAPPING, IGNORE } from '@/components/settings/leadSourceFields';
+import { resolveApiBaseUrl } from '@/lib/urls';
 
 const PROVIDER_LABEL = { ringba: 'Ringba', truecall: 'TrueCall' };
 
@@ -31,7 +32,7 @@ export default function CallSourceDialog({ open, onOpenChange, source, provider,
   const { data: campaigns = [] } = useQuery({ queryKey: ['campaigns'], queryFn: () => api.entities.Campaign.list('-created_date', 200) });
   const { data: appSettingsArr = [] } = useQuery({ queryKey: ['app-settings'], queryFn: () => api.entities.AppSettings.list() });
 
-  const baseUrl = appSettingsArr[0]?.public_base_url || 'https://api.legenex.com';
+  const baseUrl = resolveApiBaseUrl(appSettingsArr[0]?.public_base_url);
 
   useEffect(() => {
     if (open) {

@@ -71,7 +71,7 @@ export default function SettingsGeneral() {
           <div className="flex items-center gap-2 text-[14px] font-semibold text-foreground mb-4">
             <Globe className="w-4 h-4 text-primary" /> Endpoint
           </div>
-          <Input label="Public Base URL" value={form.public_base_url} onChange={set('public_base_url')} mono placeholder="https://api.legenex.com" hint="The public URL suppliers send leads to." />
+          <Input label="Public Base URL" value={form.public_base_url} onChange={set('public_base_url')} mono placeholder="https://api.dashflo.co" hint="The public URL suppliers send leads to." />
         </Panel>
 
         <Panel className="p-5" i={2}>

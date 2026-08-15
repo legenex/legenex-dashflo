@@ -14,6 +14,7 @@ import { supplierMetrics, money, pct } from '@/lib/partnerMetrics';
 import PostingSpecs from '@/components/suppliers/PostingSpecs';
 import SupplierSourcesTab from '@/components/operations/suppliers/SupplierSourcesTab';
 import SupplierMetaCosts from '@/components/suppliers/SupplierMetaCosts';
+import { resolveApiBaseUrl } from '@/lib/urls';
 
 function parseArr(raw) {
   if (!raw) return [];
@@ -77,7 +78,7 @@ export default function SupplierDetail() {
   const assignedCampaigns = campaigns.filter(c => parseArr(supplier.campaign_ids).includes(c.id));
   const supplierLeads = leads.filter(l => l.supplier_name === supplier.name);
   const m = supplierMetrics(leads, supplier.name);
-  const baseUrl = appSettingsArr[0]?.public_base_url || 'https://api.legenex.com';
+  const baseUrl = resolveApiBaseUrl(appSettingsArr[0]?.public_base_url);
 
   const updateBrand = async (brand) => {
     await api.entities.Supplier.update(supplier.id, { brand: brand === '__none__' ? '' : brand });

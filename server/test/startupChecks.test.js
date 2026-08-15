@@ -72,6 +72,39 @@ describe('production requires its own origin and a real database', () => {
     expect(problems.join(' ')).toMatch(/must be an https URL/);
   });
 
+  // Running the local checkout in production-like mode is how the operator
+  // proves a build before it is deployed, and there is no certificate for
+  // localhost. Loopback over plain http is exempt; nothing else is, so a real
+  // host that forgets TLS is still refused.
+  it('allows plaintext only on loopback origins', () => {
+    for (const url of [
+      'http://localhost:4000',
+      'http://127.0.0.1:4000',
+      'http://[::1]:4000',
+      'https://localhost:4000',
+    ]) {
+      expect(collectStartupProblems(prodConfig({ publicBaseUrl: url }), prodEnv)).toEqual([]);
+    }
+  });
+
+  it('still refuses plaintext for non-loopback hosts', () => {
+    for (const url of [
+      'http://dashflo.co',
+      'http://api.dashflo.co',
+      'http://192.168.1.10:4000',
+      'http://localhost.attacker.example',
+      'http://notlocalhost',
+    ]) {
+      const problems = collectStartupProblems(prodConfig({ publicBaseUrl: url }), prodEnv);
+      expect(problems.join(' '), url).toMatch(/must be an https URL/);
+    }
+  });
+
+  it('refuses a public base url it cannot parse', () => {
+    const problems = collectStartupProblems(prodConfig({ publicBaseUrl: 'not a url' }), prodEnv);
+    expect(problems.join(' ')).toMatch(/must be an https URL/);
+  });
+
   it('refuses when no database is configured', () => {
     const problems = collectStartupProblems(prodConfig({ db: {} }), {});
     expect(problems.join(' ')).toMatch(/No database is configured/);

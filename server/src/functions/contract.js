@@ -13,9 +13,11 @@
 //   No/unknown/inactive key => 401.
 
 import { resolveActiveApiKey } from '../lib/apiKeys.js';
+import { leadsEndpoint } from '../lib/urls.js';
 
 const RULES_ENGINE_VERSION = '1.0.0';
-const LEADS_ENDPOINT = 'https://api.legenex.com/functions/leads';
+// Resolved per request, not frozen at import: the deployment's own origin.
+const LEADS_ENDPOINT = leadsEndpoint();
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',

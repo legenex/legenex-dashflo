@@ -1,3 +1,4 @@
+import { resolveApiBaseUrl } from '@/lib/urls';
 // Builds the supplier posting spec on the client so the Posting Specs tab
 // renders identical data to the public /functions/spec endpoint (same required
 // fields + supplier mapping). Kept intentionally in sync with api/functions/spec.
@@ -72,8 +73,8 @@ export function exampleResponses() {
 }
 
 // supplier, key (ApiKey record), customFields, campaigns, verticals, buyers, baseUrl, token
-export function buildPostingSpec({ supplier, key, customFields = [], campaigns = [], verticals = [], buyers = [], baseUrl = 'https://api.legenex.com', token = '' }) {
-  const base = String(baseUrl || 'https://api.legenex.com').replace(/\/+$/, '');
+export function buildPostingSpec({ supplier, key, customFields = [], campaigns = [], verticals = [], buyers = [], baseUrl = '', token = '' }) {
+  const base = resolveApiBaseUrl(baseUrl);
   const supplierSid = supplier.sid || supplier.name || '';
   const supplierVertical = supplier.vertical || '';
 

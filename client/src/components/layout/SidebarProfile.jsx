@@ -86,13 +86,13 @@ export default function SidebarProfile() {
             <Compass className="w-4 h-4" /> Walk Through
           </DropdownMenuItem>
           <DropdownMenuItem
-            onClick={() => window.open('https://docs.legenex.com', '_blank', 'noopener,noreferrer')}
+            onClick={() => window.open('https://docs.dashflo.co', '_blank', 'noopener,noreferrer')}
             className="text-[13px] cursor-pointer gap-2"
           >
             <BookOpen className="w-4 h-4" /> Documentation
           </DropdownMenuItem>
           <DropdownMenuItem
-            onClick={() => window.open('https://docs.legenex.com', '_blank', 'noopener,noreferrer')}
+            onClick={() => window.open('https://docs.dashflo.co', '_blank', 'noopener,noreferrer')}
             className="text-[13px] cursor-pointer gap-2"
           >
             <HelpCircle className="w-4 h-4" /> Get Help

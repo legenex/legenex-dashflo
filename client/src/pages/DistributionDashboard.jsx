@@ -19,6 +19,7 @@ import {
   Copy, Link2, Workflow, Users, CheckCircle2, Ban, Clock, RotateCcw, XCircle, AlertTriangle,
   Target, Phone, Mail, MessageSquare, Brain, Sparkles, ArrowUpRight, RefreshCw, Route as RouteIcon, GitBranch,
 } from 'lucide-react';
+import { resolveApiBaseUrl } from '@/lib/urls';
 
 const rise = {
   hidden: { opacity: 0, y: 14 },
@@ -119,7 +120,7 @@ export default function DistributionDashboard() {
   const { data: metaCfg } = useQuery({ queryKey: ['meta-config'], queryFn: async () => (await api.entities.IntegrationConfig.filter({ name: 'meta' }))[0] || null });
   const { data: intStatus } = useQuery({ queryKey: ['integration-status'], queryFn: async () => (await integrationStatus({}))?.data?.status || {} });
 
-  const publicBaseUrl = appSettingsArr[0]?.public_base_url || 'https://api.legenex.com';
+  const publicBaseUrl = resolveApiBaseUrl(appSettingsArr[0]?.public_base_url);
   const endpointUrl = `${publicBaseUrl}/functions/leads`;
 
   const m = useMemo(() => operationalMetrics(leads, errors, win), [leads, errors, win]);

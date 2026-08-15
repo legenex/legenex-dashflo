@@ -1,11 +1,14 @@
 import React, { useEffect, useState } from 'react';
 import { api } from '@/api/client';
+import { resolveApiBaseUrl } from '@/lib/urls';
 
 // Public status page rendered when the app is served on the API host
 // (api.legenex.com). No auth, this domain exists only to serve backend
 // functions, so we just surface a simple health readout.
 export default function ApiStatus() {
   const [state, setState] = useState({ loading: true, ok: false, error: null });
+  // The host this install actually answers on, not a fixed label.
+  const apiHost = new URL(resolveApiBaseUrl()).host;
 
   useEffect(() => {
     let alive = true;
@@ -26,10 +29,10 @@ export default function ApiStatus() {
     <div className="min-h-screen flex items-center justify-center bg-background px-6">
       <div className="w-full max-w-md rounded-2xl border border-border bg-card p-8 text-center shadow-sm">
         <div className="text-xs font-mono uppercase tracking-widest text-muted-foreground">
-          Legenex API
+          DashFlo API
         </div>
         <h1 className="mt-3 text-2xl font-semibold text-foreground font-heading">
-          api.legenex.com
+          {apiHost}
         </h1>
         <p className="mt-1 text-sm text-muted-foreground">
           Backend API endpoint. This host serves functions only.

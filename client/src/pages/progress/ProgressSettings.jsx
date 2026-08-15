@@ -43,7 +43,7 @@ const NOT_CONFIGURED = [
   },
   {
     icon: Globe,
-    title: 'progress.dashboard.legenex.com',
+    title: 'progress.dashflo.co',
     what: 'Serving the Progress Control Center on its own subdomain.',
     needs: 'A CNAME for the nested subdomain pointing at the the backend app, added by Morne, plus the domain registered in the backend custom domains. The host detection is already in the router.',
     impact: 'Until the DNS record exists, use /progress on the main dashboard. Both routes serve the identical experience.',

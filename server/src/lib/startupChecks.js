@@ -23,8 +23,25 @@ const PLACEHOLDER_SECRETS = new Set([
 
 const MIN_SECRET_LENGTH = 32;
 
+// Only these three hostnames may serve production-like mode over plain http.
+// Running the local checkout with NODE_ENV=production is how a build is proved
+// before deployment, and no certificate exists for localhost.
+const LOOPBACK_HOSTNAMES = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
+
 export function isProduction(env) {
   return String(env || '').toLowerCase() === 'production';
+}
+
+// Compare the parsed hostname, never a prefix of the string. A substring test
+// would accept http://localhost.attacker.example, which is not loopback at all.
+// An unparseable value is not loopback, so it stays subject to the https rule.
+export function isLoopbackUrl(value) {
+  try {
+    const { hostname } = new URL(String(value));
+    return LOOPBACK_HOSTNAMES.has(hostname.toLowerCase());
+  } catch {
+    return false;
+  }
 }
 
 // Returns a list of problems. Empty means the configuration is acceptable.
@@ -48,8 +65,8 @@ export function collectStartupProblems(config, env = process.env) {
   // and build links correctly.
   if (!config.publicBaseUrl) {
     problems.push('PUBLIC_BASE_URL is not set. It is required in production for cookies and emailed links.');
-  } else if (!/^https:\/\//i.test(config.publicBaseUrl)) {
-    problems.push('PUBLIC_BASE_URL must be an https URL in production.');
+  } else if (!/^https:\/\//i.test(config.publicBaseUrl) && !isLoopbackUrl(config.publicBaseUrl)) {
+    problems.push('PUBLIC_BASE_URL must be an https URL in production, except on loopback.');
   }
 
   // A database must be configured explicitly rather than falling back to the

@@ -11,8 +11,9 @@ import JsonViewer from '@/components/shared/JsonViewer';
 import { Play, Copy, Loader2, FlaskConical, CheckCircle2, XCircle, CircleDot } from 'lucide-react';
 import { toast } from 'sonner';
 import { sendPayloadTest } from '@/functions/sendPayloadTest';
+import { leadsEndpoint } from '@/lib/urls';
 
-const LEADS_ENDPOINT = 'https://api.legenex.com/functions/leads';
+const LEADS_ENDPOINT = leadsEndpoint();
 
 const SAMPLE_LEAD = `{
   "api_key": "PASTE_A_REAL_API_KEY_HERE",
