@@ -1353,6 +1353,7 @@ export default async function processLead(ctx) {
     delete leadPayload._dry_run;
     delete leadPayload._campaign;
     delete leadPayload.phone_verified;
+    delete leadPayload._idempotency_key;
     delete leadPayload.api_key;
     delete leadPayload.apiKey;
 
@@ -1457,7 +1458,6 @@ export default async function processLead(ctx) {
       sql: receiptPool,
       repo: db,
       context: { campaign_id: leadPayload.campaign || null, vertical: leadPayload.vertical || null },
-      owner: traceId,
     });
 
     if (!mayProcess(capture)) {
@@ -1476,6 +1476,24 @@ export default async function processLead(ctx) {
         // The transport already delivered this exact payload. Answering with
         // the original outcome is what stops a retry becoming a second
         // delivery and a second charge.
+        //
+        // Only a receipt that actually concluded may be answered "already
+        // received". A receipt still sitting non-terminal means the first
+        // attempt never finished: it was held because the suppression list was
+        // unavailable, or the process died mid-flight. Answering ok there told
+        // the supplier its lead was accepted when no lead row existed, nothing
+        // had been delivered and nothing was going to retry it. That is how a
+        // paid lead disappears while both sides believe it landed.
+        if (!capture.priorOutcome) {
+          return ctx.json(buildEnvelope(traceId, {
+            ok: false, acceptance: 'rejected', lead_status: 'queued',
+            code: 'RETRY_IN_PROGRESS',
+            reason: 'A previous attempt for this posting has not completed. Send it again.',
+            message: 'A previous attempt for this posting has not completed. Send it again.',
+            Response: 'Error',
+          }), 503);
+        }
+
         return ctx.json(buildEnvelope(traceId, {
           ok: true, acceptance: 'duplicate', lead_status: 'duplicate',
           code: 'DUPLICATE', reason: 'This posting was already received',

@@ -163,8 +163,18 @@ describe('receipt payload sanitization', () => {
     const { deriveTransportKey } = await import('../src/lib/receipts.js');
     const args = { source: 'supplier_http', payload: { a: 1 }, now: 1_700_000_000_000 };
     expect(deriveTransportKey(args)).toBe(deriveTransportKey(args));
-    expect(deriveTransportKey({ ...args, suppliedKey: 'abc' })).toBe('k:abc');
     expect(deriveTransportKey({ ...args, payload: { a: 2 } })).not.toBe(deriveTransportKey(args));
+
+    // The supplied key is namespaced by the authenticating supplier. It used
+    // to be returned bare as `k:abc`, which put every supplier in one global
+    // namespace: two of them using their own sequential lead ids collided, and
+    // the second one's lead was answered "already received" and never
+    // processed. An absent supplier is explicitly "anon" rather than blank, so
+    // an authenticated key can never collide with an unauthenticated one.
+    expect(deriveTransportKey({ ...args, suppliedKey: 'abc' })).toBe('k:anon:abc');
+    expect(deriveTransportKey({ ...args, suppliedKey: 'abc', supplierKeyId: 'key_a' })).toBe('k:key_a:abc');
+    expect(deriveTransportKey({ ...args, suppliedKey: 'abc', supplierKeyId: 'key_a' }))
+      .not.toBe(deriveTransportKey({ ...args, suppliedKey: 'abc', supplierKeyId: 'key_b' }));
   });
 });
 

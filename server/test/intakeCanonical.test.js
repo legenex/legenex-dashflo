@@ -194,6 +194,34 @@ describe('global do-not-contact decides the lead', () => {
     expect(stored.effects_applied).toBe(false);
   });
 
+  maybe()('concludes the receipt even when the caller passes an owner', async () => {
+    // The production caller passes owner; no test did, which is exactly why
+    // the expectOwner defect survived a green suite. commitReceipt inserts
+    // with claim_owner NULL, so a non-null expectOwner made the guard compare
+    // against NULL and the terminal write matched zero rows, silently.
+    const r = await intake.captureAndScreen({
+      source: 'supplier_http', payload: LEAD, sql: pool, owner: 'trace-abc',
+      repo: repoWith(suppressionFor('phone', '5550101234')),
+    });
+    expect(r.outcome).toBe(intake.INTAKE_OUTCOME.SUPPRESSED);
+
+    const stored = await receipts.getReceipt(r.receipt.id, pool);
+    expect(stored.terminal_outcome).toBe('suppressed');
+    expect(stored.effects_applied).toBe(false);
+
+    const pending = await receipts.pendingReceipts({ db: pool });
+    expect(pending.map((p) => p.id)).not.toContain(r.receipt.id);
+  });
+
+  maybe()('releases a held receipt even when the caller passes an owner', async () => {
+    const r = await intake.captureAndScreen({
+      source: 'supplier_http', payload: LEAD, sql: pool, owner: 'trace-abc', repo: failingRepo(),
+    });
+    expect(r.outcome).toBe(intake.INTAKE_OUTCOME.HELD);
+    const pending = await receipts.pendingReceipts({ db: pool });
+    expect(pending.map((p) => p.id)).toContain(r.receipt.id);
+  });
+
   maybe()('suppresses a listed email as well as a listed phone', async () => {
     const r = await intake.captureAndScreen({
       source: 'owned_form', payload: LEAD, sql: pool,

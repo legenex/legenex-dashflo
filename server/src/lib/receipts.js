@@ -28,11 +28,17 @@ import { RECEIPT_STATUS } from '../db/receiptSchema.js';
 // Header and payload keys that must never be persisted on a receipt.
 // Invariant 4: no authorization headers, cookies, raw API keys or secrets in
 // lead payloads, logs, exports, fixtures, commits or prompts.
+// x_key is the one that was missed. processLead accepts the supplier key under
+// X_KEY as a documented alias, and nothing here matched it, so a supplier
+// posting in that documented shape wrote a working ingest credential into
+// every one of its receipts. Any alias the auth resolver accepts must appear
+// here, or the receipt becomes a cleartext key store and defeats S4.
 const FORBIDDEN_KEY_PATTERNS = [
   'authorization',
   'cookie',
   'x-api-key',
   'x_api_key',
+  'x_key',
   'apikey',
   'api_key',
   'secret',
@@ -86,11 +92,33 @@ export function sanitizeReceiptPayload(payload, redacted = []) {
 // leads with identical content in the same window collapse too), so the source
 // and a coarse time bucket are mixed in, and a supplier that needs exact
 // behaviour should send a key.
-export function deriveTransportKey({ source, suppliedKey, payload, bucketMs = 60_000, now = Date.now() }) {
-  if (suppliedKey) return `k:${String(suppliedKey)}`;
+// The key is namespaced by the authenticating supplier, because transport_key
+// carries a single global UNIQUE constraint and the supplied half is entirely
+// client controlled. Without the namespace, two suppliers using the obvious
+// scheme of their own sequential lead ids collide: the second one's lead is
+// answered "already received" and is never created, never delivered and never
+// paid for. A supplier who learned another's numbering could suppress a
+// competitor's intake on purpose by pre-claiming keys.
+//
+// A supplied key is also length bounded before it reaches a btree index, which
+// rejects entries beyond about 2704 bytes. An oversized header would otherwise
+// raise inside the insert and lose the lead entirely.
+const MAX_SUPPLIED_KEY = 200;
+
+export function deriveTransportKey({
+  source, suppliedKey, payload, supplierKeyId = null, bucketMs = 60_000, now = Date.now(),
+}) {
+  const scope = supplierKeyId ? String(supplierKeyId) : 'anon';
+  if (suppliedKey) {
+    const supplied = String(suppliedKey).slice(0, MAX_SUPPLIED_KEY);
+    return `k:${scope}:${supplied}`;
+  }
   const bucket = Math.floor(now / bucketMs);
   const body = JSON.stringify(payload ?? {});
-  const digest = crypto.createHash('sha256').update(`${source}|${bucket}|${body}`, 'utf8').digest('hex');
+  const digest = crypto
+    .createHash('sha256')
+    .update(`${scope}|${source}|${bucket}|${body}`, 'utf8')
+    .digest('hex');
   return `h:${digest}`;
 }
 
@@ -131,7 +159,7 @@ export async function commitReceipt({ source, transportKey, suppliedKey, payload
   if (!source) throw new Error('commitReceipt requires a source');
 
   const { payload: clean, redacted } = sanitizeReceiptPayload(payload);
-  const key = transportKey || deriveTransportKey({ source, suppliedKey, payload: clean });
+  const key = transportKey || deriveTransportKey({ source, suppliedKey, payload: clean, supplierKeyId });
 
   const insert = await db.query(
     `INSERT INTO lead_receipts (id, transport_key, source, supplier_key_id, payload, status)

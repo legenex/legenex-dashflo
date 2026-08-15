@@ -191,15 +191,45 @@ export function evaluateSuppression({ entries = [], context = {}, at = new Date(
 
 // Build the hash set for a lead. Returns the hashes to look up and which kind
 // each came from, so a caller can report what could not be checked.
+// Inbound field aliases. A lead is screened before the pipeline normalizes it,
+// so this has to read every spelling a supplier may post under, not just the
+// canonical one.
+//
+// Reading only `phone` was a real bypass. `mobile` is this system's canonical
+// phone field: it is first in processLead's alias chain, it is the column on
+// Lead, and it is the spelling the posting documentation shows. A number on
+// the global list posted as `mobile`, `phone1` or `phone_number` produced a
+// clear decision and was sold to a buyer. Worse, a lead with no email at all,
+// which is the common shape in these verticals, got no screening whatsoever
+// and still reported healthy, because an absent key is not an unresolvable one.
+//
+// Every alias is hashed, not just the first present one. A payload carrying
+// two different numbers must be checked against both, or the bypass is simply
+// "put the suppressed number in the second field".
+export const PHONE_FIELDS = ['phone', 'mobile', 'phone1', 'phone_number', 'contact_phone', 'phone2'];
+export const EMAIL_FIELDS = ['email', 'contact_email', 'email_address'];
+
 export function contactHashesFor(lead = {}) {
   const out = [];
   const unresolvable = [];
+  const seen = new Set();
 
-  for (const [kind, raw] of [['phone', lead.phone], ['email', lead.email]]) {
-    if (raw === undefined || raw === null || String(raw).trim() === '') continue;
-    const normalized = normalizeValue(kind, raw);
-    if (!normalized) { unresolvable.push(kind); continue; }
-    out.push({ kind, normalized, hash: hashValue(kind, normalized) });
+  for (const [kind, fields] of [['phone', PHONE_FIELDS], ['email', EMAIL_FIELDS]]) {
+    for (const field of fields) {
+      const raw = lead?.[field];
+      if (raw === undefined || raw === null || String(raw).trim() === '') continue;
+      const normalized = normalizeValue(kind, raw);
+      if (!normalized) {
+        // A value was present and could not be parsed. Report it, so a caller
+        // can tell "nothing to check" from "could not check this".
+        if (!unresolvable.includes(kind)) unresolvable.push(kind);
+        continue;
+      }
+      const hash = hashValue(kind, normalized);
+      if (seen.has(hash)) continue;
+      seen.add(hash);
+      out.push({ kind, field, normalized, hash });
+    }
   }
 
   return { hashes: out, unresolvable };

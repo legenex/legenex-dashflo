@@ -83,17 +83,29 @@ export async function captureAndScreen({
   if (dnc.decision === DNC_DECISION.SUPPRESSED) {
     // Terminal. The receipt records that it concluded and that no effects were
     // applied, so a replay cannot deliver or bill it.
-    await completeReceipt({
+    //
+    // expectOwner is deliberately NOT passed. commitReceipt inserts with
+    // claim_owner NULL, because this receipt is held inline by the request
+    // rather than leased to a worker. Passing a non-null owner made the guard
+    // `claim_owner = $6` compare against NULL, which is NULL rather than true,
+    // so the update matched zero rows and every suppression silently failed to
+    // conclude. The tests missed it because they never passed an owner, which
+    // left the guard on its null short circuit.
+    const done = await completeReceipt({
       id: receipt.id,
       outcome: RECEIPT_OUTCOME_SUPPRESSED,
       reason: dnc.reason,
       effectsApplied: false,
-      expectOwner: owner,
       db: sql,
     });
+    // A refused terminal write is not something to discover later from a
+    // backlog full of receipts that look like unfinished work.
+    if (!done.applied && !done.receipt?.terminal_outcome) {
+      throw new Error(`could not conclude suppressed receipt ${receipt.id}`);
+    }
     return {
       outcome: INTAKE_OUTCOME.SUPPRESSED,
-      receipt,
+      receipt: done.receipt || receipt,
       dnc,
       audit: suppressionAudit(dnc),
     };
@@ -103,7 +115,8 @@ export async function captureAndScreen({
     // UNAVAILABLE. Not terminal. The receipt goes back to the pending backlog
     // with no outcome, so it is retried rather than delivered or discarded.
     // This is the branch a boolean suppressed check would have got wrong.
-    await releaseReceipt({ id: receipt.id, expectOwner: owner, db: sql });
+    // Same reason as above for not passing expectOwner.
+    await releaseReceipt({ id: receipt.id, db: sql });
     return {
       outcome: INTAKE_OUTCOME.HELD,
       receipt,
