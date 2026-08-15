@@ -1,5 +1,11 @@
 import { normalizeEmail, toE164Us, titleCaseName } from './leadIdentity.generated.js';
 import { resolveActiveApiKey } from '../lib/apiKeys.js';
+// Task I3. The canonical intake sequence: durable capture, then global
+// do-not-contact as the first business validation. See lib/intake.js.
+import { captureAndScreen, mayProcess, INTAKE_OUTCOME } from '../lib/intake.js';
+import { completeReceipt } from '../lib/receipts.js';
+import { pool as receiptPool } from '../db/pool.js';
+import { ensureReceiptSchema } from '../db/receiptSchema.js';
 
 // Resolve phone_verified value from HLR result based on configured source
 function resolvePhoneVerified(hlrResult, source) {
@@ -1431,6 +1437,65 @@ export default async function processLead(ctx) {
       }, 200);
     }
 
+    // ── b. DURABLE CAPTURE, THEN GLOBAL DNC ──────────────────────────────
+    // Task I3, invariant 2: authenticate, commit a sanitized durable receipt,
+    // then run business validation, with global do-not-contact first.
+    //
+    // Placed here deliberately. It is after the dry run block returns, so a
+    // validation still writes nothing, and before the ApiKey counters and the
+    // Lead create below, so the receipt is the first durable write on the live
+    // path and a crash from this point on leaves the lead recoverable.
+    //
+    // The sequence itself lives in lib/intake.js so that every intake source
+    // runs the same one. See server/test/intakeCanonical.test.js.
+    await ensureReceiptSchema();
+    const capture = await captureAndScreen({
+      source: 'supplier_http',
+      suppliedKey: getHeader('Idempotency-Key') || payload._idempotency_key || null,
+      payload: leadPayload,
+      supplierKeyId: apiKeyRecord.id,
+      sql: receiptPool,
+      repo: db,
+      context: { campaign_id: leadPayload.campaign || null, vertical: leadPayload.vertical || null },
+      owner: traceId,
+    });
+
+    if (!mayProcess(capture)) {
+      // Three stops, three different answers. None of them deliver or bill.
+      if (capture.outcome === INTAKE_OUTCOME.SUPPRESSED) {
+        // On the do-not-contact list. Retained and auditable, contacted by
+        // nobody. The reason is stable and carries no raw contact value.
+        return ctx.json(buildEnvelope(traceId, {
+          ok: false, acceptance: 'rejected', lead_status: 'rejected',
+          code: capture.dnc.reason, reason: capture.dnc.message,
+          message: capture.dnc.message, Response: 'Rejected',
+        }), 200);
+      }
+
+      if (capture.outcome === INTAKE_OUTCOME.DUPLICATE) {
+        // The transport already delivered this exact payload. Answering with
+        // the original outcome is what stops a retry becoming a second
+        // delivery and a second charge.
+        return ctx.json(buildEnvelope(traceId, {
+          ok: true, acceptance: 'duplicate', lead_status: 'duplicate',
+          code: 'DUPLICATE', reason: 'This posting was already received',
+          message: 'This posting was already received', Response: 'Duplicate',
+        }), 200);
+      }
+
+      // HELD. The list could not be consulted, so the lead is neither
+      // delivered nor discarded: the receipt stays in the pending backlog and
+      // is retried. A 503 tells the supplier to send it again, and the receipt
+      // makes a second send idempotent.
+      return ctx.json(buildEnvelope(traceId, {
+        ok: false, acceptance: 'rejected', lead_status: 'queued',
+        code: capture.dnc?.reason || 'DNC_UNAVAILABLE',
+        reason: capture.dnc?.message || 'Suppression list unavailable',
+        message: capture.dnc?.message || 'Suppression list unavailable',
+        Response: 'Error',
+      }), 503);
+    }
+
     await db.entities.ApiKey.update(apiKeyRecord.id, {
       last_used_at: new Date().toISOString(),
       request_count: (apiKeyRecord.request_count || 0) + 1,
@@ -2572,6 +2637,25 @@ export default async function processLead(ctx) {
       process_time_ms: Date.now() - startTime,
       response_returned: JSON.stringify(finalEnvelope),
     });
+
+    // Conclude the receipt. Task I3. Without this every processed lead would
+    // sit in the pending backlog forever and a replay would reprocess it.
+    // effectsApplied records that delivery and billing have already run, which
+    // is what a replay reads to tell "already done" from "not yet done".
+    try {
+      await completeReceipt({
+        id: capture.receipt.id,
+        outcome: 'processed',
+        reason: finalStatus,
+        effectsApplied: true,
+        db: receiptPool,
+      });
+    } catch (e) {
+      // A receipt that cannot be concluded stays retryable, which is the safe
+      // direction: the lead is already delivered and the replay guard is the
+      // effects_applied flag, not this write.
+      console.error('processLead: could not conclude receipt', e.message);
+    }
 
     // Fire outbound webhooks async (non-blocking)
     try {
