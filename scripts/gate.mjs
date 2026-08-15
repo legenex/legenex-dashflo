@@ -38,6 +38,12 @@ const STEPS = [
     args: ['--prefix', 'client', 'run', 'build'],
   },
   {
+    name: 'bundle-purity',
+    describe: 'no test code in the production bundle',
+    cmd: 'node',
+    args: ['scripts/check-bundle-purity.mjs'],
+  },
+  {
     name: 'secret-scan',
     describe: 'no credential-shaped literals in tracked files',
     cmd: 'node',

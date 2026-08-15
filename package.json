@@ -18,6 +18,7 @@
     "verify:functions": "node scripts/verify-function-loader.mjs",
     "scan:secrets": "node scripts/secret-scan.mjs",
     "check:em-dashes": "node scripts/check-em-dashes.mjs",
+    "check:bundle-purity": "node scripts/check-bundle-purity.mjs",
     "gate": "node scripts/gate.mjs"
   },
   "devDependencies": {

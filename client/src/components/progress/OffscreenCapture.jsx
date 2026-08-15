@@ -29,8 +29,11 @@ import {
 // It cannot be done on the server: the backend functions run Deno with no browser, so
 // there is nothing to render into.
 
-const PAGE_MODULES = import.meta.glob('/src/pages/**/*.jsx');
-const LAYOUT_MODULES = import.meta.glob('/src/components/**/*Layout.jsx');
+// Test files are excluded explicitly. The glob is what decides which modules
+// the production bundle contains, so a colocated *.test.jsx next to a page
+// would otherwise be compiled and shipped to the browser as a capture target.
+const PAGE_MODULES = import.meta.glob(['/src/pages/**/*.jsx', '!**/*.test.jsx', '!**/*.spec.jsx']);
+const LAYOUT_MODULES = import.meta.glob(['/src/components/**/*Layout.jsx', '!**/*.test.jsx', '!**/*.spec.jsx']);
 
 // Re-exported so callers have one obvious place to import capture constants from.
 export { CAPTURE_WIDTHS, ALL_VIEWPORTS };
