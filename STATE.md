@@ -126,11 +126,15 @@ health HTTP: 200
 ```
 
 Negative control. The sync agent last ran at 04:57:24Z and fires hourly, so
-a run was due at 05:57Z. At 05:56Z the jobs were booted out. The last line
-of `sync/state/sync.log` remains `2026-08-15T04:57:24.772Z no changes (at
-194f0e17)` and the file mtime remains 06:57:24 local. No run occurred after
-the pause. This should be re-checked before any merge to confirm the log
-has still not advanced.
+runs were due at 05:57Z and 06:57Z. The jobs were booted out at 05:56Z. Both
+due times have now passed and the last line of `sync/state/sync.log` is
+still `2026-08-15T04:57:24.772Z no changes (at 194f0e17)`, with the file
+mtime still 06:57:24 local. Two consecutive missed runs, re-checked at
+06:37Z. The pause holds.
+
+Re-check this immediately before any merge. A single missed run could be
+coincidence; the log not advancing across several scheduled times is the
+evidence that matters.
 
 ### Writer that is not automated and is not covered by this pause
 
