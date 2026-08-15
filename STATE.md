@@ -204,7 +204,7 @@ because dependencies changed.
 | S4 Secret storage | Done | Lead | cutover branch | `84a5798`, ADR `c04e2fc` | Hash path proven by 42 tests; ADR 0001 written; rotation list in ADR and Gate B | Cleartext purge deliberately deferred, preconditions below |
 | I1 Durable receipt module | Done | Lead | cutover branch | `84a5798`, `0d48043` | 19 tests against real PostgreSQL 16 on 5433, five consecutive green runs | Not wired into processLead; that is I3 |
 | I2 Global DNC module | Review | Lead | cutover branch | `3c568d0`, `c04e2fc` | 35 module tests plus 27 enforcement tests including route suppression regression | Operator UI not built; audited export not built; wiring is I3 |
-| I3 Pipeline integration | Ready | Lead | cutover branch | | Dependencies I1, I2, S3, S4 all satisfied | Not started. Next task. |
+| I3 Pipeline integration | Review | Lead | cutover branch | `b347515` | 44 tests: 19 against real PostgreSQL, 25 call graph. Gate 829 passing, none skipped | Independent review pending. Two outcome reconciliation paths documented rather than integrated, see below |
 | R1 Buyer identity normalization | Review | Lead | cutover branch | `bbf25a3` | 18 tests plus an observed apply and rerun on a disposable database | Not run against production data |
 | R2 Routing and caps | Blocked | | | | | |
 | R3 Delivery and parsing | Blocked | | | | | |
@@ -1023,6 +1023,223 @@ Summary of the two insertion points, against `acb55da`:
 `webhook.js` authenticates with `resolveApiKey` but does not invoke
 `processLead`. Confirm during the integration whether that is a missed intake
 path or a supplier facing surface that legitimately does not ingest.
+
+## Session 15 August 2026, evening: data refresh, I3, S4 postconditions
+
+### Data refresh, run by the parallel session
+
+`node sync/daily-update.mjs --no-code`, 16:46Z to 17:07Z. Not started by this
+session: an instance was already running and a second was never started.
+
+- `[code] skipped (--no-code)`. The prohibited code sync did not run.
+- 90 entities, 4 groups plus 1 partitioned. Pulls 5 of 5 ok.
+- Collapse gate passed: 89 files, 113,550 records against a 97,968 floor,
+  which is `MIN_TOTAL_RATIO` 0.9 of the previous 108,853.
+- Import: 113,550 records. Health 200. Finished OK.
+
+Row totals, 109,210 to 113,553. Only three entities changed:
+
+| Entity | Before | After | Delta |
+|---|---|---|---|
+| `e_error_log` | 107 | 122 | +15 |
+| `e_lead` | 1887 | 1895 | +8 |
+| `e_meta_sync_run` | 105,328 | 109,648 | +4,320 |
+
+August 2026 leads by `final_status`. Only Sold moved:
+
+| Status | Before | After |
+|---|---|---|
+| Sold | 176 | 184 |
+| Disqualified | 195 | 195 |
+| Unsold | 14 | 14 |
+| Rejected | 9 | 9 |
+| Returned | 4 | 4 |
+| Duplicate | 2 | 2 |
+| Qualified | 4 | 4 |
+
+Note for anyone querying leads: `data->>'status'` is null on every row. The
+populated field is `data->>'final_status'`. And `created_date` is a real column,
+not a JSONB key, so date filters belong on the column.
+
+Deletions reproduced: `ApiKey` holds 5 rows and zero named LeadFlow, matching
+the source. The James M / LeadFlow key deletion is reflected locally.
+
+Import fidelity, three apparent discrepancies, all resolved:
+
+- `e_user` has 3 rows and no export file. Correct: the importer skips User by
+  name, because local auth is not sourced from the old app.
+- `e_meta_sync_run` shows 109,687 against an export of 109,648. The 39
+  difference is entirely rows created after 17:07:00Z, confirmed by timestamp,
+  the newest 12 seconds before the check. The local server is writing them
+  live. Not an import failure.
+- No unreadable files, no schema mismatches, no duplicate identifiers, no
+  skipped rows beyond User.
+
+### The refresh has no database backup, and the import deletes first
+
+`sync/import-data.mjs --truncate` issues `DELETE FROM` on every target table
+before reimporting, and the pipeline takes no database dump. The directories
+under `sync/state/backups/` are code file backups from the legacy sync engine,
+not database dumps, and the newest predates today.
+
+The only protection is the 0.9 collapse ratio, which catches a wholesale
+collapse and would not catch one entity silently returning a partial page while
+the total stays within 10 percent.
+
+A dump was taken before the import landed and verified by restore:
+
+- Path: `~/Documents/Projects/dashflo-recovery-backup/db/dashos-pre-refresh-20260815.dump`
+- Format: custom, 6.6 MB, `pg_dump -Fc`
+- Restore verification: restored into a disposable `dashflo_restore_verify`
+  database and compared row for row against the pre-refresh state. 109,210 rows
+  across 91 entity tables, `diff` empty. The probe database was dropped.
+
+`UNPROVEN`: nothing verifies the dump on a schedule, and no future refresh takes
+one automatically. Taking a dump before a refresh is currently a human step.
+
+### S4 postconditions, measured rather than assumed
+
+Before the import, all 5 `e_api_key` rows carried cleartext and no `key_hash`.
+The import reverted the S4 backfill, because the source app has no `key_hash`
+field and `--truncate` replaces the whole blob. The parallel session re-applied
+the backfill; the report mode run here observed 5 already hashed and 0 to do,
+and wrote nothing.
+
+Measured against ADR 0001:
+
+| Precondition | State |
+|---|---|
+| 1. Backfill reports zero "would hash" and zero "unrecoverable" | MET. 5 scanned, 5 already hashed, 0 and 0. |
+| 2. Every supplier posting resolved by hash | Partially. All 5 keys resolve by hash, but no real supplier traffic has been observed against them. |
+| 3. `DASHFLO_APIKEY_LEGACY_CLEARTEXT=0` run in staging for a full cycle | NOT MET. There is no staging. Proven in isolation only. |
+| 4. Supplier posting spec links reissued | NOT MET. |
+| 5. A rollback exists | MET, as of the dump above. |
+
+Authentication verified, not inferred:
+
+```
+fallback ENABLED  -> resolved by: {"hash":5}
+fallback DISABLED -> resolved by: {"hash":5}
+unknown key rejected: true
+```
+
+Resolving by hash with the fallback disabled is what proves the hash path
+stands on its own. No credential value was printed, logged or committed.
+
+**S4 is not complete.** Cleartext is still present on 5 of 5 rows, so invariant
+10, hash only at rest, is not satisfied. That is the documented compatibility
+path: purging is step 5 and must not run until the preconditions above are met.
+Do not read "key_hash exists" as "S4 restored".
+
+The regression loop is closed at `5d5b0e2`. `import-data.mjs` now derives
+`key_hash` from the cleartext the source carries, so a refresh leaves the table
+in the state S4 expects instead of one refresh behind. Additive, never deletes
+cleartext, leaves a keyless row alone rather than hashing an empty string.
+
+### ApiConnector.fb_access_token, unfinished S4 work
+
+3 of 3 `ApiConnector` rows carry a non-empty `fb_access_token`, and the Base44
+export carries all 3, so the refresh reimports them as plain JSONB values.
+
+`ApiConnector` is `adminOnly()` in `entityPolicy.js`, so access is restricted.
+But `fb_access_token` is **not** in the field projection that strips
+`ApiKey.key`, `ApiKey.key_hash` and `IntegrationConfig.config` from responses.
+An authorized admin reading `ApiConnector` through the generic entity route
+receives the raw Meta CAPI token.
+
+Recorded as unfinished, not fixed. Blanking or replacing these values would
+break the live Meta connectors, and moving them behind the credential service
+is a bounded task of its own. This is the same shape as the
+`IntegrationConfig.config` work in S4 and belongs with it.
+
+### I3, integrated
+
+Committed at `b347515`. Detail in the commit message and
+`docs/I3-INTEGRATION-PLAN.md`. What changed against the plan:
+
+- The sequence went into `server/src/lib/intake.js` rather than inline, so the
+  edit to the 2621 line canonical file is small and every caller runs one
+  implementation.
+- `webhook.js` was settled by evidence. It creates leads, so it needed pinning,
+  but it is an outcome reconciliation endpoint with no delivery, billing,
+  routing, connector or conversion capability at all. Asserted, not assumed.
+- Writing that test found a second one. `leadbyteWebhook.js` also creates leads
+  outside the canonical pipeline. The plan had listed it as a `processLead`
+  caller on the strength of a grep for the name; all three hits are comments,
+  and its own header says it never calls `processLead` or any routing. Same
+  shape, same absent capabilities, now covered by the same assertions.
+- The guard that catches the next bypass: no function file outside
+  `processLead.js` and those two documented exceptions may call `Lead.create`.
+  Adding one becomes a visible decision in a diff.
+
+`UNPROVEN`: the under five second supplier response contract has not been
+measured before and after the edit. The added work is one insert and at most
+two indexed lookups by hash, so the expected cost is small, and expected is not
+measured.
+
+### Independent review of I3, and what it found
+
+Two independent reviewers, correctness and security, both ran the real modules
+rather than reading them. They agreed on four defects and found six between
+them that were live at `b347515`. All six are fixed at `0272bf5`, each with a
+test that failed before its fix.
+
+| Defect | Why the green suite missed it |
+|---|---|
+| DNC read only `lead.phone`, so a lead posted as `mobile`, the canonical field, was never screened | The only fixture used `phone`, the one spelling production does not produce |
+| `X_KEY`, a documented key alias, was not in the sanitizer denylist, so receipts stored a live ingest credential | The credential test used only aliases the denylist already covered |
+| Suppressed receipts were never concluded: `expectOwner` compared against a NULL `claim_owner`, matching zero rows, and the return was discarded | No test passed `owner`, so the guard stayed on its null short circuit |
+| The duplicate branch answered ok for a receipt whose first attempt never finished, losing the lead after a HELD retry | Duplicate was tested at the module level, never through the caller |
+| Transport keys were one global namespace, so two suppliers collide and one can pre-claim another's keys | Every duplicate test used a single implicit supplier |
+| `DNC_HASH_KEY` was in neither `.env` nor `.env.example`, so deploying as-is returned 503 to every post | Tests set the key themselves |
+
+The lesson worth carrying: the first suite passed because every fixture used
+the one field spelling, the one key alias and the one argument shape that
+happened to work. Fixtures have to be built from what the caller actually
+produces, not from what is convenient to write.
+
+### I3 remaining blocker, do not build the replay worker before fixing it
+
+The correctness reviewer found that `completeReceipt` is called on exactly one
+of sixteen exit paths out of `processLead`. Fifteen others return without
+concluding the receipt, and three of those return **after** delivery has
+already fired: the pre-classified status bypass, the direct and event route,
+and `finishNative` on its accepted branch, which books revenue and fires
+on_sold deliveries first.
+
+Those receipts sit at `status = received`, `terminal_outcome = NULL`,
+`effects_applied = false`, which is precisely the state a replay reads as "not
+yet delivered and not yet billed". Nothing consumes the backlog today, because
+`claimReceipts` and `pendingReceipts` have no production callers, so this is a
+landmine rather than a live breach. It also means invariant 3, that a committed
+receipt is replayable after a crash, is currently unimplemented rather than
+satisfied.
+
+Fix before writing any replay worker. The shape is a single conclusion helper
+driven by a mutable `effectsApplied` flag set at each delivery site, so every
+return concludes exactly once with an honest effects flag, including the outer
+catch. Reachable on ordinary traffic today are the missing cert and missing
+required fields exits, so the backlog grows during normal operation.
+
+Also open from the reviews, recorded rather than fixed:
+
+- Campaign and vertical scoped DNC entries never fire on the supplier path,
+  because campaign resolution happens 800 lines after the screen and suppliers
+  post no campaign id. Operators can create such entries and they do nothing.
+  Restrict the scope in `dncManage`, or screen a second time after resolution.
+- The suppression rejection names `DNC_SUPPRESSED` to the poster, which is a
+  membership oracle over the list for anyone holding an ingest key, on an
+  endpoint with no rate limit. Whether suppliers contractually need the
+  specific reason is a business question, so it is recorded rather than
+  changed.
+- A suppressed lead persists no `Lead` row and discards `capture.audit`, so the
+  receipt is the only trace. The I3 plan required persisting the audit.
+- `ensureReceiptSchema` runs DDL on the request path rather than at startup,
+  taking `ACCESS EXCLUSIVE` on `lead_receipts` inside a transaction on every
+  post. Move it to boot.
+- `lead_receipts.payload` is a new durable PII sink with no retention policy
+  and no entry in `entityPolicy.js`, so any future read surface over it starts
+  with no authorization story.
 
 ## Next human packet
 
