@@ -14,13 +14,35 @@ import { fileURLToPath } from 'node:url';
 import { pool } from '../server/src/db/pool.js';
 import { tableName, entityNames } from '../server/src/schemas/index.js';
 import { ensureSchema } from '../server/src/db/schema.js';
+import { hashApiKey } from '../server/src/lib/apiKeys.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const EXPORT_DIR = path.join(HERE, 'state', 'import-export');
 const TRUNCATE = process.argv.includes('--truncate');
 const META = new Set(['id', 'created_date', 'updated_date', 'created_by', 'created_by_id']);
 
-function splitRecord(rec) {
+// Task S4. The source app has no key_hash column, so a --truncate import used
+// to hand back a table where every supplier key was cleartext only and the
+// hash column was gone. Authentication still worked, because the resolver
+// falls back to cleartext, but it silently undid the S4 migration on every
+// refresh and the next run of the backfill script had to redo it.
+//
+// The hash is derived, not imported: it is a pure function of the cleartext
+// the source already carries. Computing it here is the same additive migration
+// the backfill script performs, so an import leaves the table in the state S4
+// expects rather than one refresh behind it.
+//
+// This never removes cleartext. Purging is step 5 of the S4 sequence and is
+// deliberately not done here. See docs/adr/0001-secret-storage.md.
+function applyDerivedSecretFields(entityName, data) {
+  if (entityName !== 'ApiKey') return data;
+  const cleartext = typeof data.key === 'string' ? data.key.trim() : '';
+  if (!cleartext) return data;
+  if (typeof data.key_hash === 'string' && data.key_hash.trim()) return data;
+  return { ...data, key_hash: hashApiKey(cleartext) };
+}
+
+function splitRecord(rec, entityName) {
   const data = {};
   for (const [k, v] of Object.entries(rec)) if (!META.has(k)) data[k] = v;
   return {
@@ -28,7 +50,7 @@ function splitRecord(rec) {
     created_date: rec.created_date || null,
     updated_date: rec.updated_date || rec.created_date || null,
     created_by: rec.created_by || rec.created_by_id || null,
-    data,
+    data: applyDerivedSecretFields(entityName, data),
   };
 }
 
@@ -58,7 +80,7 @@ async function main() {
       if (TRUNCATE) await client.query(`DELETE FROM ${table}`);
       for (const rec of records) {
         if (!rec || !rec.id) { fail++; continue; }
-        const { id, created_date, updated_date, created_by, data } = splitRecord(rec);
+        const { id, created_date, updated_date, created_by, data } = splitRecord(rec, name);
         try {
           await client.query(
             `INSERT INTO ${table} (id, data, created_by, created_date, updated_date)
