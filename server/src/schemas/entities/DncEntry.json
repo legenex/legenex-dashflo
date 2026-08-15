@@ -1,0 +1,87 @@
+{
+  "name": "DncEntry",
+  "type": "object",
+  "description": "A single do-not-contact suppression. Task I2. The contact value is stored only as a keyed hash; the raw phone or email is never persisted here. History is immutable: an entry is expired by status change, never deleted or rewritten.",
+  "properties": {
+    "contact_kind": {
+      "type": "string",
+      "enum": [
+        "phone",
+        "email"
+      ],
+      "description": "Which contact field this entry suppresses"
+    },
+    "contact_hash": {
+      "type": "string",
+      "description": "HMAC-SHA256 of the normalized value under DNC_HASH_KEY. Derived only by server/src/lib/dnc.js. The raw value is never stored."
+    },
+    "contact_display": {
+      "type": "string",
+      "description": "Heavily masked form for operator lists, for example +1*******89. Never the full value."
+    },
+    "scope": {
+      "type": "string",
+      "enum": [
+        "global",
+        "vertical",
+        "campaign"
+      ],
+      "default": "global",
+      "description": "How wide the suppression reaches"
+    },
+    "scope_value": {
+      "type": "string",
+      "description": "Vertical code or campaign id when scope is narrower than global. An entry with a narrow scope and no value covers nothing."
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "active",
+        "expired"
+      ],
+      "default": "active",
+      "description": "Expired entries are retained for audit and never deleted"
+    },
+    "effective_from": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When the suppression begins. Absent means immediately."
+    },
+    "effective_to": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When the suppression ends. Absent means indefinitely."
+    },
+    "reason": {
+      "type": "string",
+      "description": "Operator facing reason, for example consumer request, litigation, complaint"
+    },
+    "source": {
+      "type": "string",
+      "description": "Where this entry came from: manual, bulk_import, buyer_feedback, regulator_list"
+    },
+    "actor": {
+      "type": "string",
+      "description": "User id or system identifier that created the entry"
+    },
+    "import_batch_id": {
+      "type": "string",
+      "description": "Groups entries created by one bulk import, so an import can be reviewed or expired as a unit"
+    },
+    "expired_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "expired_by": {
+      "type": "string"
+    },
+    "expired_reason": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "contact_kind",
+    "contact_hash",
+    "status"
+  ]
+}

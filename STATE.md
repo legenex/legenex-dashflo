@@ -196,8 +196,8 @@ because dependencies changed.
 | S2 Entity authorization | Done | Lead | cutover branch | `pending` | Matrix plus route tests, 40 tests | |
 | S3 Function authorization | Done | Lead | cutover branch | `pending` | Route deny-by-default, 11 tests | Two public webhooks still lack own verification |
 | S4 Secret storage | In progress | Lead | cutover branch | `pending` | Hash path proven by 42 tests; cleartext retained on purpose | Cleartext purge is deliberately deferred until real traffic is observed on the hash path |
-| I1 Durable receipt module | Blocked | | | | | |
-| I2 Global DNC module | Blocked | | | | | |
+| I1 Durable receipt module | Review | Lead | cutover branch | `pending` | 18 tests against real PostgreSQL 16 on loopback | Not wired into processLead; that is I3 |
+| I2 Global DNC module | Review | Lead | cutover branch | `pending` | 35 tests, keyed hashing and fail-closed proven | Not wired into processLead; operator UI not built |
 | I3 Pipeline integration | Blocked | Lead | | | | |
 | R1 Buyer identity normalization | Blocked by F1 | | | | | |
 | R2 Routing and caps | Blocked | | | | | |
@@ -274,6 +274,12 @@ Client, 9 advisories, 4 high and 5 moderate:
 - `JWT_SECRET`. Production currently falls back to a known development
   value. Phase 1 makes startup refuse the fallback; a real value is still
   required at deploy time.
+- `DNC_HASH_KEY`. New in I2. The key that all do-not-contact entries are
+  hashed under. It has no default and the DNC surface fails closed without
+  it. Note before setting it: rotating this key later invalidates every
+  stored suppression, and the raw contacts are deliberately not kept, so a
+  rotation means rebuilding the list from its original sources. Decide the
+  key management approach before the list is populated.
 
 No values appear in this repository, and none should be pasted into it.
 
@@ -541,6 +547,88 @@ REMAINING RISK: Two concurrent writers to one IntegrationConfig row can still
   closed. `UNPROVEN`: no test exercises that race.
   The backfill script has not been run against a real database in this
   session, because no production or staging database was in scope.
+```
+
+```
+TASK: I1 Durable receipt module
+CONTRACT: A sanitized receipt commits before enrichment, validation, delivery
+  or billing. Database constraints enforce transport idempotency and safe
+  worker claiming. Every committed receipt reaches exactly one terminal
+  outcome or stays visibly retryable. Replay after a crash cannot
+  double-deliver or double-bill.
+FILES: server/src/db/receiptSchema.js, server/src/lib/receipts.js,
+  server/test/durableReceipt.test.js
+COMMANDS: npx vitest run server/test/durableReceipt.test.js, run five times
+RESULTS: 18 tests, all passing, five consecutive clean runs.
+OBSERVED BEHAVIOR: Against a real PostgreSQL 16 on 127.0.0.1:5433 in a
+  disposable database, not a double, because the properties are database
+  properties.
+  - Eight concurrent commits of one transport key produce exactly one row.
+    The UNIQUE constraint decides, not a prior SELECT.
+  - Four workers claiming at once, one wins. A leased receipt is invisible to
+    a second worker. An expired lease is reclaimed and the attempt counter
+    shows the retry, so a poison receipt is visible rather than silent.
+  - A second completion is refused and the first outcome stands. A worker that
+    lost its lease cannot write its result; the current lease holder can.
+  - Inserting a terminal row with no outcome is rejected by
+    lead_receipts_terminal_coherent, so "silently dropped" is unrepresentable.
+  - A crash leaves the receipt in the pending backlog; a replacement worker
+    claims it with the payload intact and completes it once.
+  - Credential material never reaches the stored payload.
+REVIEWERS: Pending independent and failure-mode review.
+COMMIT: pending
+ROLLBACK: Drop the lead_receipts table. Nothing reads it yet, because I3 has
+  not run, so removal has no effect on the running system.
+REMAINING RISK: Two real defects were found by these tests and fixed, both
+  ordering related. created_date is not a total order, so FIFO claiming was
+  nondeterministic when several receipts landed in the same instant; a
+  BIGSERIAL seq column is now the tiebreak. And RETURNING does not preserve
+  the subquery ORDER BY, so a claimed batch came back unordered; it is sorted
+  before it is handed to the caller. Both would have surfaced only under load.
+  `UNPROVEN`: behaviour under real concurrent load, as opposed to eight
+  simultaneous statements, is not measured. That is O2.
+```
+
+```
+TASK: I2 Global DNC module
+CONTRACT: Match normalized phone and email with keyed hashes. Support scope,
+  status, effective dates, reason, source, actor and immutable history.
+  Support operator search, controlled add or expire, and bulk import.
+  Suppressed leads keep a stable machine reason.
+FILES: server/src/lib/dnc.js, server/src/schemas/entities/DncEntry.json,
+  server/src/functions/dncManage.js, server/src/lib/entityPolicy.js,
+  server/test/globalDnc.test.js
+COMMANDS: npx vitest run server/test/globalDnc.test.js
+RESULTS: 35 tests, all passing.
+OBSERVED BEHAVIOR:
+  - The same person written five ways normalizes to one hash. A plus tagged
+    email does not collapse into the untagged one, because folding it would
+    suppress somebody who never opted out.
+  - Entries are HMAC-SHA256 under DNC_HASH_KEY, asserted to differ from a
+    bare SHA-256 of the same input. A plain hash of a ten digit number is
+    walkable offline; the key is what prevents that.
+  - With DNC_HASH_KEY unset, hashing throws and dncManage returns 503 rather
+    than answering "not suppressed", which would contact people who opted out.
+  - Future dated, expired and out-of-window entries do not suppress, and an
+    expired entry is retained rather than deleted.
+  - A narrow scope with no scope value covers nothing, so a half configured
+    entry does nothing instead of suppressing everyone.
+  - Expiring is a status change with actor and reason recorded, and is
+    idempotent. The route denies create, update and delete on DncEntry
+    outright, so history cannot be rewritten through it.
+  - No response or stored row contains a raw phone or email, including the
+    bulk import report, which names row numbers instead.
+REVIEWERS: Pending independent and security review.
+COMMIT: pending
+ROLLBACK: git revert. Nothing calls this module yet, so revert is inert.
+REMAINING RISK: DNC_HASH_KEY is a new credential reference for Gate B, and it
+  cannot be rotated without re-deriving every stored hash from values this
+  system deliberately does not keep. Rotating it means rebuilding the list
+  from its sources. This needs to be decided before the list is populated,
+  not after.
+  `UNPROVEN`: the operator UI and audited export are not built, and
+  enforcement across every intake source is I3, so "identical across every
+  real intake source" is not yet demonstrated.
 ```
 
 ## Next human packet

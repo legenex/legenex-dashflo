@@ -162,6 +162,14 @@ export const ENTITY_POLICY = {
   ApiKey: adminOnly(),
   IntegrationConfig: adminOnly(),
 
+  // Do-not-contact. Task I2. Operators run the list day to day, so they can
+  // read and search it, but nobody deletes through this route: the requirement
+  // is immutable history, and an entry is retired by expiring it, not by
+  // removing the evidence that it existed. Creating and expiring go through
+  // the dncManage service function, which hashes the contact server-side, so
+  // create and update are closed here too.
+  DncEntry: { read: OPERATORS, create: [], update: [], delete: [] },
+
   // The user table. Owner and admin only, and role escalation fields are not
   // writable through the generic route.
   User: adminOnly(),
@@ -182,6 +190,12 @@ export const READ_DENY_FIELDS = {
   // The credential blob for an integration. Read it back through no route.
   // Writes go to the saveIntegrationConfig service function, which merges.
   IntegrationConfig: ['config'],
+  // A suppression list is a list of people who asked not to be contacted, so
+  // it is exactly the population that must not leak. The hash is withheld
+  // because it is a stable per-person identifier: anyone holding it can
+  // correlate the same person across exports even without reversing it.
+  // Operators see contact_display, which is masked.
+  DncEntry: ['contact_hash'],
 };
 
 // Fields that cannot be set or changed through the generic route, because
