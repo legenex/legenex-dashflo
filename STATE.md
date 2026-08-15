@@ -1004,8 +1004,25 @@ I3 pipeline integration. Its dependencies I1, I2, S3 and S4 are all satisfied,
 and `server/src/lib/dncEnforcement.js` is the function it wires in. It is the
 serial integrator task: no parallel agent edits `processLead.js`.
 
-Before starting, read all callers of `processLead.js`. The file is 2621 lines
-and is called by several ingestion and recovery functions.
+The reading step is done and recorded in `docs/I3-INTEGRATION-PLAN.md`: both
+insertion points with line numbers, all six callers with what each needs, the
+tests to write first, what to measure against the five second contract, and the
+rollback. The edit itself has not started.
+
+Summary of the two insertion points, against `acb55da`:
+
+- Receipt commit goes after the dry run block closes at line 1431 and before
+  `ApiKey.update` at 1433. After the dry run return so a validation still
+  writes nothing, before `Lead.create` at 1456 so the receipt is the first
+  durable write.
+- Global DNC goes immediately after that, before `Lead.create` and well before
+  `checkRequiredFields` at 1940, because it must be the first business
+  validation. UNAVAILABLE releases the receipt back to the pending backlog
+  rather than delivering or rejecting.
+
+`webhook.js` authenticates with `resolveApiKey` but does not invoke
+`processLead`. Confirm during the integration whether that is a missed intake
+path or a supplier facing surface that legitimately does not ingest.
 
 ## Next human packet
 
