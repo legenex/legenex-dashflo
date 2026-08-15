@@ -7,11 +7,13 @@ Update this file after every completed or blocked task. It is the persistent han
 - Audited base: `a63144cb0e1a2c000e873e94e5091565f6bbb1c6`
 - Current base: `84ab0303f93e8704ac01d3c173c155f6452a3a97`
 - Working branch: `claude/dashflo-production-cutover-e1tgel`
-- Auto-sync status: no writer inside this checkout. See delta audit below.
-- Current phase: Phase 0 complete, Phase 1 next
-- Active human gate: None
-- Last green commit: `c247649`
-- Last full gate: PASS at `c247649` on 14 August 2026
+- Auto-sync status: PAUSED at source. Both launchd writers booted out and
+  persistently disabled on the operator workstation, 15 August 2026. See
+  "Gate A resolution" below for the verification evidence.
+- Current phase: Phase 1 complete, Phase 2 in progress
+- Active human gate: Gate A approved and closed. Gate B pending.
+- Last green commit: `00eeab1`
+- Last full gate: PASS at `00eeab1` on 15 August 2026
 
 ## Delta audit, audited base to current base
 
@@ -46,6 +48,106 @@ Two structural differences from the pack's assumptions:
   not here.
 - Work is isolated on `claude/dashflo-production-cutover-e1tgel`. Pausing
   the upstream job before integration remains a Gate A request.
+
+## Gate A resolution, 15 August 2026
+
+Bru approved Gate A and chose option 1, pause the upstream auto-sync for
+the cutover period. The earlier "no writer inside this checkout" finding
+was correct but incomplete: it was measured from a cloud container. The
+writer runs on the operator workstation, which is where it was located and
+stopped.
+
+### Writer identification
+
+The active automated writer to `main` is `com.legenex.dashos.sync`, a
+launchd user agent on the operator workstation.
+
+| Candidate | Verdict | Basis |
+|---|---|---|
+| `com.legenex.dashos.sync` | ACTIVE WRITER | Runs `sync/sync.mjs` hourly, `StartInterval` 3600. `commitAndPush()` commits as `legenex <team@legenex.com>` and runs `git push origin main`. Its own log records `pushed to origin/main` at 2026-08-14T13:38:50Z and 2026-08-14T21:56:42Z. |
+| `com.legenex.dashos.updater` | ACTIVE WRITER, indirect | Runs `sync/daily-update.mjs` at 03:30 local. That script shells out to `sync.mjs --force`, which reaches the same push path. Same writer, second trigger. |
+| Cloud updater GitHub workflow | NOT ACTIVE | `gh workflow list` and `gh run list` on `legenex/legenex-dashflo` both return empty. The repository has no `.github/` directory. `sync/cloud-updater.workflow.yml` is an uninstalled template. Corroborated by `sync/cloud-baseline.json`, still pinned at `83587f35` from 12 August while the local sync advanced to `194f0e17`, and by the absence of any `Cloud auto-sync` commit in history. |
+| Another external scheduler | NOT ACTIVE | No user crontab. No `com.legenex.dashos.*` job in `/Library/LaunchDaemons` or `/Library/LaunchAgents`. The other user agents point at unrelated trees: `com.legenex.buzz.autopush` at `~/Projects/Buzz`, `com.legenex.unclaimed-backup` at `~/Projects/Youtube/Unclaimed`, `com.agentos.dashboard` at an unrelated Next.js app, `com.legenex.buzz-client-guard` at `~/.buzz`. |
+
+### Commands used to pause only the two jobs
+
+`scripts/uninstall-scheduler.sh` was deliberately not used, because it also
+boots out `com.legenex.dashos.server` and deletes all three plists.
+
+```
+UIDN="$(id -u)"; DOMAIN="gui/$UIDN"
+for L in com.legenex.dashos.sync com.legenex.dashos.updater; do
+  launchctl bootout  "$DOMAIN/$L"
+  launchctl disable  "$DOMAIN/$L"
+done
+```
+
+`bootout` unloads the job for the current session. `disable` writes a
+persistent flag to the per-user service database so a login or reboot does
+not silently reload it. Both are needed. The plist files are left in place,
+so the pause is reversible with `launchctl enable` followed by
+`launchctl bootstrap`, or by re-running `scripts/install-scheduler.sh`.
+
+### Verification evidence, observed 15 August 2026 at 07:56 local
+
+`launchctl list | grep -i legenex`, both target labels absent:
+
+```
+35631	-15	com.legenex.dashos.server
+-	0	com.legenex.unclaimed-backup
+-	1	com.legenex.buzz.autopush
+-	0	com.legenex.buzz-client-guard
+```
+
+`launchctl print gui/$(id -u)/<label>` per job:
+
+```
+com.legenex.dashos.sync            -> NOT LOADED
+com.legenex.dashos.updater         -> NOT LOADED
+com.legenex.dashos.server          -> LOADED
+```
+
+`launchctl print-disabled gui/$(id -u)`, persistent flags:
+
+```
+"com.legenex.dashos.server" => enabled
+"com.legenex.dashos.sync" => disabled
+"com.legenex.dashos.updater" => disabled
+```
+
+API server left running, as required:
+
+```
+state = running
+pid = 35631
+program = /opt/homebrew/bin/node
+35631 /opt/homebrew/bin/node .../server/src/index.js
+health HTTP: 200
+```
+
+Negative control. The sync agent last ran at 04:57:24Z and fires hourly, so
+a run was due at 05:57Z. At 05:56Z the jobs were booted out. The last line
+of `sync/state/sync.log` remains `2026-08-15T04:57:24.772Z no changes (at
+194f0e17)` and the file mtime remains 06:57:24 local. No run occurred after
+the pause. This should be re-checked before any merge to confirm the log
+has still not advanced.
+
+### Writer that is not automated and is not covered by this pause
+
+`origin/main` is at `84ab0303`, three commits ahead of the workstation
+checkout of `main` at `a63144cb`. Those three commits are authored by
+`Legenex <nick@legenex.com>` on 2026-08-15 between 00:48 and 00:50 with the
+messages `Add files via upload`, `Delete legenex-dashflo-main.zip` and
+`Add files via upload`. That message shape is the GitHub web upload
+signature, so a human pushed to `main` through github.com. Disabling
+launchd jobs cannot prevent that. The delta is documentation only and is
+already covered by the delta audit above, and this branch is built on top
+of `84ab030`, so nothing is lost. Before merging, confirm with Bru that no
+further web uploads will land, or protect `main`.
+
+`UNPROVEN`: whether any writer exists on a machine other than this
+workstation. The checks above cover this workstation and the GitHub
+Actions surface for `legenex/legenex-dashflo` only.
 
 ## Verified baseline at `84ab030`, re-measured 14 August 2026
 
@@ -93,7 +195,7 @@ because dependencies changed.
 | S1 Auth fail-closed | Done | Lead | cutover branch | `pending` | Live probe, 22 of 22 checks | |
 | S2 Entity authorization | Done | Lead | cutover branch | `pending` | Matrix plus route tests, 40 tests | |
 | S3 Function authorization | Done | Lead | cutover branch | `pending` | Route deny-by-default, 11 tests | Two public webhooks still lack own verification |
-| S4 Secret storage | In progress | Lead | cutover branch | `pending` | Read projection strips key and config | Hash-only at rest not yet done |
+| S4 Secret storage | In progress | Lead | cutover branch | `pending` | Hash path proven by 42 tests; cleartext retained on purpose | Cleartext purge is deliberately deferred until real traffic is observed on the hash path |
 | I1 Durable receipt module | Blocked | | | | | |
 | I2 Global DNC module | Blocked | | | | | |
 | I3 Pipeline integration | Blocked | Lead | | | | |
@@ -218,14 +320,20 @@ user holding `base_role` owner.
   allowlist but do not verify their own caller. The signature contract
   needs the third-party details, which is Gate B. The gap is asserted in
   `server/test/functionRoute.test.js` so it stays visible.
-- Supplier API keys are still stored in cleartext. The route no longer
-  returns them, but hash-only at rest changes how `processLead`
-  authenticates a supplier and is the remainder of S4.
-- `IntegrationConfig.config` is no longer readable through the generic
-  route. The settings dialogs merge stored config on save, so moving these
-  credentials to a real store must land together with a service function
-  that supports that merge, or those forms will overwrite stored secrets
-  with blanks. Tracked as the remainder of S4.
+- Supplier API keys resolve by SHA-256 hash as of S4. The cleartext column
+  is retained deliberately. See "S4 cleartext purge" below for what has to
+  be true before it is removed.
+- `IntegrationConfig.config` is written through `saveIntegrationConfig`,
+  which merges server-side, and read through `integrationConfigStatus`,
+  which returns settings by value and secrets as presence only. Both
+  fields are now write-denied on the generic route as well as read-denied.
+- `client/src/components/suppliers/PostingSpecs.jsx` still builds its
+  supplier spec link with `specToken(apiKey?.key)`. That value has been
+  absent since S1 read-denied it, so the link has been wrong since then,
+  and S4 moved the canonical derivation to the key hash, which the browser
+  also cannot see. The page needs a small server function that returns the
+  token for an authorized operator. Not fixed here, to keep S4 bounded.
+  `UNPROVEN`: no test currently asserts this page's behaviour.
 - Rate limiting is in-process. Correct for a single node, wrong the moment
   a second node exists. Recorded here rather than assumed away.
 - Bearer tokens are still persisted in browser local storage by
@@ -233,6 +341,26 @@ user holding `base_role` owner.
   the CSRF guard exempts header-authenticated calls, so removing the local
   storage token is a client change that can land next without a server
   change.
+
+## S4 cleartext purge, preconditions
+
+The `ApiKey.key` column still holds the legacy cleartext value. Removing it is
+a separate task and must not run until all of the following are true. Each is
+checkable, not a judgement call.
+
+1. `node server/scripts/backfill-api-key-hashes.js` reports zero rows in
+   "would hash" and zero in "unrecoverable" against the production database.
+2. Every supplier posting in the observation window resolved by hash. The
+   resolver reports `matchedBy` for exactly this purpose. Any row still being
+   matched by cleartext is a supplier that has not posted since the backfill,
+   not a row that is safe to purge.
+3. `DASHFLO_APIKEY_LEGACY_CLEARTEXT=0` has run in staging for a full cycle
+   with no authentication failures.
+4. Supplier posting spec links have been reissued, because `spec.js` derives
+   its token from the key hash once cleartext is gone, and every link already
+   handed to a supplier carries a token derived from the raw key.
+5. A rollback exists. Purging is irreversible: the raw values are not
+   recoverable from the hash, so a bad purge means rotating every supplier key.
 
 ## Corrections to historical assumptions
 
@@ -350,6 +478,69 @@ REMAINING RISK: The compromised migrateSource literal was briefly written
   into a regression test at c247649 and remains in git history there as
   well as in its original location. Both are covered by the single Gate B
   rotation item. The test no longer contains the value.
+```
+
+```
+TASK: S4 Secret storage
+CONTRACT: Supplier API keys are hash-only at rest and resolve without the
+  cleartext column. Integration credentials are written through a server-side
+  service that merges a partial update over the stored blob, and are never
+  returned to a client. Neither credential field is writable through the
+  generic entity route. Cleartext is not removed in this change.
+FILES: server/src/lib/apiKeys.js, server/src/lib/integrationConfig.js,
+  server/src/functions/issueApiKey.js,
+  server/src/functions/saveIntegrationConfig.js,
+  server/src/functions/integrationConfigStatus.js,
+  server/scripts/backfill-api-key-hashes.js,
+  server/src/schemas/entities/ApiKey.json, server/src/lib/entityPolicy.js,
+  server/src/functions/processLead.js, webhook.js, contract.js, spec.js,
+  provisionLeadSource.js, server/package.json,
+  server/test/apiKeyHashing.test.js,
+  server/test/integrationCredentials.test.js,
+  server/test/entityRoute.test.js,
+  client/src/functions/{issueApiKey,saveIntegrationConfig,integrationConfigStatus}.js,
+  client/src/components/settings/{SettingsApiKeys,ApiKeyConnectDialog,SettingsIntegrations,GooglePickerSettings}.jsx,
+  client/src/components/finances/BankFeedTab.jsx,
+  client/src/lib/financeSettings.js
+COMMANDS: npx vitest run server/test/apiKeyHashing.test.js
+  server/test/integrationCredentials.test.js; npm run gate
+RESULTS: gate PASS, all six steps. 56 test files, 607 tests, 0 failures, up
+  from 54 files and 562 tests at 00eeab1. 42 new tests cover the two new
+  modules, 3 more cover the write-deny at the route.
+OBSERVED BEHAVIOR:
+  - A key resolves from its hash alone, with no cleartext present on the row.
+  - A row holding only cleartext resolves through the fallback and is
+    backfilled in place on the way through, and the second presentation of
+    the same key takes the hash path. The cleartext column is not deleted.
+  - With DASHFLO_APIKEY_LEGACY_CLEARTEXT=0 a cleartext-only row stops
+    resolving and a backfilled row keeps resolving. That is the switch that
+    proves the hash path stands on its own.
+  - A failed backfill write does not fail the request.
+  - mintApiKey produces 200 distinct keys with no collision and a 32
+    character random segment from crypto.randomBytes. The previous browser
+    generator used Math.random().
+  - saveIntegrationConfig merges a partial update over the real stored blob:
+    saving {account_id} against {api_token, account_id} persists both. A
+    blank secret keeps the stored value. Removal requires an explicit clear.
+  - No response from either integration function contains a secret value,
+    asserted by scanning the serialized payload for the stored token.
+  - PATCHing key, key_hash or config through the generic entity route is
+    dropped before it reaches the database, on create as well as update.
+REVIEWERS: Pending independent and security review.
+COMMIT: pending
+ROLLBACK: git revert the S4 commit. Safe in both directions: the change is
+  additive at rest, so reverting restores cleartext resolution against rows
+  that still carry cleartext. Any key minted after this change exists only as
+  a hash and would have to be rotated, so prefer fixing forward once keys have
+  been issued.
+REMAINING RISK: Two concurrent writers to one IntegrationConfig row can still
+  interleave. `Repo.update` has no optimistic locking and `config` is a single
+  opaque string, so a service function's read-modify-write and an operator's
+  save can overwrite each other. The window is much smaller than before,
+  because the merge now happens server-side against fresh data, but it is not
+  closed. `UNPROVEN`: no test exercises that race.
+  The backfill script has not been run against a real database in this
+  session, because no production or staging database was in scope.
 ```
 
 ## Next human packet

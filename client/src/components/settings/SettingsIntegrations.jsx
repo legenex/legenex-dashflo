@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { api } from '@/api/client';
 import { integrationStatus as fetchIntegrationStatus } from '@/functions/integrationStatus';
+import integrationConfigStatus from '@/functions/integrationConfigStatus';
+import saveIntegrationConfig from '@/functions/saveIntegrationConfig';
 import { sendWhatsapp } from '@/functions/sendWhatsapp';
 import { sendGmail } from '@/functions/sendGmail';
 import { syncMercury } from '@/functions/syncMercury';
@@ -108,25 +109,37 @@ export default function SettingsIntegrations() {
   });
   const statusMap = data?.data?.status || data?.status || {};
 
+  // Task S4. The access token is a secret and is never sent back to the
+  // browser. The phone number id is an identifier, so it prefills normally.
+  // A blank token on save means "keep the stored one".
+  const [waTokenStored, setWaTokenStored] = useState(false);
+
   const openWhatsapp = async () => {
     setWaOpen(true); setWaLoading(true);
     try {
-      const list = await api.entities.IntegrationConfig.filter({ name: 'whatsapp' });
-      const cfg = list[0];
-      if (cfg) { const p = JSON.parse(cfg.config || '{}'); setWaForm({ access_token: p.access_token || '', phone_number_id: p.phone_number_id || '' }); }
-      else setWaForm({ access_token: '', phone_number_id: '' });
-    } catch { setWaForm({ access_token: '', phone_number_id: '' }); }
+      const res = await integrationConfigStatus({ name: 'whatsapp' });
+      const info = (res?.data?.integrations || {}).whatsapp || {};
+      setWaTokenStored(info.secrets?.access_token?.set === true);
+      setWaForm({ access_token: '', phone_number_id: info.values?.phone_number_id || '' });
+    } catch { setWaTokenStored(false); setWaForm({ access_token: '', phone_number_id: '' }); }
     setWaLoading(false);
   };
 
   const saveWhatsapp = async () => {
-    if (!waForm.access_token?.trim() || !waForm.phone_number_id?.trim()) { toast.error('Access token and Phone Number ID are required'); return; }
+    const tokenSatisfied = waForm.access_token?.trim() || waTokenStored;
+    if (!tokenSatisfied || !waForm.phone_number_id?.trim()) {
+      toast.error('Access token and Phone Number ID are required');
+      return;
+    }
     setWaSaving(true);
     try {
-      const list = await api.entities.IntegrationConfig.filter({ name: 'whatsapp' });
-      const payload = JSON.stringify(waForm);
-      if (list[0]) await api.entities.IntegrationConfig.update(list[0].id, { config: payload });
-      else await api.entities.IntegrationConfig.create({ name: 'whatsapp', config: payload });
+      // Only what was typed. The server merges over the stored blob, so a
+      // blank token keeps the stored one instead of erasing it.
+      const values = { phone_number_id: waForm.phone_number_id.trim() };
+      if (waForm.access_token?.trim()) values.access_token = waForm.access_token.trim();
+
+      const res = await saveIntegrationConfig({ name: 'whatsapp', values });
+      if (res?.data?.success === false) { toast.error(res.data.error || 'Failed to save credentials'); setWaSaving(false); return; }
       toast.success('WhatsApp credentials saved');
       qc.invalidateQueries({ queryKey: ['integration-status'] }); refetch();
     } catch { toast.error('Failed to save credentials'); }
@@ -330,7 +343,7 @@ export default function SettingsIntegrations() {
             <div className="space-y-4">
               <div>
                 <Label className="text-[12px]">Access Token</Label>
-                <Input value={waForm.access_token} onChange={(e) => setWaForm((p) => ({ ...p, access_token: e.target.value }))} placeholder="Permanent access token from Meta App" className="mt-1 bg-background font-mono text-[12px]" type="password" />
+                <Input value={waForm.access_token} onChange={(e) => setWaForm((p) => ({ ...p, access_token: e.target.value }))} placeholder={waTokenStored ? 'Stored. Leave blank to keep current' : 'Permanent access token from Meta App'} className="mt-1 bg-background font-mono text-[12px]" type="password" />
               </div>
               <div>
                 <Label className="text-[12px]">Phone Number ID</Label>

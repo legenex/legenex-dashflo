@@ -174,11 +174,13 @@ export const ENTITY_POLICY = {
 // route does; rotating one is a deliberate action through a service function.
 
 export const READ_DENY_FIELDS = {
-  // The raw supplier key. The UI lists key_prefix and only ever shows the full
-  // value once, at creation, from the value it generated itself.
-  ApiKey: ['key'],
-  // The credential blob for an integration. See STATE.md: moving this to a
-  // real credential store with opaque references is task S4.
+  // The raw supplier key and its hash. The UI lists key_prefix and sees the
+  // full value once, in the response to issueApiKey, which mints it. The hash
+  // is withheld too: it is offline-attackable credential material, and the
+  // public posting spec derives its access token from it.
+  ApiKey: ['key', 'key_hash'],
+  // The credential blob for an integration. Read it back through no route.
+  // Writes go to the saveIntegrationConfig service function, which merges.
   IntegrationConfig: ['config'],
 };
 
@@ -188,6 +190,17 @@ export const READ_DENY_FIELDS = {
 export const WRITE_DENY_FIELDS = {
   User: ['role', 'base_role', 'permissions', 'linked_buyer_id', 'linked_supplier_id'],
   Lead: ['created_by'],
+  // Task S4. Read-denying a credential while leaving it writable is not
+  // protection: a caller that cannot read the stored value can still overwrite
+  // it, and the settings dialogs did exactly that by accident, saving a form
+  // they had loaded blank and destroying the stored secret.
+  //
+  // Secret material is now write-denied here and owned by service functions
+  // that read, merge, and write server-side:
+  //   ApiKey.key / key_hash   -> issueApiKey
+  //   IntegrationConfig.config -> saveIntegrationConfig
+  ApiKey: ['key', 'key_hash'],
+  IntegrationConfig: ['config'],
 };
 
 // ── Decisions ───────────────────────────────────────────────────────────────

@@ -18,6 +18,8 @@ const truthy = (v) => {
   return s === 'true' || s === 'yes' || s === '1' || s === 'y';
 };
 
+import { resolveApiKey } from '../lib/apiKeys.js';
+
 // Payload key aliases -> canonical field. First present key wins.
 const FIELD_ALIASES = {
   first_name: ['first_name', 'contact_first_name', 'firstname'],
@@ -199,10 +201,13 @@ export default async function webhook(ctx) {
     return reply(401, { ok: false, outcome: 'rejected', reason: 'missing_key', message: 'No API key supplied. Append ?key=... to the URL.' });
   }
 
+  // Hash-based resolution, task S4. resolveApiKey returns a record whether or
+  // not it is active, so the disabled-versus-unknown distinction below still
+  // produces its two different messages.
   let apiKey = null;
   try {
-    const found = await db.entities.ApiKey.filter({ key: presented });
-    apiKey = (Array.isArray(found) ? found : [])[0] || null;
+    const resolved = await resolveApiKey(db, presented);
+    apiKey = resolved.record;
   } catch { /* fall through to the rejection below */ }
 
   if (!apiKey || apiKey.active === false) {

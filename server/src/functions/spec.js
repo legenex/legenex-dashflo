@@ -15,10 +15,31 @@ function parseJsonArray(val) {
 }
 
 // Deterministic spec token derived from the supplier's API key. No new storage.
-async function specToken(apiKey) {
-  const buf = new TextEncoder().encode(`legenex-spec:${apiKey}`);
+//
+// Task S4. The token used to be derived from the raw key, which stops being
+// available once keys are hash-only at rest. It is now derived from the stored
+// `key_hash` instead, which is equally stable and is present on every row after
+// the backfill.
+//
+// Links already handed to suppliers carry a token derived the old way, so the
+// legacy derivation is still accepted while the cleartext column exists. When
+// cleartext is purged, those links stop working and every supplier spec URL has
+// to be reissued. That is recorded in STATE.md as a prerequisite of the purge,
+// not something that happens silently.
+async function specTokenFrom(material) {
+  const buf = new TextEncoder().encode(`legenex-spec:${material}`);
   const hash = await crypto.subtle.digest('SHA-256', buf);
   return Array.from(new Uint8Array(hash)).map((b) => b.toString(16).padStart(2, '0')).join('').slice(0, 24);
+}
+
+// Compare without leaking which prefix matched through timing.
+function tokensEqual(a, b) {
+  const x = String(a || '');
+  const y = String(b || '');
+  if (x.length !== y.length || x.length === 0) return false;
+  let diff = 0;
+  for (let i = 0; i < x.length; i += 1) diff |= x.charCodeAt(i) ^ y.charCodeAt(i);
+  return diff === 0;
 }
 
 export default async function spec(ctx) {
@@ -50,13 +71,22 @@ export default async function spec(ctx) {
     // Resolve this supplier's API key.
     const allKeys = await db.entities.ApiKey.list();
     const key = allKeys.find((k) => k.supplier_id === supplier.id || k.supplier_name === supplier.name);
-    if (!key || !key.key) {
+    if (!key || !(key.key_hash || key.key)) {
       return ctx.json({ ok: false, error: 'No API key for this supplier' }, 404);
     }
 
-    // Validate the token.
-    const expected = await specToken(key.key);
-    if (!token || token !== expected) {
+    // Validate the token. The hash derivation is canonical; the raw derivation
+    // is accepted only while this row still carries a cleartext key.
+    let accepted = false;
+    if (token) {
+      if (key.key_hash) {
+        accepted = tokensEqual(token, await specTokenFrom(key.key_hash));
+      }
+      if (!accepted && key.key) {
+        accepted = tokensEqual(token, await specTokenFrom(key.key));
+      }
+    }
+    if (!accepted) {
       return ctx.json({ ok: false, error: 'Invalid token' }, 401);
     }
 

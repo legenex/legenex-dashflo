@@ -7,10 +7,12 @@
 //   - no ?campaign  => list of campaigns the key may read
 //   - ?campaign=<id or exact name> => the full contract object for that campaign
 //
-// Auth: required X-API-KEY header, resolved against the ApiKey entity.
+// Auth: required X-API-KEY header, resolved by hash through lib/apiKeys.js.
 //   master key   => any campaign where contract_enabled is true
 //   supplier key => only campaigns whose supplier_ids contains that supplier id
 //   No/unknown/inactive key => 401.
+
+import { resolveActiveApiKey } from '../lib/apiKeys.js';
 
 const RULES_ENGINE_VERSION = '1.0.0';
 const LEADS_ENDPOINT = 'https://api.legenex.com/functions/leads';
@@ -209,10 +211,10 @@ export default async function contract(ctx) {
       headers['X-API-KEY'] ||
       (ctx.req.get && (ctx.req.get('X-API-KEY') || ctx.req.get('x-api-key'))) ||
       null;
+    // Hash-based resolution, task S4.
     let apiKey = null;
     if (rawKey) {
-      const keys = await db.entities.ApiKey.filter({ key: rawKey });
-      if (keys.length > 0 && keys[0].active) apiKey = keys[0];
+      apiKey = await resolveActiveApiKey(db, rawKey);
     }
     if (!apiKey) {
       return ctx.json({ error: 'unauthorized' }, 401);

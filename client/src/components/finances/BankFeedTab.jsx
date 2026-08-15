@@ -4,6 +4,8 @@ import { isWithinInterval } from 'date-fns';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { categorizeTransactions } from '@/functions/categorizeTransactions';
 import { syncMercury } from '@/functions/syncMercury';
+import integrationConfigStatus from '@/functions/integrationConfigStatus';
+import saveIntegrationConfig from '@/functions/saveIntegrationConfig';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
@@ -74,12 +76,18 @@ export default function BankFeedTab({ win }) {
   });
   const txns = useMemo(() => (win ? allTxns.filter(t => t.date && isWithinInterval(new Date(t.date), { start: win.start, end: win.end })) : allTxns), [allTxns, win]);
 
+  // Task S4. The token is never sent back to the browser. The account id and
+  // last_synced_at are ordinary settings and still arrive by value.
   const { data: mercuryCfg } = useQuery({
     queryKey: ['mercury-config'],
-    queryFn: async () => (await api.entities.IntegrationConfig.filter({ name: 'mercury' }))[0] || null,
+    queryFn: async () => {
+      const res = await integrationConfigStatus({ name: 'mercury' });
+      return (res?.data?.integrations || {}).mercury || { exists: false, values: {}, secrets: {} };
+    },
   });
-  const mercuryConnected = !!mercuryCfg;
-  const mercuryMeta = (() => { try { return JSON.parse(mercuryCfg?.config || '{}'); } catch { return {}; } })();
+  const mercuryConnected = mercuryCfg?.exists === true;
+  const mercuryMeta = mercuryCfg?.values || {};
+  const mercuryTokenStored = mercuryCfg?.secrets?.api_token?.set === true;
 
   const openMercury = () => {
     setMForm({ api_token: '', account_id: mercuryMeta.account_id || '' });
@@ -87,12 +95,20 @@ export default function BankFeedTab({ win }) {
   };
 
   const saveMercury = async () => {
-    if (!mForm.api_token.trim()) { toast.error('Enter your Mercury API token'); return; }
+    if (!mForm.api_token.trim() && !mercuryTokenStored) {
+      toast.error('Enter your Mercury API token');
+      return;
+    }
     setMSaving(true);
     try {
-      const payload = JSON.stringify({ api_token: mForm.api_token.trim(), account_id: mForm.account_id.trim() || undefined });
-      if (mercuryCfg?.id) await api.entities.IntegrationConfig.update(mercuryCfg.id, { config: payload });
-      else await api.entities.IntegrationConfig.create({ name: 'mercury', config: payload });
+      // Only what was typed. A blank token keeps the stored one, and
+      // last_synced_at written by syncMercury is no longer wiped on save.
+      const values = {};
+      if (mForm.api_token.trim()) values.api_token = mForm.api_token.trim();
+      if (mForm.account_id.trim()) values.account_id = mForm.account_id.trim();
+
+      const res = await saveIntegrationConfig({ name: 'mercury', values });
+      if (res?.data?.success === false) { toast.error(res.data.error || 'Failed to save Mercury token'); setMSaving(false); return; }
       toast.success('Mercury connected, pulling transactions...');
       qc.invalidateQueries({ queryKey: ['mercury-config'] });
       setMercuryOpen(false);

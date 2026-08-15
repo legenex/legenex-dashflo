@@ -3,7 +3,14 @@
 // Mercury config pattern, so there is no new entity schema. Categories, matching
 // rules, counterparty aliases, and accounts all live here and feed the Bank Feed
 // category chips, the Resolve flow, and the expense-mapping drawer.
-import { api } from '@/api/client';
+//
+// Task S4. These settings share IntegrationConfig with the credential blobs, so
+// they are read and written through the same server-side service. Nothing here
+// is secret, but the read-modify-write still has to happen on the server: the
+// entity route no longer returns `config`, so a client-side merge would start
+// from {} and reset every category, rule, alias and account on save.
+import integrationConfigStatus from '@/functions/integrationConfigStatus';
+import saveIntegrationConfig from '@/functions/saveIntegrationConfig';
 
 const CONFIG_NAME = 'finance_settings';
 
@@ -39,10 +46,12 @@ export function emptySettings() {
 
 // Load the persisted finance settings, falling back to defaults.
 export async function loadFinanceSettings() {
-  const rec = (await api.entities.IntegrationConfig.filter({ name: CONFIG_NAME }))[0] || null;
-  if (!rec) return { id: null, settings: emptySettings() };
-  let parsed = {};
-  try { parsed = JSON.parse(rec.config || '{}'); } catch { parsed = {}; }
+  const res = await integrationConfigStatus({ name: CONFIG_NAME });
+  const info = (res?.data?.integrations || {})[CONFIG_NAME] || {};
+  if (!info.exists) return { id: null, settings: emptySettings() };
+  const rec = { id: info.id };
+  // None of these keys are secret, so they all arrive by value.
+  const parsed = info.values || {};
   // Backfill group and cost_class on any persisted category that predates them,
   // so settings saved before this change load without error.
   const defaultsByKey = new Map(DEFAULT_CATEGORIES.map(c => [c.key, c]));
@@ -76,11 +85,23 @@ export function costClassOf(categoryKey, settings) {
   return cat?.cost_class || 'fixed';
 }
 
-// Persist the whole settings object. Creates the row on first save.
+// Persist the settings. Creates the row on first save.
+//
+// These four keys are the whole of this record, and the caller always holds all
+// four, so sending them together is a complete update rather than a partial
+// one. The server still merges, which keeps any key a future version adds.
 export async function saveFinanceSettings(id, settings) {
-  const payload = JSON.stringify(settings);
-  if (id) return api.entities.IntegrationConfig.update(id, { config: payload });
-  return api.entities.IntegrationConfig.create({ name: CONFIG_NAME, config: payload });
+  return saveIntegrationConfig({
+    name: CONFIG_NAME,
+    values: {
+      categories: settings.categories || [],
+      matchRules: settings.matchRules || [],
+      counterparties: settings.counterparties || [],
+      accounts: settings.accounts || [],
+    },
+    // These are arrays and an empty one is a real, intended value here.
+    omit_blank: false,
+  });
 }
 
 // Suggest a counterparty for a bank description using explicit rules first,

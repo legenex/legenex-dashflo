@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from 'react';
-import { api } from '@/api/client';
 import { useQueryClient } from '@tanstack/react-query';
+import { api } from '@/api/client';
+import integrationConfigStatus from '@/functions/integrationConfigStatus';
+import saveIntegrationConfig from '@/functions/saveIntegrationConfig';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -20,48 +22,76 @@ export default function ApiKeyConnectDialog({ open, onOpenChange, name, title, d
   const [saving, setSaving] = useState(false);
   const [syncing, setSyncing] = useState(false);
 
+  // Task S4. The stored blob is no longer readable through the entity route,
+  // and it never should have been. integrationConfigStatus returns the
+  // non-secret settings by value and each secret as a presence flag, which is
+  // everything this dialog needs: prefill the settings, show "Connected", and
+  // tell the operator which secrets are already stored.
+  const [secrets, setSecrets] = useState({});
+
   useEffect(() => {
     if (!open) return;
     setLoading(true);
     (async () => {
       try {
-        const list = await api.entities.IntegrationConfig.filter({ name });
-        const record = list[0] || null;
-        setCfg(record);
-        let parsed = {};
-        try { parsed = JSON.parse(record?.config || '{}'); } catch { parsed = {}; }
-        setMeta(parsed);
-        // Prefill only non-secret fields (never re-expose stored secrets).
+        const res = await integrationConfigStatus({ name });
+        const info = (res?.data?.integrations || {})[name] || {};
+        setCfg(info.exists ? { id: info.id } : null);
+        setMeta(info.values || {});
+        setSecrets(info.secrets || {});
+        // Prefill the non-secret settings. Secrets are never sent back, so
+        // their inputs start blank and blank means "keep what is stored".
         const init = {};
-        fields.forEach(f => { if (!f.secret) init[f.key] = parsed[f.key] || ''; else init[f.key] = ''; });
+        fields.forEach(f => { init[f.key] = f.secret ? '' : ((info.values || {})[f.key] || ''); });
         setValues(init);
-      } catch { setCfg(null); setMeta({}); }
+      } catch { setCfg(null); setMeta({}); setSecrets({}); }
       setLoading(false);
     })();
   }, [open, name]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const connected = !!cfg;
+  const storedSecret = (key) => secrets[key]?.set === true;
 
   const save = async () => {
-    const missing = fields.filter(f => !f.optional && !String(values[f.key] || '').trim());
+    // A required field is satisfied either by what was typed now or, for a
+    // secret, by what is already stored. That is what the "leave blank to keep
+    // current" placeholder promises, and it is now true.
+    const missing = fields.filter(f => {
+      if (f.optional) return false;
+      if (String(values[f.key] || '').trim()) return false;
+      return !(f.secret && storedSecret(f.key));
+    });
     if (missing.length) { toast.error(`${missing[0].label} is required`); return; }
     setSaving(true);
     try {
-      // Verify credentials first if a verify function is provided.
-      if (verifyFn) {
+      // Verification needs the actual credential, which this dialog only holds
+      // when the operator just typed it. On a settings-only update the secret
+      // stays on the server, so there is nothing to verify from here and the
+      // check is skipped rather than failed.
+      const suppliedEverySecret = fields
+        .filter(f => f.secret && !f.optional)
+        .every(f => String(values[f.key] || '').trim());
+
+      if (verifyFn && suppliedEverySecret) {
         const res = await verifyFn({ ...values, verify_only: true });
         const d = res?.data || {};
         if (!d.success) { toast.error(d.error || `Could not verify ${title}`); setSaving(false); return; }
       }
-      // Merge with existing config so we keep secrets already stored if left blank.
-      const nextConfig = { ...meta };
+
+      // Send only what the operator actually entered. The server merges it over
+      // the stored blob, so fields this dialog knows nothing about survive.
+      const submitted = {};
       fields.forEach(f => {
         const v = String(values[f.key] || '').trim();
-        if (v) nextConfig[f.key] = v;
+        if (v) submitted[f.key] = v;
       });
-      const payload = JSON.stringify(nextConfig);
-      if (cfg?.id) await api.entities.IntegrationConfig.update(cfg.id, { config: payload });
-      else await api.entities.IntegrationConfig.create({ name, config: payload });
+
+      const saved = await saveIntegrationConfig({ name, values: submitted });
+      if (saved?.data?.success === false) {
+        toast.error(saved.data.error || `Failed to connect ${title}`);
+        setSaving(false);
+        return;
+      }
       toast.success(`${title} connected`);
       qc.invalidateQueries({ queryKey: ['integration-status'] });
       onOpenChange(false);
@@ -121,7 +151,7 @@ export default function ApiKeyConnectDialog({ open, onOpenChange, name, title, d
                   value={values[f.key] || ''}
                   onChange={e => setValues(p => ({ ...p, [f.key]: e.target.value }))}
                   type={f.secret ? 'password' : 'text'}
-                  placeholder={connected && f.secret ? 'Leave blank to keep current' : f.placeholder}
+                  placeholder={f.secret && storedSecret(f.key) ? 'Stored. Leave blank to keep current' : f.placeholder}
                   className="mt-1 bg-background font-mono text-[12px]"
                 />
                 {f.help && <p className="text-[11px] text-muted-foreground mt-1.5">{f.help}</p>}

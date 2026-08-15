@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { api } from '@/api/client';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import integrationConfigStatus from '@/functions/integrationConfigStatus';
+import saveIntegrationConfig from '@/functions/saveIntegrationConfig';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -13,14 +14,24 @@ import { toast } from 'sonner';
 // is sent to Google on every sign in. No token is stored, because the Picker
 // mints a short-lived one per use and the sheet is read server side through the
 // existing Sheets connector.
+//
+// Task S4. IntegrationConfig.config is no longer readable through the entity
+// route, so this reads through integrationConfigStatus. These three values are
+// on that function's per-integration public list, because the picker runs in
+// the browser and cannot initialize without them, so they still come back by
+// value. Every other integration's api_key stays hidden.
 export function useGooglePickerConfig() {
   return useQuery({
     queryKey: ['google-picker-config'],
     queryFn: async () => {
-      const rows = await api.entities.IntegrationConfig.filter({ name: 'google_picker' });
-      const row = (rows || [])[0];
-      if (!row) return { client_id: '', api_key: '', app_id: '' };
-      try { return JSON.parse(row.config || '{}'); } catch { return { client_id: '', api_key: '', app_id: '' }; }
+      const res = await integrationConfigStatus({ name: 'google_picker' });
+      const info = (res?.data?.integrations || {}).google_picker || {};
+      const values = info.values || {};
+      return {
+        client_id: values.client_id || '',
+        app_id: values.app_id || '',
+        api_key: values.api_key || '',
+      };
     },
   });
 }
@@ -36,18 +47,24 @@ export default function GooglePickerSettings({ open, onOpenChange }) {
   }, [open, saved]);
 
   const save = async () => {
-    if (!form.client_id.trim() || !form.api_key.trim()) {
+    if (!form.client_id.trim() || !(form.api_key.trim() || saved?.api_key)) {
       toast.error('Client ID and API key are both required');
       return;
     }
     setSaving(true);
     try {
-      const payload = JSON.stringify({
-        client_id: form.client_id.trim(), api_key: form.api_key.trim(), app_id: form.app_id.trim(),
-      });
-      const rows = await api.entities.IntegrationConfig.filter({ name: 'google_picker' });
-      if ((rows || [])[0]) await api.entities.IntegrationConfig.update(rows[0].id, { config: payload });
-      else await api.entities.IntegrationConfig.create({ name: 'google_picker', config: payload });
+      // Send only what was entered. app_id is optional, and previously a blank
+      // one silently erased the stored value on every re-save.
+      const values = { client_id: form.client_id.trim() };
+      if (form.api_key.trim()) values.api_key = form.api_key.trim();
+      if (form.app_id.trim()) values.app_id = form.app_id.trim();
+
+      const res = await saveIntegrationConfig({ name: 'google_picker', values });
+      if (res?.data?.success === false) {
+        toast.error(res.data.error || 'Could not save the picker settings');
+        setSaving(false);
+        return;
+      }
       qc.invalidateQueries({ queryKey: ['google-picker-config'] });
       toast.success('Picker configured');
       onOpenChange(false);

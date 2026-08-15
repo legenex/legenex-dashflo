@@ -150,6 +150,56 @@ describe('entity route: secret material is stripped', () => {
     expect(res.status).toBe(200);
     expect(res.raw).not.toContain('brand_new_secret');
   });
+
+  it('never returns the stored key hash either', async () => {
+    // The hash is offline-attackable and the public posting spec derives its
+    // access token from it, so it is credential material in its own right.
+    const res = await call('owner', 'GET', '/ApiKey');
+    expect(res.status).toBe(200);
+    expect(res.raw).not.toContain('key_hash');
+  });
+});
+
+// Task S4. Read-denying a credential while leaving it writable is not
+// protection. A caller that cannot read the stored value can still overwrite
+// it, which is precisely how the settings dialogs destroyed live tokens.
+describe('entity route: credential material cannot be written', () => {
+  it('drops an attempt to set a supplier key or its hash through the generic route', async () => {
+    writes.length = 0;
+    const res = await call('owner', 'PATCH', '/ApiKey/k1', {
+      name: 'Renamed',
+      key: 'attacker_chosen_key',
+      key_hash: 'attacker_chosen_hash',
+    });
+    expect(res.status).toBe(200);
+
+    const patch = writes.find((w) => w.name === 'ApiKey' && w.op === 'update')?.rec;
+    expect(patch).toEqual({ name: 'Renamed' });
+    expect(patch).not.toHaveProperty('key');
+    expect(patch).not.toHaveProperty('key_hash');
+  });
+
+  it('drops an attempt to overwrite an integration credential blob', async () => {
+    writes.length = 0;
+    const res = await call('owner', 'PATCH', '/IntegrationConfig/i1', {
+      name: 'mercury',
+      config: '{"account_id":"only_field_the_form_knew"}',
+    });
+    expect(res.status).toBe(200);
+
+    const patch = writes.find((w) => w.name === 'IntegrationConfig' && w.op === 'update')?.rec;
+    expect(patch).toEqual({ name: 'mercury' });
+    expect(patch).not.toHaveProperty('config');
+  });
+
+  it('drops credential fields on create as well as update', async () => {
+    writes.length = 0;
+    await call('owner', 'POST', '/ApiKey', { name: 'n', key: 'x', key_hash: 'y', key_prefix: 'p' });
+    const rec = writes.find((w) => w.name === 'ApiKey' && w.op === 'create')?.rec;
+    expect(rec).not.toHaveProperty('key');
+    expect(rec).not.toHaveProperty('key_hash');
+    expect(rec.key_prefix).toBe('p');
+  });
 });
 
 describe('entity route: role separation', () => {

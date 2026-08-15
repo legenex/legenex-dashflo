@@ -1,4 +1,5 @@
 import { normalizeEmail, toE164Us, titleCaseName } from './leadIdentity.generated.js';
+import { resolveActiveApiKey } from '../lib/apiKeys.js';
 
 // Resolve phone_verified value from HLR result based on configured source
 function resolvePhoneVerified(hlrResult, source) {
@@ -1350,10 +1351,12 @@ export default async function processLead(ctx) {
     delete leadPayload.apiKey;
 
     // ── a. AUTH ──────────────────────────────────────────────────────────
+    // Resolution goes through lib/apiKeys.js, which matches on the SHA-256
+    // hash and only falls back to the legacy cleartext column while
+    // DASHFLO_APIKEY_LEGACY_CLEARTEXT allows it. Task S4.
     let apiKeyRecord = null;
     if (supplierKeyRaw) {
-      const keys = await db.entities.ApiKey.filter({ key: supplierKeyRaw });
-      if (keys.length > 0 && keys[0].active) apiKeyRecord = keys[0];
+      apiKeyRecord = await resolveActiveApiKey(db, supplierKeyRaw);
     }
     if (!apiKeyRecord) {
       await db.entities.ErrorLog.create({

@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { api } from '@/api/client';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import issueApiKey from '@/functions/issueApiKey';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -12,16 +13,12 @@ import { Plus, Copy, RefreshCw, Trash2, ShieldCheck, Terminal, Pencil, UserPlus 
 import { format } from 'date-fns';
 import { toast } from 'sonner';
 
-function generateKey(type = 'supplier', supplierType = '') {
-  const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
-  let prefix = 'lgnx_ext_';
-  if (type === 'master') prefix = 'lgnx_mst_';
-  else if (supplierType === 'Internal') prefix = 'lgnx_int_';
-  else if (supplierType === 'Calls') prefix = 'lgnx_cls_';
-  let key = prefix;
-  for (let i = 0; i < 32; i++) key += chars[Math.floor(Math.random() * chars.length)];
-  return key;
-}
+// Task S4. Key generation used to happen here, in the browser, using
+// Math.random(). A supplier key authenticates inbound leads, and Math.random()
+// is not a cryptographic source, so a key minted that way is guessable and the
+// intake endpoint is only as strong as the guess. Minting moved to the
+// issueApiKey backend function, which uses crypto.randomBytes, stores only the
+// SHA-256 hash, and returns the raw value exactly once in its response.
 
 function KeyRevealBox({ fullKey, onClose }) {
   return (
@@ -135,34 +132,27 @@ export default function SettingsApiKeys() {
 
   const handleCreate = async () => {
     const supplier = form.supplier_id ? suppliers.find(s => s.id === form.supplier_id) : null;
-    const key = generateKey(form.type, supplier?.supplier_type || '');
-    await api.entities.ApiKey.create({
+    const res = await issueApiKey({
+      op: 'create',
       name: form.name,
       type: form.type,
       supplier_id: supplier?.id || '',
       supplier_name: supplier?.name || (form.type === 'master' ? 'Master' : ''),
       vertical: form.vertical,
-      key,
-      key_prefix: key.substring(0, 16),
-      active: true,
       expose_revenue: form.expose_revenue ?? false,
-      request_count: 0,
     });
+    const data = res?.data || {};
+    if (!data.success) { toast.error(data.error || 'Could not create the key'); return; }
     qc.invalidateQueries({ queryKey: ['api-keys'] });
-    setRevealKey(key);
+    setRevealKey(data.key);
   };
 
   const handleRegenerate = async (k) => {
-    const supplier = k.supplier_id ? suppliers.find(s => s.id === k.supplier_id) : null;
-    const key = generateKey(k.type, supplier?.supplier_type || '');
-    await api.entities.ApiKey.update(k.id, {
-      key,
-      key_prefix: key.substring(0, 16),
-      request_count: 0,
-      last_used_at: null,
-    });
+    const res = await issueApiKey({ op: 'rotate', id: k.id });
+    const data = res?.data || {};
+    if (!data.success) { toast.error(data.error || 'Could not rotate the key'); return; }
     qc.invalidateQueries({ queryKey: ['api-keys'] });
-    setRegenReveal({ key, id: k.id });
+    setRegenReveal({ key: data.key, id: k.id });
   };
 
   const toggleActive = async (k) => {
@@ -274,15 +264,14 @@ export default function SettingsApiKeys() {
                 </td>
                 <td className="px-4 py-3">
                   <div className="flex items-center gap-1">
-                    <Button size="sm" variant="ghost" className="h-7 px-2 text-[11px]" title="Copy full key"
+                    {/* Keys are stored hash-only, so the full value genuinely
+                        does not exist on the server after it is issued. This
+                        copies the prefix and says so, rather than implying a
+                        full copy that cannot happen. Task S4. */}
+                    <Button size="sm" variant="ghost" className="h-7 px-2 text-[11px]" title="Copy key prefix"
                       onClick={() => {
-                        if (k.key) {
-                          navigator.clipboard.writeText(k.key);
-                          toast.success('Full API key copied');
-                        } else {
-                          navigator.clipboard.writeText(k.key_prefix);
-                          toast.error('Full key unavailable - copied prefix only');
-                        }
+                        navigator.clipboard.writeText(k.key_prefix || '');
+                        toast.success('Prefix copied. The full key is only shown once, when it is issued or rotated.');
                       }}>
                       <Copy className="w-3 h-3" />
                     </Button>

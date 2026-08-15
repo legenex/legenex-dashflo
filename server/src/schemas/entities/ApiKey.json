@@ -29,11 +29,15 @@
     },
     "key": {
       "type": "string",
-      "description": "Full key value \u2014 only present at creation; should be hashed in production"
+      "description": "LEGACY cleartext key. Retained only until the hash path is proven against real supplier traffic, then purged. Task S4. Never write this on a new key and never return it to a client."
+    },
+    "key_hash": {
+      "type": "string",
+      "description": "SHA-256 hex of the raw key. This is the credential of record. Resolved by server/src/lib/apiKeys.js, which is the only module that may derive or compare it."
     },
     "key_prefix": {
       "type": "string",
-      "description": "First 16 chars of key, shown in UI"
+      "description": "First 16 chars of key, shown in UI so an operator can tell keys apart"
     },
     "active": {
       "type": "boolean",
@@ -59,7 +63,6 @@
   },
   "required": [
     "name",
-    "key",
     "key_prefix"
   ]
 }
