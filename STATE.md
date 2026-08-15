@@ -11,9 +11,11 @@ Update this file after every completed or blocked task. It is the persistent han
   persistently disabled on the operator workstation, 15 August 2026. See
   "Gate A resolution" below for the verification evidence.
 - Current phase: Phase 1 complete, Phase 2 in progress
-- Active human gate: Gate A approved and closed. Gate B pending.
-- Last green commit: `00eeab1`
-- Last full gate: PASS at `00eeab1` on 15 August 2026
+- Active human gate: Gate A approved and closed. Gate B pending. LIVE URL GATE
+  open, see `docs/LIVE-URL-GATE.md`.
+- Last green commit: `c04e2fc`
+- Last full gate: PASS at `c04e2fc` on 15 August 2026, seven steps, 776 tests
+  passing with none skipped
 
 ## Delta audit, audited base to current base
 
@@ -199,16 +201,16 @@ because dependencies changed.
 | S1 Auth fail-closed | Done | Lead | cutover branch | `pending` | Live probe, 22 of 22 checks | |
 | S2 Entity authorization | Done | Lead | cutover branch | `pending` | Matrix plus route tests, 40 tests | |
 | S3 Function authorization | Done | Lead | cutover branch | `pending` | Route deny-by-default, 11 tests | Two public webhooks still lack own verification |
-| S4 Secret storage | In progress | Lead | cutover branch | `pending` | Hash path proven by 42 tests; cleartext retained on purpose | Cleartext purge is deliberately deferred until real traffic is observed on the hash path |
-| I1 Durable receipt module | Review | Lead | cutover branch | `pending` | 18 tests against real PostgreSQL 16 on loopback | Not wired into processLead; that is I3 |
-| I2 Global DNC module | Review | Lead | cutover branch | `pending` | 35 tests, keyed hashing and fail-closed proven | Not wired into processLead; operator UI not built |
-| I3 Pipeline integration | Blocked | Lead | | | | |
-| R1 Buyer identity normalization | Review | Lead | cutover branch | `pending` | 18 tests plus an observed apply and rerun on a disposable database | Not run against production data |
+| S4 Secret storage | Done | Lead | cutover branch | `84a5798`, ADR `c04e2fc` | Hash path proven by 42 tests; ADR 0001 written; rotation list in ADR and Gate B | Cleartext purge deliberately deferred, preconditions below |
+| I1 Durable receipt module | Done | Lead | cutover branch | `84a5798`, `0d48043` | 19 tests against real PostgreSQL 16 on 5433, five consecutive green runs | Not wired into processLead; that is I3 |
+| I2 Global DNC module | Review | Lead | cutover branch | `3c568d0`, `c04e2fc` | 35 module tests plus 27 enforcement tests including route suppression regression | Operator UI not built; audited export not built; wiring is I3 |
+| I3 Pipeline integration | Ready | Lead | cutover branch | | Dependencies I1, I2, S3, S4 all satisfied | Not started. Next task. |
+| R1 Buyer identity normalization | Review | Lead | cutover branch | `bbf25a3` | 18 tests plus an observed apply and rerun on a disposable database | Not run against production data |
 | R2 Routing and caps | Blocked | | | | | |
 | R3 Delivery and parsing | Blocked | | | | | |
 | M1 Billing and returns | Blocked | | | | | |
 | P1 Portal isolation | Blocked | | | | | |
-| C1 Configuration recovery | Review | Lead | cutover branch | `pending` | 23 tests plus an observed run producing real blockers | Recovery of routes, caps, schedules and response rules not yet implemented |
+| C1 Configuration recovery | In progress | Lead | cutover branch | `bbf25a3` | 23 tests plus an observed run producing real blockers | Only buyers, suppliers, campaigns and credential references are covered. Routes, destinations, caps, schedules, mappings and response rules are not. A Gate B packet built from it today would be incomplete. |
 | D1 History import | Blocked | | | | | |
 | O1 Shadow comparison | Blocked | | | | | |
 | O2 Reliability | Blocked | | | | | |
@@ -220,7 +222,7 @@ Use only these statuses: Ready, In progress, Review, Blocked, Done.
 
 | ADR | Decision | Date | Commit |
 |---|---|---|---|
-| | | | |
+| [0001](docs/adr/0001-secret-storage.md) | Supplier API keys are hash only at rest; destination credentials stay server side behind an opaque reference; neither field is writable through the generic entity route | 15 Aug 2026 | `84a5798` implementation, ADR written at `c04e2fc` |
 
 ## Evidence log
 
@@ -827,6 +829,186 @@ DECISION FOR BRU: confirm `dashflo.co` is the intended domain and register it,
 or name the domain you already control and I will target that instead. A
 temporary tunnel is not used as the final live URL without separate approval.
 
+## Session 15 August 2026, later: audit of recovered work and Phase E start
+
+### Recovery preservation, verified before anything else
+
+All four recovered commits are ancestors of the pushed feature branch, so the
+recovered work is now on the remote and not only in a local worktree:
+
+```
+84a5798 3c568d0 bbf25a3 772589d  -> all ANCESTOR-OF-PUSHED-HEAD
+```
+
+Three independent backups are retained and will stay until the recovered work
+has been verified in full:
+
+- branch `cutover-local` at `772589d`
+- ref `refs/backup/cutover-local-20260815` at `772589d`
+- bundle, verified complete, at
+  `/Users/nickallen/Documents/Projects/dashflo-recovery-backup/cutover-local-20260815.bundle`
+
+The bundle was moved out of a previous session's scratchpad under `/private/tmp`,
+which is not durable, into the path above. `git bundle verify` reports it okay
+and recording a complete history.
+
+### Audit of S4, I1, I2, R1 and C1 against acceptance criteria
+
+| Task | Acceptance | Verdict | What was wrong |
+|---|---|---|---|
+| S4 | ADR, key hashing, credential protection, rotation list | Was incomplete, now met | Hashing, credential protection and the rotation list existed. The ADR did not, and the ADR table in this file was empty. Written as `docs/adr/0001-secret-storage.md`. |
+| I1 | Commit, lease, replay, idempotency, crash tests pass | Was UNPROVEN, now met | The tests existed and did not run. See below. |
+| I2 | Matching, scope, audit, UI and import tests pass | Partly met | Matching, scope, audit and import are covered. The operator UI and the audited export are not built. The intake enforcement path did not exist and has been added. |
+| R1 | Additive fields, resolver, backfill and exception report | Met, with a stated limit | All four present and tested. Still `UNPROVEN` against production data, which is the number that decides whether R1 is finished. |
+| C1 | Recovered config plus unresolved-exception artifact | Not met | Covers buyers, suppliers, campaigns and credential references only. Routes, destinations, caps, schedules, mappings and response rules are not recovered, so the Gate B packet it produces is incomplete. Status corrected from Review to In progress. |
+
+### The gate was passing while its most critical suite never ran
+
+The single most important finding of this session. `npm run gate` reported PASS
+at `7527015` while all fifteen database tests for I1 were skipping, because
+`dashflo_receipt_test` did not exist. Invariant 3, that replay after a crash
+cannot double-deliver or double-bill, had no executed evidence behind it.
+
+The file's own header claimed the database was "created and dropped by this
+file". It was not. It only connected to it.
+
+Corrected at `0d48043`. The suite now creates the disposable database when it is
+absent, and only skips when PostgreSQL itself is unreachable. Test totals moved
+from 733 passing with 15 skipped to 749 passing with none skipped.
+
+A second hazard was found while fixing it and is now closed. `dashos` lives on
+the same PostgreSQL server, port 5433, and every test in that file begins by
+truncating the table it uses. `DATABASE_URL` takes priority over the discrete
+PG variables in `config.js`, so any inherited value would have pointed the
+suite, and its truncate, at whatever it named. The suite now proves what it is
+connected to by name before anything destructive runs, and refuses otherwise.
+
+Observed, with `DATABASE_URL` deliberately redirected at another database:
+
+```
+Refusing to run: connected to "dashflo_guard_probe", expected the disposable
+"dashflo_receipt_test". These tests truncate the table they use, so they never
+run against another database.
+```
+
+The probe database was inspected afterwards and had no `lead_receipts` table,
+so the guard stopped the schema creation as well as the truncate. `dashos` was
+verified untouched: 92 tables, no `lead_receipts`. The probe database was
+dropped.
+
+### Test code was one commit away from shipping to browsers
+
+`client/src/components/progress/OffscreenCapture.jsx` builds its capture targets
+with `import.meta.glob('/src/pages/**/*.jsx')`. Adding a colocated test file
+under `client/src/pages` put that test file into the production bundle. It broke
+the build only because it used top-level await, which the browser target
+rejects. A test file without top-level await would have shipped in silence.
+
+The globs now exclude test files, and `scripts/check-bundle-purity.mjs` is a new
+gate step that reads the build output and fails if test code reaches it. Both
+directions were observed: it fails on a planted test-shaped asset name and on a
+planted test marker in asset text, and passes on a clean build.
+
+### Evidence log entries
+
+```
+TASK: Tests for the Tools file upload and paste control
+CONTRACT: Cover the existing upload and paste work without redesigning the page.
+FILES: client/src/lib/fileUpload.js, client/src/lib/fileUpload.test.js,
+  client/src/pages/ToolsDashboard.jsx, client/src/pages/ToolsDashboard.test.jsx,
+  client/src/components/progress/OffscreenCapture.jsx,
+  scripts/check-bundle-purity.mjs, scripts/gate.mjs, package.json
+COMMANDS: npx vitest run client/src/lib/fileUpload.test.js
+  client/src/pages/ToolsDashboard.test.jsx; npm run gate
+RESULTS: 36 new tests, 29 on the rules and 7 on the rendered page. Gate PASS.
+OBSERVED BEHAVIOR: Three defects in the inline logic were found by writing the
+  tests and are fixed in the extracted module. split('.').pop() returned the
+  whole filename for a name with no dot, so "README" was tested as "readme".
+  getAsFile() can return null for an item reporting kind "file", and the old
+  loop pushed that null into state where the row renderer then read .type off
+  it and threw. The row renderer called file.type.startsWith directly, so a
+  file arriving without a type string threw mid-list. The drop zone now opens
+  the picker: the hidden input was wired to a ref nothing ever called, so
+  "click to browse" and the Choose Files button did nothing. The handler
+  ignores clicks originating from the input itself, because click() on the
+  input bubbles back and would otherwise reopen the picker without end.
+REVIEWERS: Pending independent review and behavior observation.
+COMMIT: 7e01432
+ROLLBACK: git revert 7e01432. The page markup is unchanged apart from the
+  picker wiring, so reverting restores the previous behaviour exactly.
+REMAINING RISK: uploadFiles still only simulates an upload. It logs the file
+  list to the console and shows an alert; no request is made and no server
+  endpoint exists. That is the user's existing work and was left as found.
+  Refused files are still dropped without telling the operator; the extracted
+  module now returns the refused list so a later change can surface it, but the
+  page does not yet use it. `UNPROVEN`: no test exercises a real browser File
+  object, only faithful stand-ins, because there is no DOM test environment in
+  this repository.
+```
+
+```
+TASK: Make the durable receipt suite run instead of skipping
+CONTRACT: The gate must not report PASS while the evidence for invariant 3 is
+  not executed. The suite must never run against the application database.
+FILES: server/test/durableReceipt.test.js
+COMMANDS: npx vitest run server/test/durableReceipt.test.js, five times;
+  npm run gate; a deliberate run with DATABASE_URL redirected
+RESULTS: 19 tests pass, five consecutive clean runs. Gate 749 passing, none
+  skipped, up from 733 passing with 15 skipped.
+OBSERVED BEHAVIOR: Recorded in full above.
+REVIEWERS: Pending independent and security review.
+COMMIT: 0d48043
+ROLLBACK: git revert 0d48043. Reverting restores a gate that passes while
+  fifteen tests do not run, so prefer fixing forward.
+REMAINING RISK: The suite still skips when PostgreSQL is unreachable, which is
+  deliberate, but a skip is still not evidence. A CI environment must have
+  PostgreSQL 16 on 5433 or the same silent gap returns in a different form.
+```
+
+```
+TASK: Global DNC enforcement, intake path
+CONTRACT: One function every real intake source calls. Fails closed without
+  losing the lead. Route and buyer suppression behaviour preserved.
+FILES: server/src/lib/dncEnforcement.js, server/test/dncEnforcement.test.js
+COMMANDS: npx vitest run server/test/dncEnforcement.test.js; npm run gate
+RESULTS: 27 tests passing. Gate PASS, 776 tests, none skipped.
+OBSERVED BEHAVIOR: The decision is three-valued, not boolean. A missing hash
+  key, an absent repository and a failing lookup all return UNAVAILABLE, never
+  CLEAR, because delivering to somebody who opted out is not recoverable while
+  holding a lead whose receipt is already durable is. mayContinue() returns
+  false for UNAVAILABLE, asserted directly.
+  Suppression matches across phone formatting and email case and padding.
+  Scope is honoured: campaign and vertical entries suppress only their own,
+  a narrow entry with no scope value suppresses nothing, global suppresses
+  regardless of context. Expired and future dated entries do not suppress.
+  No raw phone or email appears in any decision or audit record, asserted by
+  scanning the serialized output.
+  Route member suppression was pinned in the same file: it still fails a member
+  by email and by phone, it stays per member so one buyer suppressing a lead
+  leaves another eligible, it keeps working with no DNC hash key present, a
+  globally suppressed lead does not become a per member routing failure, and
+  the two mechanisms carry different reason codes so an operator can tell which
+  one fired.
+REVIEWERS: Pending independent and security review.
+COMMIT: c04e2fc
+ROLLBACK: git revert c04e2fc. Nothing calls the module yet, because wiring it
+  in is I3, so the revert is inert.
+REMAINING RISK: `UNPROVEN`: "identical across every real intake source" is not
+  demonstrated until I3 wires this into processLead and every caller is
+  covered. The operator UI and the audited export for I2 are still not built.
+```
+
+## Next task
+
+I3 pipeline integration. Its dependencies I1, I2, S3 and S4 are all satisfied,
+and `server/src/lib/dncEnforcement.js` is the function it wires in. It is the
+serial integrator task: no parallel agent edits `processLead.js`.
+
+Before starting, read all callers of `processLead.js`. The file is 2621 lines
+and is called by several ingestion and recovery functions.
+
 ## Next human packet
 
-The LIVE URL GATE above. Everything else continues locally.
+`docs/LIVE-URL-GATE.md`. It contains only human actions: name the hosting
+destination, register or name the domain, and confirm the staging database may
+be created. Everything else continues locally.
