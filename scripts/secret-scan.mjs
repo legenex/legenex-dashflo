@@ -11,8 +11,13 @@
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const repoRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
+// fileURLToPath, not URL.pathname: pathname keeps percent-encoding, so a
+// repository checked out under a directory containing a space resolves to a
+// path that does not exist, and every git call below fails with a misleading
+// spawnSync ENOENT. gate.mjs already uses fileURLToPath for the same reason.
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 const SKIP_PATHS = [
   /(^|\/)node_modules\//,
