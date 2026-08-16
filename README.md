@@ -17,9 +17,9 @@ A safe LeadByte and Base44 cutover by 28 August is possible only as a focused pr
 
 ## What is in the pack
 
-- `MASTER-PROMPT.md`: paste this into a fresh Claude Code session.
-- `REPO-AUDIT-2026-08-15.md`: verified findings and corrections.
-- `CLAUDE.md`: concise operating contract for the repository root.
+- `CLAUDE.md`: concise operating contract, read from the repository root.
+- `docs/MASTER-PROMPT.md`: paste this into a fresh Claude Code session.
+- `docs/REPO-AUDIT-2026-08-15.md`: verified findings and corrections.
 - `docs/PRODUCT-BRIEF.md`: consolidated record of Bru's product answers.
 - `docs/REQUIREMENTS.md`: locked scope, priorities, and acceptance criteria.
 - `docs/EXECUTION-PLAN.md`: dependency-led implementation plan.
@@ -40,7 +40,7 @@ Before starting Claude Code:
 3. Create a cutover branch from the audited commit or from a reviewed newer commit.
 4. Make the hook files executable.
 5. Start an interactive Claude Code session at the repository root.
-6. Paste the entire contents of `MASTER-PROMPT.md` once.
+6. Paste the entire contents of `docs/MASTER-PROMPT.md` once.
 
 Do not start from `main` while the auto-sync job is still writing to it. That creates an uncontrolled moving target and can overwrite autonomous work.
 

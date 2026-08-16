@@ -78,6 +78,27 @@ ROLLBACK:
 REMAINING RISK:
 ```
 
+## Evidence entries
+
+```
+TASK: Relocate planning documents to docs/
+CONTRACT: Move the seven planning documents from the repository root into docs/ and repair every cross-reference. No code, schema, or runtime behavior changes.
+FILES: docs/PRODUCT-BRIEF.md, docs/REQUIREMENTS.md, docs/EXECUTION-PLAN.md, docs/HUMAN-GATES.md, docs/STATE.md, docs/MASTER-PROMPT.md, docs/REPO-AUDIT-2026-08-15.md, README.md
+COMMANDS: git mv for each document, then a repository-wide reference grep
+RESULTS: All seven documents moved with rename detection intact. No remaining reference to a root-level planning document.
+OBSERVED BEHAVIOR: Documentation only. No source file, test, build script, or CI configuration referenced these paths, so no runtime surface changed.
+REVIEWERS: Pending
+COMMIT: See branch claude/move-project-files-docs-pcfgrp
+ROLLBACK: git revert of the single documentation commit restores the previous layout.
+REMAINING RISK: Any external bookmark or unmerged branch that points at a root-level planning path needs updating by hand.
+```
+
+## Documentation layout
+
+- `CLAUDE.md` stays at the repository root because Claude Code loads it from there.
+- `README.md` stays at the repository root as the entry point.
+- All other planning documents live in `docs/`.
+
 ## Corrections to historical assumptions
 
 - Enrichment network calls occur after the first `Lead` create in the audited `processLead.js`; the smaller pre-create durability window remains.
