@@ -5,5 +5,12 @@
   "display": "standalone",
   "background_color": "#0b0f17",
   "theme_color": "#0b0f17",
-  "icons": []
+  "icons": [
+    {
+      "src": "/brand/dashflo-favi-dark.png",
+      "sizes": "1254x1254",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
 }

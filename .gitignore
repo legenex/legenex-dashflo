@@ -1,5 +1,7 @@
 node_modules/
 dist/
+!marketing/dist/
+!marketing/dist/**
 build/
 *.log
 .DS_Store
@@ -26,3 +28,7 @@ Reference/
 
 # Stray terminal output (not part of the project)
 Response.txt
+
+# Supplied deployment input. The reviewed extracted static build is tracked in
+# marketing/dist; the uploaded archive itself remains local.
+docs/DashFlo-site.zip

@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { usePermissions } from '@/lib/AuthContext';
-import { useTheme } from '@/lib/theme';
 import {
   ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown,
   PanelLeftClose, PanelLeftOpen,
@@ -14,6 +13,7 @@ import ResizeHandle from './ResizeHandle';
 import SystemClock from './SystemClock';
 import NotificationBell from './NotificationBell';
 import { navGroups, filterNav } from './navConfig';
+import DashFloBrand from '@/components/brand/DashFloBrand';
 
 const COLLAPSED_WIDTH = 68;
 
@@ -192,16 +192,6 @@ export default function Sidebar() {
   const location = useLocation();
   const navigate = useNavigate();
   const { can } = usePermissions();
-  const { theme } = useTheme();
-  const isDark = theme === 'dark' || (theme === 'system' && typeof window !== 'undefined' && window.matchMedia?.('(prefers-color-scheme: dark)').matches);
-  const logoSrc = isDark
-    ? '/brand/f9cc21785_LogoWideLightClear.png'
-    : '/brand/9eecce577_Logo-Wide-Dark-Clear.png';
-  // Collapsed rail uses the square favicon mark: FaviconLight (red arrow) on the
-  // dark theme, FaviconDark (navy bubble) on the light theme.
-  const faviconSrc = isDark
-    ? '/brand/b1c1f3a2d_FaviconLight.png'
-    : '/brand/1ba6269e4_FaviconDark.png';
   const groups = filterNav(navGroups, can);
   const { width, startResize } = useSidebarWidth();
   const { collapsed, toggle } = useCollapsible({ storageKey: 'legenex_sidebar_collapsed' });
@@ -224,8 +214,8 @@ export default function Sidebar() {
     return (
       <aside className="fixed left-0 top-0 bottom-0 bg-sidebar flex flex-col items-center border-r border-sidebar-border z-50"
         style={{ width: `${COLLAPSED_WIDTH}px`, borderTopRightRadius: '16px', borderBottomRightRadius: '16px' }}>
-        <Link to="/" className="flex items-center justify-center py-6">
-          <img src={faviconSrc} alt="Legenex" className="h-8 w-8 object-contain" />
+        <Link to="/" aria-label="DashFlo home" className="flex items-center justify-center py-6">
+          <DashFloBrand showText={false} iconClassName="h-8 w-8" />
         </Link>
         <nav className="flex-1 px-2 space-y-1 mt-2 overflow-y-auto no-scrollbar w-full flex flex-col items-center">
           {groups.map(group => {
@@ -266,8 +256,8 @@ export default function Sidebar() {
       style={{ width: `${width}px`, borderTopRightRadius: '16px', borderBottomRightRadius: '16px' }}>
 
       <div className="flex items-center pl-5 pr-3 py-6">
-        <Link to="/" className="flex items-center min-w-0">
-          <img src={logoSrc} alt="Legenex DashFlo" className="h-10 w-auto max-w-full object-contain" />
+        <Link to="/" aria-label="DashFlo home" className="flex items-center min-w-0">
+          <DashFloBrand />
         </Link>
       </div>
 

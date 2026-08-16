@@ -1,7 +1,8 @@
 import React from 'react';
 import { Outlet, Link, useLocation } from 'react-router-dom';
 import { DOCS_SECTIONS } from './docsConfig';
-import { BookOpen, ArrowUpRight } from 'lucide-react';
+import { ArrowUpRight } from 'lucide-react';
+import DashFloBrand from '@/components/brand/DashFloBrand';
 
 // Public docs shell: its own left sidebar + content area, Legenex dark theme.
 // Not wrapped by the operator AppLayout, renders for anonymous visitors.
@@ -14,11 +15,8 @@ export default function DocsLayout() {
       {/* Sidebar */}
       <aside className="w-64 shrink-0 border-r border-sidebar-border bg-sidebar hidden md:flex flex-col fixed inset-y-0 left-0">
         <div className="h-16 flex items-center gap-2.5 px-5 border-b border-sidebar-border">
-          <div className="w-8 h-8 rounded-lg bg-primary flex items-center justify-center">
-            <BookOpen className="w-4.5 h-4.5 text-primary-foreground" />
-          </div>
           <div className="leading-tight">
-            <div className="text-[13px] font-heading font-bold text-foreground">Legenex</div>
+            <DashFloBrand forceTheme="dark" iconClassName="h-8 w-8" textClassName="text-[13px]" />
             <div className="text-[11px] text-muted-foreground">Docs</div>
           </div>
         </div>

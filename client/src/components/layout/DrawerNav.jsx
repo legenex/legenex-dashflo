@@ -1,11 +1,11 @@
 import React, { useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { usePermissions } from '@/lib/AuthContext';
-import { useTheme } from '@/lib/theme';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import ViewAsSwitcher from './ViewAsSwitcher';
 import SidebarProfile from './SidebarProfile';
 import { navGroups, filterNav } from './navConfig';
+import DashFloBrand from '@/components/brand/DashFloBrand';
 
 function isChildActive(location, child) {
   if (child.tab) {
@@ -87,11 +87,6 @@ export default function DrawerNav({ onNavigate }) {
   const location = useLocation();
   const navigate = useNavigate();
   const { can } = usePermissions();
-  const { theme } = useTheme();
-  const isDark = theme === 'dark' || (theme === 'system' && typeof window !== 'undefined' && window.matchMedia?.('(prefers-color-scheme: dark)').matches);
-  const logoSrc = isDark
-    ? '/brand/f9cc21785_LogoWideLightClear.png'
-    : '/brand/9eecce577_Logo-Wide-Dark-Clear.png';
   const groups = filterNav(navGroups, can);
 
   const [openGroups, setOpenGroups] = useState(() => {
@@ -119,8 +114,8 @@ export default function DrawerNav({ onNavigate }) {
 
   return (
     <div className="h-full flex flex-col bg-card">
-      <Link to="/" onClick={() => onNavigate?.()} className="flex items-center px-5 py-6">
-        <img src={logoSrc} alt="Legenex DashFlo" className="h-10 w-auto max-w-full object-contain" />
+      <Link to="/" aria-label="DashFlo home" onClick={() => onNavigate?.()} className="flex items-center px-5 py-6">
+        <DashFloBrand />
       </Link>
 
       <nav className="flex-1 px-3 space-y-0.5 mt-2 overflow-y-auto">

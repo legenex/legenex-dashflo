@@ -1,0 +1,16 @@
+/* Production branding override for the approved prebuilt marketing bundle. */
+.brand-mark {
+  background-image: url("/brand/dashflo-favi-dark.png");
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: contain;
+  transform: none;
+}
+
+[data-theme="light"] .brand-mark {
+  background-image: url("/brand/dashflo-favi-light.png");
+}
+
+.brand-mark i {
+  display: none;
+}

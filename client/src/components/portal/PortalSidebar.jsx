@@ -3,6 +3,7 @@ import { Link, useLocation } from 'react-router-dom';
 import { LayoutDashboard, FileText, BarChart3 } from 'lucide-react';
 import { usePortalScope } from '@/hooks/usePortalScope';
 import SidebarProfile from '@/components/layout/SidebarProfile';
+import DashFloBrand from '@/components/brand/DashFloBrand';
 
 const ITEMS = [
   { label: 'Overview', path: '/portal', icon: LayoutDashboard },
@@ -20,7 +21,7 @@ export default function PortalSidebar() {
     <aside className="fixed left-0 top-0 bottom-0 w-[248px] bg-sidebar flex flex-col border-r border-sidebar-border z-50"
       style={{ borderTopRightRadius: '16px', borderBottomRightRadius: '16px' }}>
       <div className="flex items-center px-5 py-6">
-        <img src="/brand/f9cc21785_LogoWideLightClear.png" alt="Legenex" className="h-10 w-auto max-w-full object-contain" />
+        <DashFloBrand />
       </div>
       <div className="px-5 -mt-3 mb-2">
         <span className="text-[11px] font-semibold text-primary uppercase tracking-wider">Buyer Portal</span>
