@@ -57,6 +57,7 @@ describe.skipIf(!reachable)('real encrypted owner bundle round trip', () => {
     const records = {
       Supplier: [{ id: 'supplier-1', name: 'Round Trip Supplier', sid: 'RT1', active: true, created_date: '2026-08-01T00:00:00.000Z', updated_date: '2026-08-02T00:00:00.000Z' }],
       Buyer: [{ id: 'buyer-1', company_name: 'Round Trip Buyer', buyer_code: 'RB1', buyer_api_key: BUYER_KEY, active: true, created_date: '2026-08-01T00:00:00.000Z', updated_date: '2026-08-02T00:00:00.000Z' }],
+      Vertical: [{ id: 'vertical-1', name: 'Round Trip Vertical', code: 'RTV', created_date: '2026-08-01T00:00:00.000Z', updated_date: '2026-08-02T00:00:00.000Z' }],
       User: [{ id: OWNER.id, email: OWNER.email, base_role: 'owner', password_hash: 'excluded', session_token: 'excluded', refresh_token: 'excluded', created_date: '2026-08-01T00:00:00.000Z', updated_date: '2026-08-02T00:00:00.000Z' }],
       ApiKey: [{ id: 'supplier-key-1', name: 'Existing supplier key', supplier_id: 'supplier-1', supplier_name: 'Round Trip Supplier', key: SUPPLIER_KEY, active: true, request_count: 7, created_date: '2026-08-01T00:00:00.000Z', updated_date: '2026-08-02T00:00:00.000Z' }],
       SystemKey: [{ id: 'system-key-1', name: 'Meta App Credentials', provider: 'meta', client_id: 'meta-client-id', secret: 'meta-app-secret', owner_user_id: OWNER.id, active: true, created_date: '2026-08-01T00:00:00.000Z', updated_date: '2026-08-02T00:00:00.000Z' }],
@@ -66,6 +67,18 @@ describe.skipIf(!reachable)('real encrypted owner bundle round trip', () => {
         { id: 'meta-app-config', name: 'meta_app', config: JSON.stringify({ app_id: 'legacy-id', app_secret: 'legacy-secret' }), created_date: '2026-08-01T00:00:00.000Z', updated_date: '2026-08-02T00:00:00.000Z' },
         { id: 'oauth-state', name: 'meta_oauth_state', config: 'transient', created_date: '2026-08-01T00:00:00.000Z', updated_date: '2026-08-02T00:00:00.000Z' },
       ],
+      MetaConnection: [{ id: 'meta-connection-1', name: 'Round Trip Meta', token: 'meta-durable-token', active: true }],
+      Campaign: [{ id: 'campaign-1', name: 'Round Trip Campaign', campaign_id: 'RTC1', supplier_ids: JSON.stringify(['supplier-1']), status: 'active' }],
+      Delivery: [{ id: 'delivery-1', name: 'Round Trip Delivery', buyer_id: 'buyer-1', vertical_id: 'vertical-1', active: true }],
+      SubDelivery: [{ id: 'sub-delivery-1', delivery_id: 'delivery-1', name: 'Round Trip Destination', url: 'https://destination.example.test/post?token=durable', active: true }],
+      LeadSource: [{ id: 'lead-source-1', name: 'Round Trip Source', api_key_id: 'supplier-key-1', campaign_id: 'campaign-1', webhook_key: 'lead-source-durable-key' }],
+      LeadByteConnector: [{ id: 'leadbyte-1', name: 'Round Trip LeadByte', headers: JSON.stringify({ X_KEY: 'leadbyte-durable-key' }), target_url: 'https://leadbyte.example.test/post?key=durable', enabled: true }],
+      ApiConnector: [{ id: 'api-connector-1', name: 'Round Trip API', fb_access_token: 'meta-capi-durable-token', headers: JSON.stringify({ Authorization: 'Bearer durable' }), target_url: 'https://connector.example.test/post?key=durable', enabled: true }],
+      PullSource: [{ id: 'pull-source-1', name: 'Round Trip Pull', api_key: 'pull-durable-key', url: 'https://pull.example.test/read?key=durable', enabled: true }],
+      Webhook: [{ id: 'webhook-1', name: 'Round Trip Webhook', secret: 'webhook-durable-secret', headers: JSON.stringify({ Authorization: 'Bearer durable' }), url: 'https://webhook.example.test/post?key=durable', enabled: true }],
+      OutboundWebhook: [{ id: 'outbound-webhook-1', name: 'Round Trip Outbound', api_key: 'outbound-durable-key', headers: JSON.stringify({ Authorization: 'Bearer durable' }), url: 'https://outbound.example.test/post?key=durable', enabled: true }],
+      InboundWebhookRoute: [{ id: 'inbound-route-1', name: 'Round Trip Inbound', api_key_id: 'supplier-key-1', token_hash: 'inbound-durable-hash', enabled: true }],
+      BotConfig: [{ id: 'bot-config-1', name: 'Round Trip Bot', bot_key: 'bot-durable-key', active: true }],
     };
 
     const salt = crypto.randomBytes(cryptoSpec.salt_bytes);
@@ -107,14 +120,14 @@ describe.skipIf(!reachable)('real encrypted owner bundle round trip', () => {
     const preview = await runMigrationImport({ kind: 'owner', mode: 'preview', bundle, passphrase: PASSPHRASE, user: OWNER });
     expect(preview.can_apply).toBe(true);
     expect(preview.entities_present).toHaveLength(93);
-    expect(preview.records_present).toBe(8);
+    expect(preview.records_present).toBe(21);
     expect(preview.credential_bearing_entities).toHaveProperty('ApiKey');
     expect(JSON.stringify(preview)).not.toContain(SUPPLIER_KEY);
     expect(JSON.stringify(preview)).not.toContain(BUYER_KEY);
 
     const applied = await runMigrationImport({ kind: 'owner', mode: 'apply', bundle, passphrase: PASSPHRASE, user: OWNER, confirmed: true });
     expect(applied.result).toBe('success');
-    expect(applied.applied.created).toBe(8);
+    expect(applied.applied.created).toBe(21);
     expect(applied.applied.failed).toBe(0);
 
     const supplierKey = (await pool.query("SELECT id, data FROM e_api_key WHERE id = 'supplier-key-1'")).rows[0];
@@ -136,6 +149,26 @@ describe.skipIf(!reachable)('real encrypted owner bundle round trip', () => {
     expect(importedUser).not.toHaveProperty('password_hash');
     expect(importedUser).not.toHaveProperty('session_token');
     expect(importedUser).not.toHaveProperty('refresh_token');
+
+    const connectorChecks = [
+      ['e_meta_connection', 'meta-connection-1', 'token', 'meta-durable-token'],
+      ['e_lead_source', 'lead-source-1', 'webhook_key', 'lead-source-durable-key'],
+      ['e_lead_byte_connector', 'leadbyte-1', 'headers', JSON.stringify({ X_KEY: 'leadbyte-durable-key' })],
+      ['e_api_connector', 'api-connector-1', 'fb_access_token', 'meta-capi-durable-token'],
+      ['e_pull_source', 'pull-source-1', 'api_key', 'pull-durable-key'],
+      ['e_webhook', 'webhook-1', 'secret', 'webhook-durable-secret'],
+      ['e_outbound_webhook', 'outbound-webhook-1', 'api_key', 'outbound-durable-key'],
+      ['e_inbound_webhook_route', 'inbound-route-1', 'token_hash', 'inbound-durable-hash'],
+      ['e_sub_delivery', 'sub-delivery-1', 'url', 'https://destination.example.test/post?token=durable'],
+      ['e_bot_config', 'bot-config-1', 'bot_key', 'bot-durable-key'],
+    ];
+    for (const [table, id, field, expected] of connectorChecks) {
+      const row = (await pool.query(`SELECT data->>$2 AS value FROM ${table} WHERE id = $1`, [id, field])).rows[0];
+      expect(crypto.createHash('sha256').update(row.value).digest('hex'))
+        .toBe(crypto.createHash('sha256').update(expected).digest('hex'));
+    }
+    expect((await pool.query("SELECT data->>'delivery_id' AS value FROM e_sub_delivery WHERE id = 'sub-delivery-1'")).rows[0].value).toBe('delivery-1');
+    expect((await pool.query("SELECT data->>'api_key_id' AS value FROM e_lead_source WHERE id = 'lead-source-1'")).rows[0].value).toBe('supplier-key-1');
   });
 
   it('ordinary redacted re-import cannot destroy imported credentials', async () => {
