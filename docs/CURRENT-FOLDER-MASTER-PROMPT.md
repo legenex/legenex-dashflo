@@ -60,8 +60,8 @@ Authoritative now: the application and its API are at `http://localhost:4000`,
 health at `http://localhost:4000/api/health`, optional Vite dev server at
 `http://localhost:5173`.
 
-Future configuration targets only: `https://dashflo.co`,
-`https://api.dashflo.co`, `https://progress.dashflo.co`.
+Production configuration: `https://dashflo.io`,
+`https://api.dashflo.io`, `https://docs.dashflo.io`.
 
 `dashboard.legenex.com`, `api.legenex.com` and
 `progress.dashboard.legenex.com` are inherited Base44-era fallbacks. They are
@@ -258,8 +258,8 @@ One bounded, design-neutral commit series.
    on each side, server and client. Every host, base URL and product name reads
    from it. No component, function or test may hardcode a host again.
 2. Default the configuration to `http://localhost:4000`, driven by
-   `PUBLIC_BASE_URL`, with `https://dashflo.co`, `https://api.dashflo.co` and
-   `https://progress.dashflo.co` as named future environments that are selected
+   `PUBLIC_BASE_URL` and `PUBLIC_API_BASE_URL`, with `https://dashflo.io`,
+   `https://api.dashflo.io` and `https://docs.dashflo.io` as production hosts selected
    by configuration, not by code branch.
 3. Remove the 54 `legenex.com` runtime fallbacks. Where a fallback is genuinely
    needed, fall back to same-origin, then to the configured public base URL,

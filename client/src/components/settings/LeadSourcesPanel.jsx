@@ -29,7 +29,7 @@ export default function LeadSourcesPanel() {
     queryKey: ['app-settings'],
     queryFn: async () => (await api.entities.AppSettings.list()) || [],
   });
-  const baseUrl = resolveApiBaseUrl(appSettingsArr[0]?.public_base_url);
+  const baseUrl = resolveApiBaseUrl(appSettingsArr[0]?.public_api_base_url || appSettingsArr[0]?.public_base_url);
 
   const sources = useMemo(
     () => (allSources || []).filter((s) => s.kind === 'ringba' || s.kind === 'truecall'),

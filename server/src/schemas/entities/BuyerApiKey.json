@@ -1,0 +1,20 @@
+{
+  "name": "BuyerApiKey",
+  "type": "object",
+  "properties": {
+    "buyer_id": { "type": "string", "description": "Reference to the owning Buyer" },
+    "buyer_name": { "type": "string" },
+    "name": { "type": "string" },
+    "key": { "type": "string", "description": "Write-only buyer credential" },
+    "key_prefix": { "type": "string" },
+    "scopes": { "type": "string", "description": "JSON array of permitted buyer operations" },
+    "active": { "type": "boolean", "default": true },
+    "last_used_at": { "type": "string", "format": "date-time" },
+    "request_count": { "type": "number", "default": 0 },
+    "rotated_at": { "type": "string", "format": "date-time" },
+    "expires_at": { "type": "string", "format": "date-time" },
+    "notes": { "type": "string" },
+    "created_by_email": { "type": "string" }
+  },
+  "required": ["buyer_id", "name", "key_prefix"]
+}

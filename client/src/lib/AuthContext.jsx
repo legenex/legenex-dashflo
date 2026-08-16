@@ -46,9 +46,11 @@ export const AuthProvider = ({ children }) => {
       try {
         const publicSettings = await api.request('/auth/public-settings');
         setAppPublicSettings(publicSettings);
+        window.__DASHFLO_PUBLIC_SETTINGS__ = publicSettings?.public_settings || {};
       } catch {
         // Non-fatal: the app can still render the login screen.
         setAppPublicSettings({ id: 'dashos', public_settings: {} });
+        window.__DASHFLO_PUBLIC_SETTINGS__ = {};
       }
       setIsLoadingPublicSettings(false);
 

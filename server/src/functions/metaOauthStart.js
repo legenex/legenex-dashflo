@@ -12,28 +12,11 @@ function isOperator(caller) {
   return caller.role === 'admin' || OPERATOR_PERMISSION_KEYS.some((k) => permissions[k] === true);
 }
 
-// Fallback callback URL (Legenex production custom domain). The wizard normally
-// passes the current host's callback URL so the flow works on any domain,
-// including preview environments.
-import { functionUrl } from '../lib/urls.js';
-
-const DEFAULT_REDIRECT_URI = functionUrl('metaOauthCallback');
-
-// Loads the Meta app credentials from IntegrationConfig(name='meta_app') first
-// (set via the in-app credentials field), falling back to environment vars.
-async function loadMetaAppCreds(db, env) {
-  let appId = '';
-  let appSecret = '';
-  try {
-    const list = await db.entities.IntegrationConfig.filter({ name: 'meta_app' });
-    const cfg = JSON.parse(list[0]?.config || '{}');
-    appId = String(cfg.app_id || '').trim();
-    appSecret = String(cfg.app_secret || '').trim();
-  } catch { /* ignore */ }
-  if (!appId) appId = env.META_APP_ID || '';
-  if (!appSecret) appSecret = env.META_APP_SECRET || '';
-  return { appId, appSecret };
-}
+// Callback and opener origins come from the canonical deployment configuration.
+// A browser-provided host must never turn the OAuth code flow into an open
+// redirect when the dashboard moves between domains.
+import { functionUrl, resolveBaseUrl } from '../lib/urls.js';
+import { resolveMetaAppCreds } from '../lib/metaAppCreds.js';
 
 // Operator only. Builds the Facebook Login dialog URL for the connect popup.
 // The frontend passes its own origin and the current-host callback URL; both
@@ -48,17 +31,17 @@ export default async function metaOauthStart(ctx) {
     }
 
     const db = ctx.db;
-    const { appId } = await loadMetaAppCreds(db, ctx.env);
+    const { appId } = await resolveMetaAppCreds(db, ctx.env);
     if (!appId) {
       return ctx.json({ error: 'META_APP_ID is not configured' }, 500);
     }
 
     const body = ctx.body || {};
-    const bodyRedirect = typeof body.redirect_uri === 'string' ? body.redirect_uri : '';
-    const redirectUri = (bodyRedirect.startsWith('https://') && bodyRedirect.endsWith('/functions/metaOauthCallback'))
-      ? bodyRedirect
-      : DEFAULT_REDIRECT_URI;
-    const origin = (typeof body.origin === 'string' && body.origin.startsWith('https://')) ? body.origin : '';
+    const configuredRedirectUri = functionUrl('metaOauthCallback', '', ctx.env);
+    const bodyRedirect = typeof body.redirect_uri === 'string' ? body.redirect_uri.replace(/\/+$/, '') : '';
+    const redirectUri = bodyRedirect === configuredRedirectUri ? bodyRedirect : configuredRedirectUri;
+    const canonicalOrigin = resolveBaseUrl('', ctx.env);
+    const origin = String(body.origin || '').replace(/\/+$/, '') === canonicalOrigin ? canonicalOrigin : '';
 
     const state = crypto.randomUUID();
 

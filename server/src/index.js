@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { config } from './config.js';
 import { ensureSchema } from './db/schema.js';
+import { ensureMigrationImportSchema } from './db/migrationImportSchema.js';
 import { attachUser } from './middleware/auth.js';
 import { csrfGuard, allowedOrigins } from './middleware/csrf.js';
 import { assertStartupConfig } from './lib/startupChecks.js';
@@ -14,6 +15,8 @@ import authRoutes from './routes/auth.js';
 import entityRoutes from './routes/entities.js';
 import integrationRoutes from './routes/integrations.js';
 import functionRoutes from './routes/functions.js';
+import publicFunctionRoutes from './routes/publicFunctions.js';
+import migrationRoutes from './routes/migrations.js';
 
 async function main() {
   // Refuse to boot a production deployment with a development secret, a
@@ -22,6 +25,7 @@ async function main() {
   assertStartupConfig(config);
 
   await ensureSchema();
+  await ensureMigrationImportSchema();
   const loaded = await loadFunctions();
   console.log(`[dashos] loaded ${Object.keys(loaded).length} functions`);
 
@@ -75,6 +79,8 @@ async function main() {
   app.use('/api/entities', entityRoutes);
   app.use('/api/integrations', integrationRoutes);
   app.use('/api/functions', functionRoutes);
+  app.use('/api/migrations', migrationRoutes);
+  app.use('/functions', publicFunctionRoutes);
 
   // Error handler.
   app.use((err, _req, res, _next) => {
@@ -86,7 +92,7 @@ async function main() {
   if (fs.existsSync(config.clientDist)) {
     app.use(express.static(config.clientDist));
     app.get('*', (req, res, next) => {
-      if (req.path.startsWith('/api') || req.path.startsWith('/uploads')) return next();
+      if (req.path.startsWith('/api') || req.path.startsWith('/functions') || req.path.startsWith('/uploads')) return next();
       res.sendFile(path.join(config.clientDist, 'index.html'));
     });
   } else {

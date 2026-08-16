@@ -3,7 +3,7 @@ import { api } from '@/api/client';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { metaConnectionStatus } from '@/functions/metaConnectionStatus';
 import { saveMetaAppCredentials } from '@/functions/saveMetaAppCredentials';
-import { appParams } from '@/lib/app-params';
+import { resolveApiBaseUrl } from '@/lib/urls';
 import { syncMetaSpend } from '@/functions/syncMetaSpend';
 import { testMetaConnection } from '@/functions/testMetaConnection';
 import { disconnectMetaConnection } from '@/functions/disconnectMetaConnection';
@@ -76,7 +76,7 @@ export default function MetaAdSpend() {
   const adAccounts = overview?.accounts || [];
   const hiddenAccounts = overview?.hidden || [];
   const metaApp = status?.meta_app;
-  const redirectUri = `${window.location.origin}/api/apps/${appParams.appId}/functions/metaOauthCallback`;
+  const redirectUri = `${resolveApiBaseUrl()}/functions/metaOauthCallback`;
   useEffect(() => { if (metaApp?.app_id && !appIdInput) setAppIdInput(metaApp.app_id); }, [metaApp?.app_id]);
 
   const saveCreds = async () => {

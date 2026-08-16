@@ -69,6 +69,12 @@ export function collectStartupProblems(config, env = process.env) {
     problems.push('PUBLIC_BASE_URL must be an https URL in production, except on loopback.');
   }
 
+  if (!config.publicApiBaseUrl) {
+    problems.push('PUBLIC_API_BASE_URL is not set. It is required in production for supplier and OAuth endpoints.');
+  } else if (!/^https:\/\//i.test(config.publicApiBaseUrl) && !isLoopbackUrl(config.publicApiBaseUrl)) {
+    problems.push('PUBLIC_API_BASE_URL must be an https URL in production, except on loopback.');
+  }
+
   // A database must be configured explicitly rather than falling back to the
   // local development defaults.
   const db = config.db || {};

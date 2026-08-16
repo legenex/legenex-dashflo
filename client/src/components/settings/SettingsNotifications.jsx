@@ -166,7 +166,7 @@ export default function SettingsNotifications() {
                 <Input
                   value={Array.isArray(edit.recipients) ? edit.recipients.join(', ') : (edit.recipients || '')}
                   onChange={e => setEdit(p => ({ ...p, recipients: e.target.value }))}
-                  placeholder="alerts@dashflo.co, #leads, +27..."
+                  placeholder="alerts@dashflo.io, #leads, +27..."
                   className="mt-1 bg-background"
                 />
               </div>

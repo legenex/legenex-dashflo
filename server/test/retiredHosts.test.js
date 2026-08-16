@@ -21,7 +21,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { resolveBaseUrl, isRetiredHost, LOOPBACK_BASE_URL, leadsEndpoint } from '../src/lib/urls.js';
+import { resolveBaseUrl, resolveApiBaseUrl, isRetiredHost, LOOPBACK_BASE_URL, leadsEndpoint } from '../src/lib/urls.js';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 
@@ -79,7 +79,7 @@ describe('url resolution never falls back to a retired host', () => {
     ]) {
       expect(isRetiredHost(url), url).toBe(true);
     }
-    for (const url of ['https://dashflo.co', 'https://api.dashflo.co', 'http://localhost:4000']) {
+    for (const url of ['https://dashflo.io', 'https://api.dashflo.io', 'http://localhost:4000']) {
       expect(isRetiredHost(url), url).toBe(false);
     }
   });
@@ -93,14 +93,25 @@ describe('url resolution never falls back to a retired host', () => {
   });
 
   it('prefers the application setting, then the environment', () => {
-    expect(resolveBaseUrl('https://api.dashflo.co', { PUBLIC_BASE_URL: 'http://localhost:4000' }))
-      .toBe('https://api.dashflo.co');
-    expect(resolveBaseUrl('', { PUBLIC_BASE_URL: 'https://api.dashflo.co' })).toBe('https://api.dashflo.co');
+    expect(resolveBaseUrl('https://api.dashflo.io', { PUBLIC_BASE_URL: 'http://localhost:4000' }))
+      .toBe('https://api.dashflo.io');
+    expect(resolveBaseUrl('', { PUBLIC_BASE_URL: 'https://api.dashflo.io' })).toBe('https://api.dashflo.io');
   });
 
   it('falls back to loopback rather than a remote host when nothing is configured', () => {
     expect(resolveBaseUrl('', {})).toBe(LOOPBACK_BASE_URL);
     expect(leadsEndpoint('', {})).toBe(`${LOOPBACK_BASE_URL}/functions/leads`);
+  });
+
+  it('uses the dedicated public API origin in split-host deployments', () => {
+    expect(resolveApiBaseUrl('', {
+      PUBLIC_BASE_URL: 'https://dashflo.io',
+      PUBLIC_API_BASE_URL: 'https://api.dashflo.io',
+    })).toBe('https://api.dashflo.io');
+    expect(leadsEndpoint('', {
+      PUBLIC_BASE_URL: 'https://dashflo.io',
+      PUBLIC_API_BASE_URL: 'https://api.dashflo.io',
+    })).toBe('https://api.dashflo.io/functions/leads');
   });
 
   it('ignores a value that is not a usable url', () => {
@@ -109,6 +120,6 @@ describe('url resolution never falls back to a retired host', () => {
   });
 
   it('strips trailing slashes so joined paths do not double up', () => {
-    expect(resolveBaseUrl('https://api.dashflo.co///', {})).toBe('https://api.dashflo.co');
+    expect(resolveBaseUrl('https://api.dashflo.io///', {})).toBe('https://api.dashflo.io');
   });
 });

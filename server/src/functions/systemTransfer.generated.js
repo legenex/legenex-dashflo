@@ -353,3 +353,50 @@ export function sortForImport(entityNames) {
   const rank = new Map(ENTITY_ORDER.map((n, i) => [n, i]));
   return [...entityNames].sort((a, b) => (rank.get(a) ?? 999) - (rank.get(b) ?? 999));
 }
+
+// Owner-only encrypted Base44 migration bundle. Generated from the same
+// catalog as the Base44 exporter; durable credentials travel only here.
+export const MIGRATION_ONLY_ENTITIES = ['SystemKey', 'BuyerApiKey', 'KeyAuditEvent'];
+
+export const MIGRATION_ENTITY_ORDER = [
+  ...ENTITY_ORDER.slice(0, ENTITY_ORDER.indexOf('ApiKey')),
+  'ApiKey', 'SystemKey', 'BuyerApiKey', 'KeyAuditEvent',
+  ...ENTITY_ORDER.slice(ENTITY_ORDER.indexOf('ApiKey') + 1),
+];
+
+export const MIGRATION_DROP_RECORD = {
+  IntegrationConfig: (row) => String(row?.name || '') === 'meta_oauth_state',
+};
+
+export const MIGRATION_DROP_FIELDS = {
+  Invitation: ['token', 'invite_token', 'accept_token'],
+  User: ['password', 'password_hash', 'session_token', 'refresh_token'],
+};
+
+export const MIGRATION_SECRETS_EXPECTED = {
+  ApiKey: ['key'],
+  SystemKey: ['secret', 'client_id'],
+  BuyerApiKey: ['key'],
+  Buyer: ['buyer_api_key'],
+  MetaConnection: ['token'],
+  IntegrationConfig: ['config'],
+  LeadByteConnector: ['headers', 'target_url'],
+  ApiConnector: ['fb_access_token', 'headers', 'target_url'],
+  PullSource: ['api_key', 'url'],
+  Webhook: ['secret', 'headers', 'url'],
+  OutboundWebhook: ['api_key', 'headers', 'url'],
+  InboundWebhookRoute: ['token_hash'],
+  LeadSource: ['webhook_key'],
+  SubDelivery: ['url'],
+  BotConfig: ['bot_key'],
+};
+
+export const MIGRATION_CRYPTO = {
+  format: 'legenex-migration-v1',
+  kdf: 'PBKDF2-SHA256',
+  iterations: 600000,
+  cipher: 'AES-GCM',
+  key_bits: 256,
+  salt_bytes: 16,
+  iv_bytes: 12,
+};

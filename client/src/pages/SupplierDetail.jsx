@@ -78,7 +78,7 @@ export default function SupplierDetail() {
   const assignedCampaigns = campaigns.filter(c => parseArr(supplier.campaign_ids).includes(c.id));
   const supplierLeads = leads.filter(l => l.supplier_name === supplier.name);
   const m = supplierMetrics(leads, supplier.name);
-  const baseUrl = resolveApiBaseUrl(appSettingsArr[0]?.public_base_url);
+  const baseUrl = resolveApiBaseUrl(appSettingsArr[0]?.public_api_base_url || appSettingsArr[0]?.public_base_url);
 
   const updateBrand = async (brand) => {
     await api.entities.Supplier.update(supplier.id, { brand: brand === '__none__' ? '' : brand });

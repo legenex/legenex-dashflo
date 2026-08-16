@@ -779,55 +779,25 @@ No crontab, no `.github/workflows`, no other scheduler writes here. Residual
 risk: the plists still exist, so anyone running `install-scheduler.sh` revives
 them.
 
-### Base44 boundary
+### Base44 and live URL update, 16 August 2026
 
-No SDK dependency in any manifest, no runtime endpoint, no fetch. The 165
-`base44` strings in the bundle are all
-`client/src/lib/progress/backendSummary.json`, a stored snapshot of MVP function
-paths used for read-only porting progress. Observe-only, as required.
+The earlier observe-only and unregistered `.co` notes below this repository's
+history are superseded. Production is the Hostinger VPS at `2.24.130.44` using
+`dashflo.io`, `api.dashflo.io`, and `docs.dashflo.io`. Base44 is a temporary
+one-way migration source only. A deterministic HTTPS reader, durable sync
+history, per-record provenance, incremental watermarks, conflict protection,
+owner manual control, reconciliation, and a UTC six-hour cron template are now
+implemented. No normal DashFlo request uses Base44.
 
-## LIVE URL GATE: dashflo.co is not registered
+The Base44 owner encrypted export and ordinary redacted export are separate.
+Meta platform credentials are owner-only System Keys; supplier and buyer keys
+remain separate. Full current detail and cutover order are in
+`docs/BASE44-BOUNDARY.md`.
 
-Phase D cannot proceed. This is a domain and hosting gate, not an engineering
-blocker, and no credential value is requested here.
-
-1. MISSING ACCESS: the domain `dashflo.co` does not exist. The .co registry
-   returns `DOMAIN NOT FOUND` for a direct query to `whois.registry.co`, and the
-   authoritative nameservers return no delegation. `dashflo.co`,
-   `api.dashflo.co`, `progress.dashflo.co` and `www.dashflo.co` all resolve to
-   nothing: no A record, no NS, no SOA. Separately, this machine has no Plesk
-   configuration, no deployment credentials, no CI workflow and no TLS
-   certificate for any dashflo.co host.
-2. HOSTS REQUIRING IT: `dashflo.co` (application), `api.dashflo.co` (lead
-   posting, webhooks, OAuth callbacks), `progress.dashflo.co` (Progress Control
-   Center), and optionally `www.dashflo.co` to redirect.
-3. RECOMMENDED ACTION: register `dashflo.co`, then create A records for the
-   apex and the three subdomains pointing at the host that will serve DashFlo,
-   then issue TLS for all of them, then provide Plesk or equivalent deployment
-   access. Registration is a money action and an external commitment, so it is
-   Bru's to make, not mine.
-4. WHY: the URL contract requires https for every non-loopback host, and the
-   startup checks enforce it. Without a registered and delegated domain there is
-   no host to certify and no origin to configure, so a public preview cannot be
-   stood up without inventing a URL, which is forbidden.
-5. ALREADY COMPLETE: the application is verified working at
-   `http://localhost:4000`, the build is green, all URLs resolve through the
-   environment-aware module, and the preview is a configuration change rather
-   than a code change once a domain exists. Requirement: the preview must use a
-   separate database with no production data, outbound integrations disabled,
-   native delivery disabled, and the writer agents left unloaded.
-6. VERIFICATION THAT WILL RUN AFTERWARDS: valid TLS and 200 on
-   `https://dashflo.co`; DashFlo rendered; login loads; unauthenticated operator
-   routes refused; `https://api.dashflo.co/api/health` returns the safe health
-   response; non-allowlisted functions refuse anonymous access;
-   `https://progress.dashflo.co` refuses unauthenticated access outside its
-   login flow; no retired host in redirects, HTML, JavaScript, API responses,
-   cookies or links; no Base44 request while loading or using the application;
-   all outbound business integrations still disabled.
-
-DECISION FOR BRU: confirm `dashflo.co` is the intended domain and register it,
-or name the domain you already control and I will target that instead. A
-temporary tunnel is not used as the final live URL without separate approval.
+The code is prepared but not deployed by this session. API-host TLS/proxy,
+timer installation, VPS data migration, final delta, and controlled production
+lead verification remain Gate C actions. Do not mark them ready until they pass
+on the public hostname.
 
 ## Session 15 August 2026, later: audit of recovered work and Phase E start
 

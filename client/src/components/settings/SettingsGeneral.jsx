@@ -26,6 +26,7 @@ export default function SettingsGeneral() {
         brand_name: settings.brand_name || '',
         brand_tagline: settings.brand_tagline || '',
         public_base_url: settings.public_base_url || '',
+        public_api_base_url: settings.public_api_base_url || '',
         default_fail_mode: settings.default_fail_mode || 'fail_open',
         require_trustedform_cert: settings.require_trustedform_cert ?? true,
         fb_api_version: settings.fb_api_version || 'v25.0',
@@ -71,7 +72,10 @@ export default function SettingsGeneral() {
           <div className="flex items-center gap-2 text-[14px] font-semibold text-foreground mb-4">
             <Globe className="w-4 h-4 text-primary" /> Endpoint
           </div>
-          <Input label="Public Base URL" value={form.public_base_url} onChange={set('public_base_url')} mono placeholder="https://api.dashflo.co" hint="The public URL suppliers send leads to." />
+          <div className="space-y-4">
+            <Input label="Application Base URL" value={form.public_base_url} onChange={set('public_base_url')} mono placeholder="https://app.dashflo.io" hint="The public URL where operators use DashFlo. The apex domain is reserved for the marketing website." />
+            <Input label="Public API Base URL" value={form.public_api_base_url} onChange={set('public_api_base_url')} mono placeholder="https://api.dashflo.io" hint="The authoritative production origin suppliers send leads to." />
+          </div>
         </Panel>
 
         <Panel className="p-5" i={2}>

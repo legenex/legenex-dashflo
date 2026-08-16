@@ -3,7 +3,7 @@ import { useOutletContext } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Copy, Eye, EyeOff } from 'lucide-react';
 import { toast } from 'sonner';
-import { appParams } from '@/lib/app-params';
+import { resolveApiBaseUrl } from '@/lib/urls';
 
 const PAYLOAD_FIELDS = [
   ['first_name', 'string', 'Lead first name'],
@@ -41,7 +41,7 @@ function CopyRow({ label, value, mono = true, masked = false }) {
 export default function SupplierPortalApi() {
   const { data, supplier } = useOutletContext();
   const apiKey = data?.apiKey || null;
-  const base = appParams.appBaseUrl || window.location.origin;
+  const base = resolveApiBaseUrl();
   const endpoint = `${base}/functions/leads`;
   const key = apiKey?.key || 'YOUR_API_KEY';
 

@@ -44,21 +44,28 @@ and it is not hosted on `legenex.com`.
 
 | Surface | Authoritative value now | Future value |
 |---|---|---|
-| Application and API | `http://localhost:4000` | `https://dashflo.co` |
-| API host | same origin, `/api` | `https://api.dashflo.co` |
-| Health | `http://localhost:4000/api/health` | same path |
-| Vite dev server | `http://localhost:5173` (proxies `/api` to 4000) | not deployed |
-| Progress Control Center | path on port 4000 | `https://progress.dashflo.co` |
+| Application | `https://dashflo.io` | `https://app.dashflo.io` after DNS, TLS and login verification |
+| Public supplier API | `https://api.dashflo.io` | `/functions/leads` for intake |
+| Health | `https://dashflo.io/api/health` | same Node service on port 4000 internally |
+| Vite dev server | `http://localhost:5173` (proxies `/api` to 4000) | local development only |
+| Documentation | `https://docs.dashflo.io` | public documentation host |
+
+The apex and `www` are reserved for the marketing website. The application
+must not remain permanently on the apex. The controlled sequence is app DNS,
+app certificate/vhost, application and login verification, canonical URL
+switch, then marketing cutover. As observed on 16 August 2026,
+`app.dashflo.io` had no DNS record; the required record is
+`A app.dashflo.io 2.24.130.44`.
 
 `dashboard.legenex.com`, `api.legenex.com` and
 `progress.dashboard.legenex.com` are inherited fallbacks from the Base44 era.
 They are not DashFlo hosts. `grep -rn "legenex\.com" client/src server/src`
 returns 54 hits. They are configuration debt, not deployment truth.
 
-Base44 is limited to three read-only uses: tracking the temporary MVP,
-exporting data for migration, and comparing which MVP features still need a
-native rebuild. Base44 is never a runtime dependency, authentication provider,
-function host, URL authority or availability dependency for DashFlo.
+Base44 is limited to temporary migration reads, encrypted owner export, and
+reconciliation. The scheduled read path is isolated from normal runtime:
+DashFlo continues operating from PostgreSQL when Base44 is unavailable. See
+`docs/BASE44-BOUNDARY.md` for the current one-way sync design.
 
 ## Repository and branch state
 

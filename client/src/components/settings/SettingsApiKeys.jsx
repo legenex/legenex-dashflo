@@ -75,7 +75,7 @@ export default function SettingsApiKeys() {
     queryFn: () => api.entities.AppSettings.list(),
   });
 
-  const baseUrl = resolveApiBaseUrl(appSettingsArr[0]?.public_base_url);
+  const baseUrl = resolveApiBaseUrl(appSettingsArr[0]?.public_api_base_url || appSettingsArr[0]?.public_base_url);
   const endpointUrl = `${baseUrl}/functions/leads`;
 
   const openCreate = () => {
@@ -199,7 +199,7 @@ export default function SettingsApiKeys() {
             <div className="flex items-start gap-2">
               <Terminal className="w-4 h-4 text-primary mt-0.5 shrink-0" />
               <div className="flex-1">
-                <div className="font-medium text-foreground mb-1">Endpoint</div>
+                <div className="font-medium text-foreground mb-1">Production endpoint</div>
                 <div className="flex items-center gap-2">
                   <code className="text-[12px] text-primary bg-primary/10 px-2 py-0.5 rounded font-mono flex-1 break-all">{endpointUrl}</code>
                   <Button size="sm" variant="ghost" className="h-7 w-7 p-0 shrink-0" onClick={() => { navigator.clipboard.writeText(endpointUrl); toast.success('Copied'); }}>

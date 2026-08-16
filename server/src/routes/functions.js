@@ -3,7 +3,7 @@ import { getFunction, functionNames } from '../functions/index.js';
 import { createServerClient } from '../lib/serverClient.js';
 import { config } from '../config.js';
 import { HttpError, json } from '../functions/_runtime.js';
-import { authorizeFunction } from '../lib/functionPolicy.js';
+import { authorizeFunction, isPublicFunction } from '../lib/functionPolicy.js';
 
 const router = express.Router();
 
@@ -14,9 +14,13 @@ router.get('/', (req, res) => {
   res.json({ functions: functionNames() });
 });
 
-// POST /api/functions/:name  -> runs the ported function. Response mirrors the
-// function's own status/body (like the original Deno Response.json).
-router.post('/:name', async (req, res) => {
+// Shared executor. The /api/functions router can run authenticated functions;
+// the public /functions compatibility router passes publicOnly so mounting the
+// supplier endpoint cannot accidentally bypass cookie CSRF on an admin tool.
+export async function executeFunction(req, res, { publicOnly = false } = {}) {
+  if (publicOnly && !isPublicFunction(req.params.name)) {
+    return res.status(404).json({ error: 'Unknown public function' });
+  }
   // Deny by default. Only the reviewed public allowlist in lib/functionPolicy.js
   // may run without a session, and each of those authenticates its own caller.
   // This runs before the function is resolved so an anonymous caller cannot
@@ -41,6 +45,7 @@ router.post('/:name', async (req, res) => {
 
   try {
     const result = await fn(ctx);
+    if (res.headersSent) return undefined;
     if (result && result.__httpResponse) return res.status(result.status).json(result.body);
     return res.json(result ?? {});
   } catch (err) {
@@ -48,6 +53,10 @@ router.post('/:name', async (req, res) => {
     console.error(`[function:${req.params.name}]`, err);
     return res.status(500).json({ error: err.message });
   }
-});
+}
+
+// POST /api/functions/:name  -> runs the ported function. Response mirrors the
+// function's own status/body (like the original Deno Response.json).
+router.post('/:name', (req, res) => executeFunction(req, res));
 
 export default router;

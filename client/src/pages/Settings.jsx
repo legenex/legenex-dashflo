@@ -11,7 +11,7 @@ import SettingsIntegrations from '@/components/settings/SettingsIntegrations';
 import SettingsDataSources from '@/components/settings/SettingsDataSources';
 import SettingsCustomFields from '@/components/settings/SettingsCustomFields';
 import SettingsFieldMapping from '@/components/settings/SettingsFieldMapping';
-import SettingsApiKeys from '@/components/settings/SettingsApiKeys';
+import SettingsApiKeysHub from '@/components/settings/SettingsApiKeysHub';
 import SettingsInboundWebhooks from '@/components/settings/SettingsInboundWebhooks';
 import SettingsChatBot from '@/components/settings/SettingsChatBot';
 import SettingsBilling from '@/components/settings/SettingsBilling';
@@ -63,7 +63,7 @@ const PANELS = {
   'data-sources': { title: 'Data Sources', subtitle: 'Inbound lead sources.', node: <SettingsDataSources /> },
   fields: { title: 'Custom Fields', subtitle: 'The lead field catalog.', node: <SettingsCustomFields /> },
   'field-mapping': { title: 'Field Mapping', subtitle: 'Incoming key to field mapping.', node: <SettingsFieldMapping /> },
-  apikeys: { title: 'API Keys', subtitle: 'Gateway and supplier keys.', node: <SettingsApiKeys /> },
+  apikeys: { title: 'API Keys', subtitle: 'System, supplier and buyer credentials.', node: <SettingsApiKeysHub /> },
   'inbound-webhooks': { title: 'Webhooks', subtitle: 'Posts we receive, and pulls we make on a schedule.', node: <SettingsInboundWebhooks />, adminOnly: true },
   errors: { title: 'Error Logs', subtitle: 'Pipeline failures and reasons.', node: <ErrorLogs embedded /> },
   audits: { title: 'Audits', subtitle: 'Read-only evaluation harness: runtime probes and findings.', node: <SettingsAudits /> },

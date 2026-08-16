@@ -191,6 +191,13 @@ describe('secret material never leaves through the route', () => {
     expect(JSON.stringify(projected)).not.toContain('live-value');
   });
 
+  it('strips the legacy buyer credential while preserving buyer metadata', () => {
+    const row = { id: 'b1', company_name: 'Acme Buyer', buyer_api_key: 'buyer-secret', active: true };
+    const projected = projectRead('Buyer', row);
+    expect(projected.buyer_api_key).toBeUndefined();
+    expect(projected.company_name).toBe('Acme Buyer');
+  });
+
   it('does not mutate the record it was given', () => {
     const row = { id: 'k1', key: 'secret-value' };
     projectRead('ApiKey', row);
@@ -237,6 +244,12 @@ describe('privilege escalation through writes is blocked', () => {
     const patch = { base_role: 'owner' };
     sanitizeWrite('User', patch);
     expect(patch.base_role).toBe('owner');
+  });
+
+  it('does not let the generic buyer route replace a buyer credential', () => {
+    const clean = sanitizeWrite('Buyer', { company_name: 'Acme', buyer_api_key: 'replacement' });
+    expect(clean.company_name).toBe('Acme');
+    expect(clean.buyer_api_key).toBeUndefined();
   });
 });
 

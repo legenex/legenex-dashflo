@@ -1,22 +1,5 @@
 import { functionUrl } from '../lib/urls.js';
-
-const DEFAULT_REDIRECT_URI = functionUrl('metaOauthCallback');
-
-// Loads the Meta app credentials from IntegrationConfig(name='meta_app') first
-// (set via the in-app credentials field), falling back to environment vars.
-async function loadMetaAppCreds(db, env) {
-  let appId = '';
-  let appSecret = '';
-  try {
-    const list = await db.entities.IntegrationConfig.filter({ name: 'meta_app' });
-    const cfg = JSON.parse(list[0]?.config || '{}');
-    appId = String(cfg.app_id || '').trim();
-    appSecret = String(cfg.app_secret || '').trim();
-  } catch { /* ignore */ }
-  if (!appId) appId = env.META_APP_ID || '';
-  if (!appSecret) appSecret = env.META_APP_SECRET || '';
-  return { appId, appSecret };
-}
+import { resolveMetaAppCreds } from '../lib/metaAppCreds.js';
 
 // Build a self-closing popup page that posts the result to the opener (the
 // wizard) and then closes. targetOrigin is the app origin captured at connect
@@ -75,14 +58,15 @@ export default async function metaOauthCallback(ctx) {
     const entry = states.find(s => s && s.state === state);
     if (!state || !entry) return popupResponse(ctx, { success: false, error: 'state_mismatch' }, appOrigin);
     appOrigin = (typeof entry.origin === 'string' && entry.origin.startsWith('https://')) ? entry.origin : '';
-    const redirectUri = entry.redirect_uri && entry.redirect_uri.startsWith('https://') ? entry.redirect_uri : DEFAULT_REDIRECT_URI;
+    const configuredRedirectUri = functionUrl('metaOauthCallback', '', ctx.env);
+    const redirectUri = entry.redirect_uri === configuredRedirectUri ? entry.redirect_uri : configuredRedirectUri;
     if (stateRecord) {
       await db.entities.IntegrationConfig.update(stateRecord.id, {
         config: JSON.stringify({ states: states.filter(s => s.state !== state) }),
       }).catch(() => {});
     }
 
-    const { appId, appSecret } = await loadMetaAppCreds(db, ctx.env);
+    const { appId, appSecret } = await resolveMetaAppCreds(db, ctx.env);
     if (!appId || !appSecret) return popupResponse(ctx, { success: false, error: 'not_configured' }, appOrigin);
 
     const ver = 'v21.0';

@@ -120,7 +120,7 @@ export default function Notifications() {
   };
 
   const openCreate = () => {
-    setEditRule({ name: '', condition_type: 'errors_same_stage', threshold_count: 5, window_minutes: 15, channels: '["email"]', recipients: '["admin@dashflo.co"]', enabled: true });
+    setEditRule({ name: '', condition_type: 'errors_same_stage', threshold_count: 5, window_minutes: 15, channels: '["email"]', recipients: '["admin@dashflo.io"]', enabled: true });
     setRuleModal(true);
   };
 

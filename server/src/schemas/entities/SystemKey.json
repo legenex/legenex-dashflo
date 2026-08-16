@@ -1,0 +1,34 @@
+{
+  "name": "SystemKey",
+  "type": "object",
+  "properties": {
+    "name": { "type": "string", "description": "Owner-facing credential label" },
+    "provider": {
+      "type": "string",
+      "enum": ["openai", "anthropic", "gemini", "meta", "mcp_server", "other"],
+      "default": "other"
+    },
+    "purpose": { "type": "string" },
+    "env_var": { "type": "string", "description": "Conventional environment variable name" },
+    "client_id": { "type": "string", "description": "Public client or application identifier where required" },
+    "secret": { "type": "string", "description": "Write-only durable credential" },
+    "key_prefix": { "type": "string" },
+    "last4": { "type": "string" },
+    "server_url": { "type": "string" },
+    "transport": { "type": "string" },
+    "header_name": { "type": "string" },
+    "scopes": { "type": "string", "description": "JSON array or provider-specific scope string" },
+    "active": { "type": "boolean", "default": true },
+    "status": { "type": "string", "default": "untested" },
+    "status_detail": { "type": "string" },
+    "status_checked_at": { "type": "string", "format": "date-time" },
+    "last_used_at": { "type": "string", "format": "date-time" },
+    "request_count": { "type": "number", "default": 0 },
+    "rotated_at": { "type": "string", "format": "date-time" },
+    "expires_at": { "type": "string", "format": "date-time" },
+    "notes": { "type": "string" },
+    "created_by_email": { "type": "string" },
+    "owner_user_id": { "type": "string" }
+  },
+  "required": ["name", "provider"]
+}

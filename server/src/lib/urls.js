@@ -55,11 +55,13 @@ export function resolveBaseUrl(settingValue, env = process.env) {
   return LOOPBACK_BASE_URL;
 }
 
-// Where suppliers post leads, where webhooks and OAuth callbacks arrive. Same
-// origin as the application unless a deployment splits them, which it does by
-// setting PUBLIC_BASE_URL on the API host.
+// Where suppliers post leads, where webhooks and OAuth callbacks arrive. A
+// split-host deployment uses PUBLIC_API_BASE_URL; single-host installs fall
+// back to PUBLIC_BASE_URL.
 export const resolveApiBaseUrl = (settingValue, env = process.env) =>
-  resolveBaseUrl(settingValue, env);
+  [settingValue, env.PUBLIC_API_BASE_URL, env.PUBLIC_BASE_URL, config.publicApiBaseUrl, config.publicBaseUrl]
+    .find(usable)
+    ?.replace(/\/+$/, '') || LOOPBACK_BASE_URL;
 
 export const leadsEndpoint = (settingValue, env = process.env) =>
   `${resolveApiBaseUrl(settingValue, env)}/functions/leads`;

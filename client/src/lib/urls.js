@@ -43,11 +43,43 @@ export function resolveBaseUrl(settingValue, loc = typeof window === 'undefined'
   return LOOPBACK_BASE_URL;
 }
 
+// The operator application origin is separate from the supplier API origin.
+// Runtime configuration wins so links can move from the apex to app.dashflo.io
+// only after DNS and TLS are proven, without rebuilding the client.
+export function resolveApplicationBaseUrl(settingValue, loc = typeof window === 'undefined' ? null : window.location) {
+  const sameOrigin = loc && loc.origin ? loc.origin : '';
+  const runtimeValue = typeof window === 'undefined'
+    ? ''
+    : window.__DASHFLO_PUBLIC_SETTINGS__?.public_base_url;
+  const buildValue = typeof import.meta !== 'undefined' ? import.meta.env?.VITE_PUBLIC_APP_BASE_URL : '';
+  for (const candidate of [settingValue, runtimeValue, buildValue, sameOrigin]) {
+    if (usable(candidate)) return stripTrailingSlashes(candidate);
+  }
+  return LOOPBACK_BASE_URL;
+}
+
 // Where suppliers post leads and where inbound webhooks arrive. Shown in the
 // operator UI and copied by suppliers, so it must be this install's own host.
-export const resolveApiBaseUrl = (settingValue, loc) => resolveBaseUrl(settingValue, loc);
+export function resolveApiBaseUrl(settingValue, loc = typeof window === 'undefined' ? null : window.location) {
+  const sameOrigin = loc && loc.origin ? loc.origin : '';
+  const runtimeValue = typeof window === 'undefined'
+    ? ''
+    : window.__DASHFLO_PUBLIC_SETTINGS__?.public_api_base_url;
+  const buildValue = typeof import.meta !== 'undefined' ? import.meta.env?.VITE_PUBLIC_API_BASE_URL : '';
+  for (const candidate of [settingValue, runtimeValue, buildValue, sameOrigin]) {
+    if (usable(candidate)) return stripTrailingSlashes(candidate);
+  }
+  return LOOPBACK_BASE_URL;
+}
 
 export const leadsEndpoint = (settingValue, loc) =>
   `${resolveApiBaseUrl(settingValue, loc)}/functions/leads`;
 
-export default { LOOPBACK_BASE_URL, isRetiredHost, resolveBaseUrl, resolveApiBaseUrl, leadsEndpoint };
+export default {
+  LOOPBACK_BASE_URL,
+  isRetiredHost,
+  resolveBaseUrl,
+  resolveApplicationBaseUrl,
+  resolveApiBaseUrl,
+  leadsEndpoint,
+};

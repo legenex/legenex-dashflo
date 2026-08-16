@@ -1,10 +1,13 @@
 import React, { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { systemExport } from '@/functions/systemExport';
+import { systemImport } from '@/functions/systemImport';
 import { usePermissions, useAuth } from '@/lib/AuthContext';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Progress } from '@/components/ui/progress';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import {
   Download, Upload, ShieldAlert, ShieldCheck, Loader2, FileJson, Lock, CheckCircle2, AlertTriangle,
 } from 'lucide-react';
@@ -66,6 +69,11 @@ export default function SettingsExportImport() {
   const [progress, setProgress] = useState({ pct: 0, label: '' });
   const [lastResult, setLastResult] = useState(null);
   const [bundlePreview, setBundlePreview] = useState(null);
+  const [ordinaryFile, setOrdinaryFile] = useState(null);
+  const [ownerFile, setOwnerFile] = useState(null);
+  const [ownerPassphrase, setOwnerPassphrase] = useState('');
+  const [importBusy, setImportBusy] = useState('');
+  const [confirmed, setConfirmed] = useState(false);
 
   const { data: counts, isLoading: countsLoading } = useQuery({
     queryKey: ['system-export-counts'],
@@ -178,23 +186,28 @@ export default function SettingsExportImport() {
     }
   };
 
-  const readBundle = (file) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      try {
-        const parsed = JSON.parse(String(reader.result));
-        if (!parsed.manifest || !parsed.entities) throw new Error('Not a system export bundle');
-        if (parsed.manifest.bundle_version !== BUNDLE_VERSION) {
-          throw new Error(`Bundle version ${parsed.manifest.bundle_version} does not match this app (${BUNDLE_VERSION})`);
-        }
-        setBundlePreview(parsed);
-        toast.success('Bundle read and validated');
-      } catch (err) {
-        setBundlePreview(null);
-        toast.error(err.message || 'Could not read bundle');
+  const runImport = async (kind, mode) => {
+    const file = kind === 'owner' ? ownerFile : ordinaryFile;
+    if (!file) return toast.error('Choose a migration file first');
+    if (kind === 'owner' && ownerPassphrase.length < 16) return toast.error('Enter the migration passphrase');
+    if (mode === 'apply' && !confirmed) return toast.error('Confirm the migration before applying it');
+    if (mode === 'apply' && !window.confirm('Apply this validated migration to DashFlo? The operation is audited and runs in a database transaction.')) return;
+
+    setImportBusy(`${kind}:${mode}`);
+    try {
+      const result = await systemImport({ file, kind, mode, passphrase: ownerPassphrase, confirmed: mode === 'apply' });
+      setBundlePreview(result);
+      setConfirmed(false);
+      if (mode === 'preview') toast.success('Migration package decrypted and validated server-side');
+      else {
+        setOwnerPassphrase('');
+        toast.success(`Migration applied: ${result.applied?.created || 0} created, ${result.applied?.updated || 0} updated`);
       }
-    };
-    reader.readAsText(file);
+    } catch (err) {
+      toast.error(err.message || 'Migration import failed');
+    } finally {
+      setImportBusy('');
+    }
   };
 
   if (!isMaster) {
@@ -218,11 +231,12 @@ export default function SettingsExportImport() {
         <div className="flex items-start gap-3">
           <ShieldCheck className="h-4 w-4 text-primary mt-0.5 shrink-0" />
           <div>
-            <p className="text-[13px] font-medium text-foreground">Credentials never leave the app</p>
+            <p className="text-[13px] font-medium text-foreground">Ordinary exports never contain credentials</p>
             <p className="mt-0.5 text-[12px] text-muted-foreground">
               API keys, tokens, webhook secrets, authorization headers and credentials inside destination URLs are
               replaced server side before the file is written. The bundle carries a re-entry checklist instead.
-              Connectors, webhooks and campaigns always arrive disabled in the receiving app.
+              Connectors, webhooks and campaigns from an ordinary export arrive disabled in the receiving app. The
+              separate owner migration package below is encrypted and intentionally carries durable credentials.
             </p>
           </div>
         </div>
@@ -315,48 +329,108 @@ export default function SettingsExportImport() {
       <div className="rounded-lg border border-border bg-card">
         <div className="flex items-center gap-2 border-b border-border px-4 py-3">
           <Upload className="h-4 w-4 text-muted-foreground" />
-          <span className="text-[13px] font-semibold text-foreground">Import</span>
+          <span className="text-[13px] font-semibold text-foreground">Import Base44 data</span>
         </div>
 
-        <div className="p-4 space-y-4">
+        <div className="p-4 space-y-5">
           <div className="flex items-start gap-3 rounded-lg border border-border bg-popover p-3">
             <ShieldAlert className="h-4 w-4 text-chart-3 mt-0.5 shrink-0" />
             <p className="text-[12px] text-muted-foreground">
-              Reading a bundle is safe and writes nothing. Applying an import is a write to every selected entity and
-              runs a dry run first. Record references are remapped to new ids on the way in.
+              Preview decrypts and validates on the server but writes no business records. Source IDs and relationships
+              are preserved. Apply is transactional, audited, and requires a fresh explicit confirmation.
             </p>
           </div>
 
-          <label className="flex flex-col items-center justify-center rounded-lg border border-dashed border-border bg-background px-4 py-8 cursor-pointer hover:bg-accent transition-colors">
-            <FileJson className="h-4 w-4 text-muted-foreground" />
-            <span className="mt-2 text-[13px] text-foreground">Choose a bundle file</span>
-            <span className="mt-0.5 text-[12px] text-muted-foreground">A .json file produced by this export</span>
-            <input
-              type="file"
-              accept="application/json,.json"
-              className="hidden"
-              onChange={(e) => { const f = e.target.files?.[0]; if (f) readBundle(f); }}
-            />
-          </label>
+          <div>
+            <div className="text-[13px] font-semibold text-foreground">1. Ordinary Base44 export</div>
+            <p className="mt-1 text-[12px] text-muted-foreground">
+              Redacted, non-secret data. Redacted, blank, missing, masked or placeholder credential fields never replace
+              an existing DashFlo credential.
+            </p>
+            <label className="mt-3 flex items-center gap-3 rounded-lg border border-dashed border-border bg-background px-4 py-4 cursor-pointer hover:bg-accent transition-colors">
+              <FileJson className="h-4 w-4 text-muted-foreground" />
+              <span className="min-w-0 flex-1 truncate text-[13px] text-foreground">{ordinaryFile?.name || 'Choose ordinary .json export'}</span>
+              <input type="file" accept="application/json,.json" className="hidden" onChange={(e) => {
+                setOrdinaryFile(e.target.files?.[0] || null); setBundlePreview(null); setConfirmed(false);
+              }} />
+            </label>
+            <Button className="mt-3" variant="outline" disabled={!ordinaryFile || Boolean(importBusy)} onClick={() => runImport('ordinary', 'preview')}>
+              {importBusy === 'ordinary:preview' && <Loader2 className="mr-2 h-4 w-4 animate-spin" />} Preview ordinary import
+            </Button>
+          </div>
+
+          <div className="border-t border-border pt-5">
+            <div className="flex items-center gap-2">
+              <span className="text-[13px] font-semibold text-foreground">2. Encrypted owner migration export</span>
+              <Badge tone="warn">owner only</Badge>
+            </div>
+            {user?.base_role === 'owner' ? (
+              <>
+                <p className="mt-1 text-[12px] text-muted-foreground">
+                  This package may contain live production supplier, buyer, Meta and connector credentials. It is
+                  decrypted only in server memory. The passphrase is sent only for this request and is not stored.
+                </p>
+                <label className="mt-3 flex items-center gap-3 rounded-lg border border-dashed border-border bg-background px-4 py-4 cursor-pointer hover:bg-accent transition-colors">
+                  <FileJson className="h-4 w-4 text-muted-foreground" />
+                  <span className="min-w-0 flex-1 truncate text-[13px] text-foreground">{ownerFile?.name || 'Choose encrypted .json.enc migration package'}</span>
+                  <input type="file" accept="application/json,.json,.enc" className="hidden" onChange={(e) => {
+                    setOwnerFile(e.target.files?.[0] || null); setBundlePreview(null); setConfirmed(false);
+                  }} />
+                </label>
+                <div className="mt-3 max-w-md">
+                  <Label className="text-[12px] text-muted-foreground">Migration passphrase</Label>
+                  <Input type="password" autoComplete="off" value={ownerPassphrase} onChange={(e) => setOwnerPassphrase(e.target.value)}
+                    placeholder="At least 16 characters" className="mt-1 font-mono" />
+                </div>
+                <Button className="mt-3" variant="outline" disabled={!ownerFile || ownerPassphrase.length < 16 || Boolean(importBusy)} onClick={() => runImport('owner', 'preview')}>
+                  {importBusy === 'owner:preview' && <Loader2 className="mr-2 h-4 w-4 animate-spin" />} Decrypt and preview owner migration
+                </Button>
+              </>
+            ) : (
+              <p className="mt-2 text-[12px] text-muted-foreground">Only the account owner can upload or apply a credential-bearing migration package.</p>
+            )}
+          </div>
 
           {bundlePreview && (
             <div className="rounded-lg border border-border bg-popover p-4">
               <div className="flex items-center gap-2">
-                <CheckCircle2 className="h-4 w-4 text-primary" />
-                <span className="text-[13px] font-semibold text-foreground">Bundle validated</span>
+                {bundlePreview.can_apply ? <CheckCircle2 className="h-4 w-4 text-primary" /> : <AlertTriangle className="h-4 w-4 text-chart-3" />}
+                <span className="text-[13px] font-semibold text-foreground">Migration preview</span>
+                <Badge>{bundlePreview.kind}</Badge>
               </div>
-              <div className="mt-2 space-y-1 text-[12px] text-muted-foreground">
-                <div>Exported {new Date(bundlePreview.manifest.exported_at).toLocaleString()} by {bundlePreview.manifest.exported_by}</div>
-                <div>{Object.keys(bundlePreview.entities).length} entities, {Object.values(bundlePreview.manifest.counts || {}).reduce((a, b) => a + b, 0).toLocaleString()} records</div>
+              <div className="mt-3 grid grid-cols-2 gap-x-6 gap-y-1 text-[12px] text-muted-foreground sm:grid-cols-4">
+                <div>Version <span className="text-foreground">{bundlePreview.package_version}</span></div>
+                <div>Entities <span className="text-foreground">{bundlePreview.entities_present?.length || 0}</span></div>
+                <div>Records <span className="text-foreground">{bundlePreview.records_present || 0}</span></div>
+                <div>Create <span className="text-foreground">{bundlePreview.records_to_create || 0}</span></div>
+                <div>Update <span className="text-foreground">{bundlePreview.records_to_update || 0}</span></div>
+                <div>Preserve <span className="text-foreground">{bundlePreview.records_to_preserve || 0}</span></div>
+                <div>Conflicts <span className="text-foreground">{bundlePreview.conflict_count || 0}</span></div>
+                <div>Missing entities <span className="text-foreground">{bundlePreview.entities_missing?.length || 0}</span></div>
               </div>
-
-              <div className="mt-3 flex items-start gap-2 rounded-md border border-border bg-card p-3">
-                <AlertTriangle className="h-4 w-4 text-chart-3 mt-0.5 shrink-0" />
-                <p className="text-[12px] text-muted-foreground">
-                  Apply is not enabled yet. The reference remapping and dry run report land in the next pass, so no
-                  bundle can be written into this app until that is proven.
-                </p>
+              <div className="mt-2 text-[12px] text-muted-foreground">
+                Credential-bearing entities found: {Object.keys(bundlePreview.credential_bearing_entities || {}).join(', ') || 'none'}.
+                No credential values are shown.
               </div>
+              {!bundlePreview.can_apply && (
+                <div className="mt-3 text-[12px] text-destructive">
+                  Apply is blocked: {(bundlePreview.schema_incompatibilities?.length || 0)} schema issue(s), {(bundlePreview.relationship_problems?.length || 0)} relationship issue(s), and {(bundlePreview.id_collisions?.length || 0)} ID collision(s).
+                </div>
+              )}
+              {bundlePreview.mode === 'preview' && bundlePreview.can_apply && (
+                <div className="mt-4 space-y-3 border-t border-border pt-3">
+                  <label className="flex items-start gap-2 text-[12px] text-muted-foreground">
+                    <Checkbox checked={confirmed} onCheckedChange={(value) => setConfirmed(value === true)} />
+                    I reviewed this preview and authorize the audited migration apply.
+                  </label>
+                  <Button disabled={!confirmed || Boolean(importBusy)} onClick={() => runImport(bundlePreview.kind, 'apply')}>
+                    {importBusy.endsWith(':apply') && <Loader2 className="mr-2 h-4 w-4 animate-spin" />} Apply migration
+                  </Button>
+                </div>
+              )}
+              {bundlePreview.result === 'success' && (
+                <div className="mt-3 text-[12px] text-foreground">Applied successfully. Run ID {bundlePreview.run_id}.</div>
+              )}
             </div>
           )}
         </div>

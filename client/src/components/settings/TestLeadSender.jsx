@@ -12,7 +12,7 @@ const DEFAULT_TEST_PAYLOAD = {
   firstname: 'Test',
   lastname: 'Lead',
   phone: '0000000000',
-  email: 'test@dashflo.co',
+  email: 'test@dashflo.io',
   sid: 'test',
   address: '123 Test St',
   city: 'Testville',

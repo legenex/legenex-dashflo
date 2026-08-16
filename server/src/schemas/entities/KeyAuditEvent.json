@@ -1,0 +1,15 @@
+{
+  "name": "KeyAuditEvent",
+  "type": "object",
+  "properties": {
+    "subject_type": { "type": "string", "enum": ["system", "buyer", "supplier"] },
+    "subject_id": { "type": "string" },
+    "subject_name": { "type": "string" },
+    "action": { "type": "string" },
+    "actor_email": { "type": "string" },
+    "actor_role": { "type": "string" },
+    "detail": { "type": "string", "description": "Audit detail without credential values" },
+    "at": { "type": "string", "format": "date-time" }
+  },
+  "required": ["subject_type", "action", "at"]
+}

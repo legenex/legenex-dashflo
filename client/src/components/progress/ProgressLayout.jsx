@@ -5,6 +5,7 @@ import { usePermissions } from '@/lib/AuthContext';
 import { PROGRESS_NAV } from './progressNav';
 import { isProgressHost } from '@/lib/hostScope';
 import ProgressErrorBoundary from './ProgressErrorBoundary';
+import { resolveApplicationBaseUrl } from '@/lib/urls';
 
 // Shell for the Progress Control Center.
 //
@@ -136,7 +137,7 @@ export default function ProgressLayout() {
           </div>
 
           <a
-            href="https://dashflo.co/"
+            href={resolveApplicationBaseUrl()}
             className="ml-auto flex shrink-0 items-center gap-1.5 rounded-md px-2 py-1.5 text-[11px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
           >
             <ExternalLink className="h-3.5 w-3.5" />

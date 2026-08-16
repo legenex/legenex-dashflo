@@ -1,4 +1,5 @@
 import { requireUser, HttpError, json } from './_runtime.js';
+import { resolveMetaAppCreds } from '../lib/metaAppCreds.js';
 
 const OPERATOR_PERMISSION_KEYS = ['leads', 'reports', 'overview', 'finances', 'distribution', 'operations'];
 // Operator authorization, mirroring src/lib/distribution/operatorAuth.js: admins
@@ -114,26 +115,17 @@ export default async function metaConnectionStatus(ctx) {
       next_scheduled_sync: (syncEnabled && a.enabled !== false) ? nextScheduled : null,
     }));
 
-    // Meta app credential status (in-app config, else environment vars).
-    let metaAppStatus = { configured: false, app_id: '', secret_last4: '', source: 'none' };
-    try {
-      const appList = await db.entities.IntegrationConfig.filter({ name: 'meta_app' });
-      const cfg = JSON.parse(appList[0]?.config || '{}');
-      const aid = String(cfg.app_id || '').trim();
-      const sec = String(cfg.app_secret || '').trim();
-      const envId = ctx.env.META_APP_ID || '';
-      const envSecret = ctx.env.META_APP_SECRET || '';
-      const effId = aid || envId;
-      const effSecret = sec || envSecret;
-      metaAppStatus = {
-        configured: !!(effId && effSecret),
-        app_id: effId,
-        secret_last4: effSecret ? effSecret.slice(-4) : '',
-        source: aid ? 'in_app' : (envId ? 'env' : 'none'),
-      };
-    } catch { /* ignore */ }
+    const mappingCount = await db.entities.MetaLeadFormMapping.count().catch(() => 0);
 
-    return { success: true, yesterday, connections, accounts, meta_app: metaAppStatus, sync: { enabled: syncEnabled, interval_minutes: intervalMinutes, next_scheduled_sync: nextScheduled } };
+    const creds = await resolveMetaAppCreds(db, ctx.env);
+    const metaAppStatus = {
+      configured: creds.configured,
+      app_id: creds.appId,
+      secret_last4: creds.appSecret ? creds.appSecret.slice(-4) : '',
+      source: creds.source,
+    };
+
+    return { success: true, yesterday, connections, accounts, mapping_count: mappingCount, meta_app: metaAppStatus, sync: { enabled: syncEnabled, interval_minutes: intervalMinutes, next_scheduled_sync: nextScheduled } };
   } catch (error) {
     return ctx.json({ error: error.message }, 500);
   }

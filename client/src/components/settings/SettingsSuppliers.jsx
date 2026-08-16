@@ -82,11 +82,11 @@ export default function SettingsSuppliers() {
   const verticalOptions = verticalList.map(v => ({ value: v.code, label: v.name }));
 
   const appSettings = appSettingsArr[0] || {};
-  const savedBaseUrl = resolveApiBaseUrl(appSettings.public_base_url);
+  const savedBaseUrl = resolveApiBaseUrl(appSettings.public_api_base_url || appSettings.public_base_url);
 
   React.useEffect(() => {
     if (appSettingsArr.length > 0 && !baseUrl) {
-      setBaseUrl(resolveApiBaseUrl(appSettings.public_base_url));
+      setBaseUrl(resolveApiBaseUrl(appSettings.public_api_base_url || appSettings.public_base_url));
     }
   }, [appSettingsArr]);
 
@@ -94,9 +94,9 @@ export default function SettingsSuppliers() {
 
   const saveBaseUrl = async () => {
     if (appSettings.id) {
-      await api.entities.AppSettings.update(appSettings.id, { public_base_url: baseUrl });
+      await api.entities.AppSettings.update(appSettings.id, { public_api_base_url: baseUrl });
     } else {
-      await api.entities.AppSettings.create({ public_base_url: baseUrl });
+      await api.entities.AppSettings.create({ public_api_base_url: baseUrl });
     }
     setBaseUrlSaved(true);
     setTimeout(() => setBaseUrlSaved(false), 2000);

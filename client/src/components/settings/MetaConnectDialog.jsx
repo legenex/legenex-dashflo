@@ -4,7 +4,7 @@ import { metaOauthStart } from '@/functions/metaOauthStart';
 import { metaBusinesses } from '@/functions/metaBusinesses';
 import { saveMetaConnection } from '@/functions/saveMetaConnection';
 import { registerMetaAdAccounts } from '@/functions/registerMetaAdAccounts';
-import { appParams } from '@/lib/app-params';
+import { resolveApiBaseUrl } from '@/lib/urls';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -47,10 +47,10 @@ export default function MetaConnectDialog({ open, onOpenChange, onConnected, inc
     setError(''); setOauthPending(true);
     try {
       const origin = window.location.origin;
-      const redirectUri = `${origin}/api/apps/${appParams.appId}/functions/metaOauthCallback`;
+      const redirectUri = `${resolveApiBaseUrl()}/functions/metaOauthCallback`;
       const res = await metaOauthStart({ origin, redirect_uri: redirectUri, include_lead_forms: includeLeadForms });
       const url = res?.data?.url;
-      if (!url) { setError('Could not start Facebook Login. Set the Meta App credentials in Settings > Data Sources.'); setOauthPending(false); return; }
+      if (!url) { setError('Could not start Facebook Login. Set the Meta App credentials in Settings > API Keys > System Keys.'); setOauthPending(false); return; }
       const w = 600, h = 760;
       const left = window.screenX + Math.max(0, (window.outerWidth - w) / 2);
       const top = window.screenY + Math.max(0, (window.outerHeight - h) / 2);

@@ -24,6 +24,7 @@ export const config = {
     : path.resolve(__dirname, '../uploads'),
 
   publicBaseUrl: process.env.PUBLIC_BASE_URL || '',
+  publicApiBaseUrl: process.env.PUBLIC_API_BASE_URL || '',
 
   db: {
     // Either a single DATABASE_URL or discrete PG* vars.

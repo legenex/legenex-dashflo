@@ -1,133 +1,178 @@
-# Base44 boundary and the connector context rule
+# DashFlo production and Base44 migration boundary
 
-Read this before concluding anything about Base44 availability.
+Read this before changing deployment, synchronization, export, API keys, or
+Base44 code. This file is the current migration handoff for future sessions.
 
-## The mistake this document exists to prevent
+## Authority and production architecture
 
-A previous agent session reported that the Base44 connector was unavailable,
-reasoning from the absence of `mcp__claude_ai_Base44__*` tools in its own tool
-list. That reasoning is wrong and it cost a cycle.
+DashFlo on the Hostinger VPS is the permanent application and source of truth.
+Base44 remains live only as a temporary source of durable records during the
+transition. Synchronization is one way: Base44 to DashFlo. There is no
+DashFlo-to-Base44 path and no normal DashFlo request depends on Base44.
 
-**The Base44 connection belongs to the spawned Claude process context, not to
-the parent agent's context.** `sync/daily-update.mjs` shells out to separate
-`claude -p ...` processes, each launched with
-`--allowedTools ToolSearch mcp__claude_ai_Base44__query_entities Write Read Bash`.
-Those child processes carry the connector. The parent orchestrating agent does
-not need it and generally will not see it.
+Production endpoints:
 
-**The parent agent tool list is not authoritative evidence about that
-connection.** Absence of the tool in the parent context says nothing about
-whether the refresh can reach Base44. The authoritative evidence is the refresh
-log at `sync/state/daily-update.log` and the exported files under
-`sync/state/import-export/`.
+- Marketing: `https://dashflo.io` and `https://www.dashflo.io`
+- Application: `https://app.dashflo.io`
+- Supplier API: `https://api.dashflo.io`
+- Documentation: `https://docs.dashflo.io`
+- VPS: `2.24.130.44`
+- Internal application listener: `127.0.0.1:4000`
 
-Do not report Base44 as unavailable. Do not ask whether it is connected. If a
-pull genuinely fails, the failure appears in the log as
-`[groupN] FAILED after Ns: ...` and that is what to report.
+The VPS checkout is `/opt/apps/dashflo`. Docker Compose runs `dashflo-app` and
+PostgreSQL 16 (`dashflo-db`, database `dashflo_staging`). Nginx terminates TLS
+and proxies public traffic to the loopback application port. The repository
+template for the API host is `deploy/nginx/api.dashflo.io.conf`.
 
-## Two different things that must never be confused
+`PUBLIC_BASE_URL=https://app.dashflo.io` is the final application origin.
+`PUBLIC_API_BASE_URL=https://api.dashflo.io` is the authoritative external API
+origin. The latter is returned by `/api/auth/public-settings`, so endpoint,
+copy, cURL, posting specifications, OAuth callbacks, and public docs use one
+runtime value. Local development falls back to the browser origin or
+`http://localhost:4000`.
 
-### 1. Data only refresh, permitted
+Production deploys, proxy edits, certificate issuance, live third-party calls,
+and production data writes require the approval recorded in
+`docs/HUMAN-GATES.md`. Preparing code and read-only inspection do not.
 
-`node sync/daily-update.mjs --no-code`
+## Temporary synchronization
 
-Reads all 90 entities from the connected Base44 application, applies the
-collapse safety gate, and refreshes the DashFlo mirror database. It is the
-supported migration path for recovering the old MVP data.
+The deterministic entry point is `scripts/base44-sync.mjs`. It talks only to
+the read-only Base44 `migrateSource` function through HTTPS. Configuration:
 
-The `--no-code` flag is what keeps it data only. The log line
-`[code] skipped (--no-code)` is the proof that the code stage did not run, and
-it must be present in every run from here on.
+- `BASE44_APP_ID`
+- `BASE44_MIGRATE_SECRET`
+- optional `BASE44_BASE_URL`
+- `BASE44_SYNC_ENABLED=1` to allow scheduled runs
+- optional timeout and retry settings documented in `server/.env.example`
 
-### 2. Legacy automatic code sync, prohibited
+There is no default secret. Base44 also has no literal fallback secret: its
+`MIGRATE_SOURCE_SECRET` deployment secret must match. Missing configuration
+fails closed. No secret value is logged.
 
-`node sync/sync.mjs`, and `daily-update.mjs` without `--no-code`, which calls
-`sync.mjs --force`.
+The target schedule is UTC at 00:00, 06:00, 12:00, and 18:00. The user-cron
+template is `deploy/cron/base44-sync.cron`. It executes the same
+`Base44Sync.run()` used by the owner-only manual control in Settings, API Keys,
+System Keys. PostgreSQL advisory lock `4471001` prevents overlap between manual
+and scheduled runs. The cron `flock` is a second host-level guard.
 
-This pulls Base44 application code into DashFlo and rewrites files under
-`server/src/functions/`. It must not run. DashFlo is a standalone product and
-its code lives in GitHub, not in Base44.
+First sync is a paged full import. Later clean runs query records whose
+`updated_date` is at or beyond the durable per-entity watermark. The inclusive
+cursor deliberately re-reads the boundary; fingerprints make that idempotent
+and prevent records with equal timestamps from being skipped. If an entity has
+no reliable source delta, the full idempotent path remains available. A partial
+entity pass does not advance its watermark.
 
-Never run:
+Tables created by `server/src/db/base44SyncSchema.js`:
 
-- `node sync/sync.mjs` in any form
-- `node sync/daily-update.mjs` without `--no-code`
-- `scripts/install-scheduler.sh`, which reinstalls both writers
+- `base44_sync_runs`: durable run result and totals
+- `base44_sync_run_entities`: per-entity outcome and cursor
+- `base44_sync_state`: last attempt, last success, watermark, failures
+- `base44_record_provenance`: Base44 ID, DashFlo ID, source timestamp,
+  fingerprint, local ownership, and conflict state
 
-`scripts/uninstall-scheduler.sh` is also forbidden, for a different reason: it
-stops the API server along with the sync jobs. Use
-`scripts/install-server-agent.sh` for the server only.
+Base44 IDs are preserved. Records are never deleted because they disappeared
+upstream. A pre-existing DashFlo row is adopted as DashFlo-owned and is never
+silently overwritten. A record changed locally after import becomes sticky.
+When both copies change it is reported as a conflict. Supplier, buyer, and
+system credential fields plus runtime usage counters are import-once and are
+never rewritten by later syncs. Runtime-owned counters and distribution audit
+entities are excluded. `User` is never imported because authentication remains
+DashFlo-owned. High-volume `MetaSyncRun` history is excluded from the repeating
+delta but can be named explicitly for a one-time import and reconciliation.
 
-## Service state
+Disable automatic sync after cutover by setting `BASE44_SYNC_ENABLED=0` and
+removing the cron entry. History and provenance remain in PostgreSQL.
 
-The automatic sync and updater services remain **disabled** and must stay that
-way.
+The old local `sync/daily-update.mjs --no-code` mirror refresh is not the VPS
+scheduler. Never run the legacy code pull (`sync/sync.mjs`) and never install
+the old LaunchAgent scheduler. Base44 application code is not synchronized.
 
-- `com.legenex.dashos.sync`: booted out and persistently disabled
-- `com.legenex.dashos.updater`: booted out and persistently disabled
-- `com.legenex.dashflo.server`: loaded, this is the API server and is wanted
+## Reconciliation
 
-The plists still exist, so anyone running `install-scheduler.sh` revives them.
-That is the residual risk and it is a human action, not an automatic one.
+Run:
 
-A data only refresh is started deliberately, by hand, with `--no-code`. It is
-not on a timer, and reviving the timer is what reintroduces the code sync.
-
-## The boundary that must hold
-
-Base44 is a read only reference for tracking the old MVP and recovering
-migration requirements. It must never become:
-
-- a DashFlo runtime dependency
-- a production host
-- an API fallback
-- a deployment target
-- a production URL
-
-Verified at commit `da555a8`: no Base44 SDK in any manifest, no runtime
-endpoint, no fetch. The `base44` strings in the client bundle are all inside
-`client/src/lib/progress/backendSummary.json`, a stored snapshot of MVP function
-paths used for read only porting progress.
-
-GitHub is the source control remote for the standalone application:
-`https://github.com/legenex/legenex-dashflo`. Base44 supplies data during
-migration. The two never swap roles.
-
-## What a refresh may and may not touch
-
-May:
-
-1. Read all 90 entities from the connected Base44 application.
-2. Apply the collapse protection before importing.
-3. Refresh the DashFlo mirror database.
-4. Run the documented health and integrity checks.
-
-May not:
-
-5. Change the DashFlo working tree, build, service or Git branch.
-
-The refresh writes only to `sync/state/import-export/`, `sync/state/*.log`,
-`sync/state/last-data-refresh.json` and the database. If `git status` shows an
-application file changed after a refresh, something ran that should not have.
-
-## Known gap in the refresh pipeline
-
-`sync/import-data.mjs --truncate` issues `DELETE FROM <table>` on every target
-table before reimporting, and **the pipeline takes no database backup**. The
-directories under `sync/state/backups/` are code file backups written by the
-legacy sync engine, not database dumps.
-
-The only protection today is the collapse gate in `daily-update.mjs`,
-`MIN_TOTAL_RATIO = 0.9`, which aborts the import when the exported record total
-falls below 90 percent of the previous run. That catches a wholesale collapse.
-It does not catch a single entity silently returning a partial page while the
-total stays within 10 percent.
-
-Take a dump before any refresh until this is fixed:
-
-```
-pg_dump -h 127.0.0.1 -p 5433 -d dashos -Fc -f <path>/dashos-pre-refresh-<date>.dump
+```text
+node scripts/base44-sync.mjs reconcile --json
 ```
 
-Verify it restores into a disposable database before relying on it. A backup
-that has never been restored is a guess.
+or use the owner-only Reconcile button in Settings. The report compares counts,
+IDs present on only one side, source timestamps newer than provenance, conflict
+flags, allowlisted important fields, relationships, and lead status counts.
+Samples are bounded and credential fields, raw connector blobs, and cleartext
+keys are never included. Count equality alone is not treated as proof.
+
+## API keys and Meta credentials
+
+Settings is named API Keys and has three categories:
+
+1. System Keys: owner-only platform credentials
+2. Supplier Keys: operational `X-API-KEY` credentials tied to suppliers
+3. Buyer Keys: optional credentials tied to buyers
+
+Supplier authentication remains `X-API-KEY: <supplier-key>`. HTTP Basic may
+remain as a compatibility path where the intake handler supports it. Supplier
+gateway keys are not LeadByte `X_KEY` credentials. Imported raw supplier values
+are used once to derive the DashFlo hash without changing the operational key.
+Later syncs cannot replace key material or usage counters.
+
+Meta App ID is `SystemKey.client_id`; Meta App Secret is `SystemKey.secret` on
+the active Meta provider row. SystemKey is the only writable authoritative
+location. Existing `IntegrationConfig(name=meta_app)` and environment values
+are read-only compatibility fallbacks until migration completes. The Data
+Sources screen shows connection, accounts, mappings, last sync, result, and
+health, and points the owner to API Keys when credentials are missing.
+
+The generic entity route never exposes `SystemKey`, `BuyerApiKey`, or
+`KeyAuditEvent`. It strips supplier raw key/hash and the legacy
+`Buyer.buyer_api_key`. Credential mutations use reviewed backend functions and
+write audit events without credential values.
+
+## Base44 encrypted migration export
+
+Base44 has a separate owner-only `systemMigrationExport`. It is not the
+ordinary export. The ordinary export remains server-side redacted. The
+migration export encrypts each chunk before response with AES-256-GCM and a
+PBKDF2-SHA256 passphrase-derived key (600,000 iterations). It preserves IDs,
+relationships, timestamps, configuration, and durable history.
+
+The encrypted payload includes, where present: supplier cleartext API keys,
+SystemKey secret/client ID, BuyerApiKey key and legacy buyer key, Meta durable
+tokens, IntegrationConfig config, LeadByte connector headers/target, pull
+source credentials, API connector tokens/headers/target, webhook credentials,
+inbound token hashes, LeadSource webhook keys, SubDelivery URLs, and BotConfig
+keys. Secret-bearing chunks create KeyAuditEvent records.
+
+It drops `meta_oauth_state` records plus user password/hash/session/refresh
+fields and invitation tokens. It does not carry cookies, CSRF state, login
+state, or other ephemeral authentication material. No actual credential belongs
+in this repository or in a migration report.
+
+## Controlled cutover
+
+Do not perform cutover automatically.
+
+1. Deploy and enable the six-hour Base44-to-DashFlo sync.
+2. Validate DNS, TLS, reverse proxy, and the public API hostname.
+3. Produce and securely store the owner encrypted migration export.
+4. Reconcile IDs, relationships, statuses, important fields, and secrets.
+5. Run a controlled test lead with `lead_route=test` so no buyer delivery fires.
+6. Freeze relevant Base44 writes at the agreed time.
+7. Run one final manual delta and reconcile again.
+8. Confirm supplier and buyer key values were not changed.
+9. Move supplier traffic to `https://api.dashflo.io/functions/leads`.
+10. Verify valid and invalid authentication, persistence, attribution, usage,
+    and safe logs through the public hostname.
+11. Disable the timer, retain history, and keep Base44 read-only for reference.
+
+## Current deployment gaps
+
+As observed on 16 August 2026, `app.dashflo.io` does not yet have DNS. Add an A
+record for `app.dashflo.io` pointing to `2.24.130.44`, then issue its certificate
+and activate `deploy/nginx/app.dashflo.io.conf`. Keep `PUBLIC_BASE_URL` on the
+currently proven application origin until that succeeds; include both origins
+in `ALLOWED_ORIGINS` during the transition. Host-only sessions do not transfer
+between the apex and app host, so operators should expect to sign in once on
+the new host. The API and app nginx/certificate work requires scoped sudo,
+which was unavailable to the deployment user at the last check. Do not mark a
+hostname READY until DNS, hostname-valid TLS, proxy health and login pass there.

@@ -10,7 +10,7 @@ import LeadSourcesPanel from '@/components/settings/LeadSourcesPanel';
 import GoogleSheetsPanel from '@/components/settings/GoogleSheetsPanel';
 import SettingsSuppliers from '@/components/settings/SettingsSuppliers';
 import SettingsInboundWebhooks from '@/components/settings/SettingsInboundWebhooks';
-import MetaAppCredentialsCard from '@/components/settings/MetaAppCredentialsCard';
+import MetaOperationalStatus from '@/components/settings/MetaOperationalStatus';
 
 // Data Sources is a dashboard of source types. Each tile opens the surface for
 // that type rather than stacking every panel on one scroll, which is how this
@@ -52,7 +52,7 @@ function SourceTile({ icon: Icon, title, description, stats = [], status = 'ok',
 }
 
 const VIEWS = {
-  meta: { title: 'Meta (Facebook)', subtitle: 'App credentials for the Meta Ads connector.' },
+  meta: { title: 'Meta (Facebook)', subtitle: 'Connection health, accounts, mappings and synchronization.' },
   sheets: { title: 'Google Sheets', subtitle: 'Connected spreadsheets and what each one is for.' },
   csv: { title: 'CSV and Excel Import', subtitle: 'One-off uploads, repair and duplicate scanning.' },
   calls: { title: 'Call Platforms', subtitle: 'Ringba and TrueCall inbound call webhooks.' },
@@ -112,7 +112,7 @@ export default function SettingsDataSources() {
           <p className="text-[13px] text-muted-foreground mt-0.5">{meta.subtitle}</p>
         </div>
 
-        {view === 'meta' && <MetaAppCredentialsCard />}
+        {view === 'meta' && <MetaOperationalStatus />}
         {view === 'sheets' && <GoogleSheetsPanel />}
         {view === 'csv' && (
           <div className="space-y-6">
@@ -138,7 +138,7 @@ export default function SettingsDataSources() {
         <SourceTile
           icon={Facebook}
           title="Meta (Facebook)"
-          description="App credentials for the Meta Ads connector, used for ad spend and lead forms."
+          description="Connection health, ad accounts, lead form mappings and synchronization status."
           status={metaConnected ? 'ok' : 'attention'}
           stats={[
             { label: 'Ad accounts', value: metaStatus?.connections?.length || 0 },

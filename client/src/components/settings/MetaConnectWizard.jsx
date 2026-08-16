@@ -7,7 +7,7 @@ import { linkAdAccountToSupplier } from '@/functions/linkAdAccountToSupplier';
 import { syncMetaSpend } from '@/functions/syncMetaSpend';
 import { metaOauthStart } from '@/functions/metaOauthStart';
 import { metaConnectionStatus } from '@/functions/metaConnectionStatus';
-import { appParams } from '@/lib/app-params';
+import { resolveApiBaseUrl } from '@/lib/urls';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -85,7 +85,7 @@ export default function MetaConnectWizard({ open, onOpenChange, supplier = null,
       // Pass the current host's origin and callback URL so the redirect and the
       // popup message land on whatever domain the app is running on.
       const origin = window.location.origin;
-      const redirectUri = `${origin}/api/apps/${appParams.appId}/functions/metaOauthCallback`;
+      const redirectUri = `${resolveApiBaseUrl()}/functions/metaOauthCallback`;
       const res = await metaOauthStart({ origin, redirect_uri: redirectUri });
       const url = res?.data?.url;
       if (!url) { setError('Could not start Facebook Login. Check that META_APP_ID is configured.'); setOauthPending(false); return; }

@@ -13,6 +13,7 @@ const GOOD_SECRET = 'k7Qw2sVb9YtR4mLp8ZnA6xCd3FgH1jKe';
 const prodConfig = (over = {}) => ({
   env: 'production',
   publicBaseUrl: 'https://dash.example.com',
+  publicApiBaseUrl: 'https://api.dash.example.com',
   auth: { jwtSecret: GOOD_SECRET, cookieName: 'dashos_token' },
   db: { connectionString: 'postgres://u:p@db/app' },
   ...over,
@@ -72,6 +73,16 @@ describe('production requires its own origin and a real database', () => {
     expect(problems.join(' ')).toMatch(/must be an https URL/);
   });
 
+  it('requires a dedicated public API origin', () => {
+    const problems = collectStartupProblems(prodConfig({ publicApiBaseUrl: '' }), prodEnv);
+    expect(problems.join(' ')).toMatch(/PUBLIC_API_BASE_URL is not set/);
+  });
+
+  it('refuses a plaintext public API origin', () => {
+    const problems = collectStartupProblems(prodConfig({ publicApiBaseUrl: 'http://api.dash.example.com' }), prodEnv);
+    expect(problems.join(' ')).toMatch(/PUBLIC_API_BASE_URL must be an https URL/);
+  });
+
   // Running the local checkout in production-like mode is how the operator
   // proves a build before it is deployed, and there is no certificate for
   // localhost. Loopback over plain http is exempt; nothing else is, so a real
@@ -89,8 +100,8 @@ describe('production requires its own origin and a real database', () => {
 
   it('still refuses plaintext for non-loopback hosts', () => {
     for (const url of [
-      'http://dashflo.co',
-      'http://api.dashflo.co',
+      'http://dashflo.io',
+      'http://api.dashflo.io',
       'http://192.168.1.10:4000',
       'http://localhost.attacker.example',
       'http://notlocalhost',
@@ -124,6 +135,7 @@ describe('assertStartupConfig', () => {
       assertStartupConfig({
         env: 'production',
         publicBaseUrl: '',
+        publicApiBaseUrl: '',
         auth: { jwtSecret: DEV_JWT_SECRET },
         db: {},
       }, {});

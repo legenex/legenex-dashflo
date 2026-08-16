@@ -2,7 +2,7 @@ import React, { useState, useRef } from 'react';
 import { Inbox, Copy, Check } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { PUBLIC_APPLICATION_URL } from '@/components/apply/applyConstants';
+import { publicApplicationUrl } from '@/components/apply/applyConstants';
 
 // Shown when there are no onboarding records. Explains where submissions come
 // from and offers a copyable link to the public application form.
@@ -10,9 +10,7 @@ export default function OnboardingEmptyState() {
   const [copied, setCopied] = useState(false);
   const inputRef = useRef(null);
 
-  // Canonical production application URL. Uses the shared constant rather than
-  // the runtime origin, so the shared link is correct even inside the preview.
-  const applyUrl = PUBLIC_APPLICATION_URL;
+  const applyUrl = publicApplicationUrl();
 
   const handleCopy = async () => {
     try {

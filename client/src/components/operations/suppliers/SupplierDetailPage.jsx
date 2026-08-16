@@ -52,7 +52,7 @@ export default function SupplierDetailPage({ supplier, onBack, initialTab }) {
   const { data: appSettingsArr = [] } = useQuery({ queryKey: ['app-settings'], queryFn: () => api.entities.AppSettings.list() });
 
   const apiKey = apiKeys.find((k) => k.supplier_id === supplier.id || k.supplier_name === supplier.name);
-  const baseUrl = resolveApiBaseUrl(appSettingsArr[0]?.public_base_url);
+  const baseUrl = resolveApiBaseUrl(appSettingsArr[0]?.public_api_base_url || appSettingsArr[0]?.public_base_url);
 
   return (
     <div className="flex flex-col gap-4">

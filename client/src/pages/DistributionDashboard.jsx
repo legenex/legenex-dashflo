@@ -120,7 +120,7 @@ export default function DistributionDashboard() {
   const { data: metaCfg } = useQuery({ queryKey: ['meta-config'], queryFn: async () => (await api.entities.IntegrationConfig.filter({ name: 'meta' }))[0] || null });
   const { data: intStatus } = useQuery({ queryKey: ['integration-status'], queryFn: async () => (await integrationStatus({}))?.data?.status || {} });
 
-  const publicBaseUrl = resolveApiBaseUrl(appSettingsArr[0]?.public_base_url);
+  const publicBaseUrl = resolveApiBaseUrl(appSettingsArr[0]?.public_api_base_url || appSettingsArr[0]?.public_base_url);
   const endpointUrl = `${publicBaseUrl}/functions/leads`;
 
   const m = useMemo(() => operationalMetrics(leads, errors, win), [leads, errors, win]);

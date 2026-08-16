@@ -58,6 +58,7 @@ router.get('/public-settings', async (_req, res) => {
     public_settings: {
       name: settings.company_name || 'DashOS',
       public_base_url: settings.public_base_url || config.publicBaseUrl || '',
+      public_api_base_url: settings.public_api_base_url || config.publicApiBaseUrl || config.publicBaseUrl || '',
       // Closed unless an operator has explicitly opened it. This used to
       // default to open, and the register route did not enforce it either way,
       // so every visitor could create a privileged account.

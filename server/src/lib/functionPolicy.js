@@ -39,6 +39,10 @@ export const PUBLIC_FUNCTIONS = {
   getOnboardingContext: { reason: 'public onboarding form context', authenticatedBy: 'onboarding link token' },
   submitBuyerOnboarding: { reason: 'public onboarding form submission', authenticatedBy: 'onboarding link token' },
 
+  // Browser redirect from Meta. It consumes the single-use state created by
+  // an authenticated operator before performing any write.
+  metaOauthCallback: { reason: 'Meta OAuth browser callback', authenticatedBy: 'single-use OAuth state' },
+
   // Read-only migration mirror. Guarded by its own environment secret, which
   // fails closed when unset.
   migrateSource: { reason: 'migration mirror', authenticatedBy: 'MIGRATE_SOURCE_SECRET, fails closed' },

@@ -26,17 +26,21 @@ vi.mock('../src/lib/serverClient.js', () => ({ createServerClient: () => ({ enti
 
 let server;
 let baseUrl;
+let publicBaseUrl;
 let currentUser = null;
 
 beforeAll(async () => {
   const { default: functionRoutes } = await import('../src/routes/functions.js');
+  const { default: publicFunctionRoutes } = await import('../src/routes/publicFunctions.js');
   const app = express();
   app.use(express.json());
   app.use((req, _res, next) => { req.user = currentUser; next(); });
   app.use('/api/functions', functionRoutes);
+  app.use('/functions', publicFunctionRoutes);
   server = http.createServer(app);
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   baseUrl = `http://127.0.0.1:${server.address().port}/api/functions`;
+  publicBaseUrl = `http://127.0.0.1:${server.address().port}/functions`;
 });
 
 afterAll(async () => {
@@ -122,12 +126,31 @@ describe('public allowlist', () => {
       'health',
       'leadbyteWebhook',
       'leads',
+      'metaOauthCallback',
       'migrateSource',
       'spec',
       'submitBuyerOnboarding',
       'validate',
       'webhook',
     ]);
+  });
+
+  it('mounts only reviewed public handlers on the production /functions path', async () => {
+    currentUser = null;
+    const leads = await fetch(`${publicBaseUrl}/leads`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}',
+    });
+    const operator = await fetch(`${publicBaseUrl}/operatorData`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}',
+    });
+    expect(leads.status).toBe(200);
+    expect(operator.status).toBe(404);
+  });
+
+  it('serves the Meta callback by GET and refuses misleading GETs for lead intake', async () => {
+    currentUser = null;
+    expect((await fetch(`${publicBaseUrl}/metaOauthCallback?state=test`)).status).toBe(200);
+    expect((await fetch(`${publicBaseUrl}/leads`)).status).toBe(405);
   });
 
   it('documents a reason and an authenticator for every public function', () => {

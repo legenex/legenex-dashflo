@@ -32,7 +32,7 @@ export default function CallSourceDialog({ open, onOpenChange, source, provider,
   const { data: campaigns = [] } = useQuery({ queryKey: ['campaigns'], queryFn: () => api.entities.Campaign.list('-created_date', 200) });
   const { data: appSettingsArr = [] } = useQuery({ queryKey: ['app-settings'], queryFn: () => api.entities.AppSettings.list() });
 
-  const baseUrl = resolveApiBaseUrl(appSettingsArr[0]?.public_base_url);
+  const baseUrl = resolveApiBaseUrl(appSettingsArr[0]?.public_api_base_url || appSettingsArr[0]?.public_base_url);
 
   useEffect(() => {
     if (open) {

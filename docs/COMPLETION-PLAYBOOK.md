@@ -48,7 +48,7 @@ Open a fresh Claude Code session in the same folder and paste:
 > ready task without repeating completed work. If red, repair the regression
 > first and record what regressed. DashFlo is separate from Base44; Base44 is a
 > read-only MVP tracking and migration source only. Localhost is authoritative,
-> `dashflo.co` hosts are future configuration targets, and the design is frozen.
+> `dashflo.io` hosts are the production configuration targets, and the design is frozen.
 > All writes stay in this folder, reviewers are read-only. Commit and push green
 > checkpoints to the existing feature branch only. Continue until a human gate
 > or a verified blocker.
@@ -108,8 +108,8 @@ proposal to modernize the interface.
 > dependency, and Base44-sourced code is never applied automatically. Localhost
 > is authoritative for current development: the application and API run at
 > `http://localhost:4000`, health at `/api/health`, optional Vite dev at
-> `http://localhost:5173`. Future configured hosts are `https://dashflo.co`,
-> `https://api.dashflo.co` and `https://progress.dashflo.co`. The
+> `http://localhost:5173`. Production hosts are `https://dashflo.io`,
+> `https://api.dashflo.io` and `https://docs.dashflo.io`. The
 > `legenex.com` hosts are inherited Base44-era fallbacks and are not DashFlo
 > URLs; a hardcoded host is never evidence of where this application is
 > deployed. Route every host through the environment-aware configuration

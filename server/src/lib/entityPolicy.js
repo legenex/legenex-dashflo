@@ -187,6 +187,7 @@ export const READ_DENY_FIELDS = {
   // is withheld too: it is offline-attackable credential material, and the
   // public posting spec derives its access token from it.
   ApiKey: ['key', 'key_hash'],
+  Buyer: ['buyer_api_key'],
   // The credential blob for an integration. Read it back through no route.
   // Writes go to the saveIntegrationConfig service function, which merges.
   IntegrationConfig: ['config'],
@@ -214,6 +215,7 @@ export const WRITE_DENY_FIELDS = {
   //   ApiKey.key / key_hash   -> issueApiKey
   //   IntegrationConfig.config -> saveIntegrationConfig
   ApiKey: ['key', 'key_hash'],
+  Buyer: ['buyer_api_key'],
   IntegrationConfig: ['config'],
 };
 

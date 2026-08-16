@@ -2,7 +2,6 @@ import React, { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { metaConnectionStatus } from '@/functions/metaConnectionStatus';
 import { saveMetaAppCredentials } from '@/functions/saveMetaAppCredentials';
-import { appParams } from '@/lib/app-params';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -10,11 +9,9 @@ import { Facebook, CheckCircle2, Copy, Loader2, ShieldCheck } from 'lucide-react
 import { toast } from 'sonner';
 import { resolveApiBaseUrl } from '@/lib/urls';
 
-// Admin-facing home for the Meta (Facebook) app credentials that power the
-// Meta Ads connector OAuth login. Lives under Settings > Data Sources so the
-// secret is not exposed on the connector card. The secret is stored server-side
-// in IntegrationConfig(meta_app); only the last 4 is ever read back.
-const FALLBACK_REDIRECT_URI = `${resolveApiBaseUrl()}/functions/metaOauthCallback`;
+// Owner-facing home for the Meta application credential that powers the Meta
+// Ads OAuth login. It lives under Settings > API Keys > System Keys and writes
+// only to the authoritative SystemKey record. Only the last 4 is read back.
 
 function RedirectRow({ uri }) {
   const copy = async () => {
@@ -41,8 +38,7 @@ export default function MetaAppCredentialsCard() {
   });
   const meta = data?.meta_app || { configured: false, app_id: '', secret_last4: '' };
 
-  const origin = typeof window !== 'undefined' ? window.location.origin : '';
-  const hostedRedirectUri = `${origin}/api/apps/${appParams.appId}/functions/metaOauthCallback`;
+  const hostedRedirectUri = `${resolveApiBaseUrl()}/functions/metaOauthCallback`;
 
   const save = async () => {
     if (!appId.trim() && !meta.configured) { toast.error('App ID is required'); return; }
@@ -85,7 +81,7 @@ export default function MetaAppCredentialsCard() {
             )}
           </div>
           <p className="text-[13px] text-muted-foreground mt-0.5">
-            The Facebook app used for the Meta Ads connector login. Stored server-side; only the last 4 of the secret is ever shown.
+            The Facebook app used for the Meta Ads connector login. This owner-only System Key is authoritative; only the last 4 of the secret is shown.
           </p>
 
           {meta.configured && (
@@ -122,11 +118,10 @@ export default function MetaAppCredentialsCard() {
               <ShieldCheck className="w-3.5 h-3.5 text-muted-foreground" /> Valid OAuth Redirect URIs
             </div>
             <p className="text-[12px] text-muted-foreground mt-1">
-              Add both of these in your Meta app under Facebook Login, then Settings, then Valid OAuth Redirect URIs. The connector uses the first; the second is a fallback.
+              Add this URI in your Meta app under Facebook Login, then Settings, then Valid OAuth Redirect URIs.
             </p>
             <div className="mt-2 space-y-2">
               <RedirectRow uri={hostedRedirectUri} />
-              <RedirectRow uri={FALLBACK_REDIRECT_URI} />
             </div>
           </div>
 
