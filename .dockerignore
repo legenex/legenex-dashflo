@@ -1,0 +1,11 @@
+.git
+.gitignore
+node_modules
+server/node_modules
+client/node_modules
+client/dist
+server/.env
+.env
+uploads
+*.log
+.DS_Store

@@ -1,0 +1,42 @@
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: dashflo_staging
+      POSTGRES_USER: dashflo
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - dashflo_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL","pg_isready -U dashflo -d dashflo_staging"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - server/.env
+    environment:
+      NODE_ENV: production
+      PORT: 4000
+      PGHOST: db
+      PGPORT: 5432
+      PGUSER: dashflo
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      PGDATABASE: dashflo_staging
+      PGSSL: "false"
+      UPLOAD_DIR: /app/server/uploads
+    ports:
+      - "127.0.0.1:4000:4000"
+    volumes:
+      - dashflo_uploads:/app/server/uploads
+
+volumes:
+  dashflo_pgdata:
+  dashflo_uploads:
