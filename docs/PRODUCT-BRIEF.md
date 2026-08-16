@@ -1,6 +1,6 @@
 # DashFlo product brief from Bru
 
-Consolidated from the completed planning answers supplied on 15 August 2026. `REQUIREMENTS.md` turns these answers into delivery constraints. If the two files appear to conflict, stop only the affected decision and record it for the next human gate.
+Consolidated from the completed planning answers supplied on 15 August 2026. `docs/REQUIREMENTS.md` turns these answers into delivery constraints. If the two files appear to conflict, stop only the affected decision and record it for the next human gate.
 
 ## Product and deadline
 

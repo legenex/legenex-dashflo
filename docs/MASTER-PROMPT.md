@@ -10,7 +10,7 @@ Read these files in full before acting:
 4. `docs/EXECUTION-PLAN.md`
 5. `docs/HUMAN-GATES.md`
 6. `docs/STATE.md`
-7. `REPO-AUDIT-2026-08-15.md`
+7. `docs/REPO-AUDIT-2026-08-15.md`
 
 Then inspect the current repository. The audit is evidence from commit `a63144cb0e1a2c000e873e94e5091565f6bbb1c6`, not a substitute for checking the current commit. If the repository has moved, produce a delta audit before editing.
 
