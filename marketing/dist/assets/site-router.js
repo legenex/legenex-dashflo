@@ -1,6 +1,46 @@
 const LEGAL_UPDATED = 'August 17, 2026';
-const CONTACT = 'info@next-consulting.co';
+
+// Legal and privacy correspondence. Used throughout the policy documents and on
+// the legal contact panels.
+const CONTACT = 'info@dashflo.io';
+
+// General support address shown publicly in the footer and on the contact page.
+// This is a display address only. It is not assumed to be able to send mail, and
+// it is never used as an SMTP sender.
+const SUPPORT = 'support@dashflo.io';
+
+// Where the application lives. The marketing site never authenticates a visitor
+// itself; it only asks the application whether a session already exists.
+const APP_ORIGIN = 'https://app.dashflo.io';
+const APP_LOGIN = `${APP_ORIGIN}/login`;
+const APP_REGISTER = `${APP_ORIGIN}/register`;
+
 const LEGAL_PATHS = new Set(['/privacy', '/terms', '/cookies', '/privacy-choices', '/health-privacy']);
+const CONTACT_PATH = '/contact';
+
+// True on the production hostnames only. Anywhere else (a local checkout
+// serving this bundle) the application endpoints are same-origin, so both the
+// contact form and the session probe can be exercised without editing this
+// file. The call-to-action links themselves always point at the real
+// application, because that is where the product lives regardless of where this
+// page is being served from.
+const IS_PRODUCTION_HOST = /(^|\.)dashflo\.io$/i.test(location.hostname);
+
+const CONTACT_ENDPOINT = IS_PRODUCTION_HOST ? 'https://api.dashflo.io/api/contact' : '/api/contact';
+const SESSION_ENDPOINT = IS_PRODUCTION_HOST ? `${APP_ORIGIN}/api/auth/session-status` : '/api/auth/session-status';
+
+// Kept in step with the server. The server revalidates every one of these; the
+// client copy exists to give immediate feedback, not to be trusted.
+const FIELD_LIMITS = { name: 120, email: 254, company: 160, subject: 200, message: 5000 };
+
+const CONTACT_TOPICS = [
+  ['sales', 'Sales'],
+  ['account', 'Account Support'],
+  ['technical', 'Technical Support'],
+  ['billing', 'Billing'],
+  ['privacy', 'Privacy'],
+  ['other', 'Other'],
+];
 
 const pages = {
   '/privacy': {
@@ -335,15 +375,18 @@ function themeButton(theme = document.documentElement.dataset.theme || 'dark') {
   return `<button class="theme-toggle" type="button" aria-label="Switch color theme" aria-pressed="${theme === 'dark'}"><span aria-hidden="true">☀</span><span aria-hidden="true">☾</span><span class="toggle-knob ${theme === 'dark' ? 'dark' : ''}"></span></button>`;
 }
 
+// The public footer is branded as DashFlo and carries the support address. The
+// operating company is named inside the legal documents, where identifying the
+// contracting party is the point, rather than on every marketing page.
 function footerMarkup() {
   return `
     <div class="container footer-grid">
-      <div class="footer-brand">${brand()}<p class="legal-identity">DashFlo is operated by Next Consulting LLC. Lead operations, distribution, reporting, and financial visibility in one platform.</p><a href="mailto:${CONTACT}">${CONTACT}</a></div>
-      <div class="footer-col"><b>PRODUCT</b><a href="https://app.dashflo.io">Login</a><a href="https://docs.dashflo.io">Documentation</a></div>
+      <div class="footer-brand">${brand()}<p class="legal-identity">Lead operations, distribution, reporting, and financial visibility in one platform.</p><a href="mailto:${SUPPORT}">${SUPPORT}</a></div>
+      <div class="footer-col"><b>PRODUCT</b><a href="${APP_LOGIN}">Login</a><a href="https://docs.dashflo.io">Documentation</a><a href="/contact">Contact / Support</a></div>
       <div class="footer-col"><b>LEGAL</b><a href="/privacy">Privacy Policy</a><a href="/terms">Terms of Service</a><a href="/cookies">Cookie Policy</a><a href="/privacy-choices">Privacy Choices</a></div>
-      <div class="footer-col"><b>HEALTH PRIVACY</b><a href="/health-privacy">Consumer Health Data Privacy Policy</a><a href="mailto:${CONTACT}?subject=Consumer%20Health%20Data%20Request">Health Data Request</a></div>
+      <div class="footer-col"><b>HEALTH PRIVACY</b><a href="/health-privacy">Consumer Health Data Privacy Policy</a><a href="/contact?topic=privacy">Health Data Request</a></div>
     </div>
-    <div class="container footer-bottom"><span>© ${new Date().getFullYear()} Next Consulting LLC dba DashFlo. All rights reserved.</span><span>From ad spend to cash.</span></div>`;
+    <div class="container footer-bottom"><span>© ${new Date().getFullYear()} DashFlo. All rights reserved.</span><span>From ad spend to cash.</span></div>`;
 }
 
 function setTheme(theme) {
@@ -368,10 +411,13 @@ function installTheme() {
 
 function setMeta(path, page) {
   const canonical = `https://dashflo.io${path}`;
-  document.title = `${page.title} | DashFlo`;
+  // Most pages read as "Privacy Policy | DashFlo". A page whose own name
+  // already carries the brand sets its title outright instead of repeating it.
+  const title = page.documentTitle || `${page.title} | DashFlo`;
+  document.title = title;
   document.querySelector('meta[name="description"]')?.setAttribute('content', page.description);
   document.querySelector('link[rel="canonical"]')?.setAttribute('href', canonical);
-  document.querySelector('meta[property="og:title"]')?.setAttribute('content', `${page.title} | DashFlo`);
+  document.querySelector('meta[property="og:title"]')?.setAttribute('content', title);
   document.querySelector('meta[property="og:description"]')?.setAttribute('content', page.description);
   document.querySelector('meta[property="og:url"]')?.setAttribute('content', canonical);
   let robots = document.querySelector('meta[name="robots"]');
@@ -400,19 +446,345 @@ function renderLegal(path) {
   installTheme();
 }
 
-function patchHomepage() {
+const escapeHtml = (value) => String(value).replace(/[&<>"']/g, (c) => (
+  { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+));
+
+function contactField({ id, label, type = 'text', required = false, hint = '', maxLength }) {
+  const describedBy = hint ? ` aria-describedby="${id}-hint"` : '';
+  const control = type === 'textarea'
+    ? `<textarea id="${id}" name="${id}" rows="7" maxlength="${maxLength}"${required ? ' required' : ''}${describedBy}></textarea>`
+    : `<input id="${id}" name="${id}" type="${type}" maxlength="${maxLength}"${required ? ' required' : ''}${describedBy} autocomplete="${id === 'email' ? 'email' : id === 'name' ? 'name' : id === 'company' ? 'organization' : 'off'}" />`;
+  return `
+    <p class="contact-field">
+      <label for="${id}">${label}${required ? '' : ' <span class="optional">(optional)</span>'}</label>
+      ${control}
+      ${hint ? `<small class="contact-hint" id="${id}-hint">${hint}</small>` : ''}
+      <small class="contact-error" data-error-for="${id}" hidden></small>
+    </p>`;
+}
+
+function contactFormMarkup(topic) {
+  const options = CONTACT_TOPICS
+    .map(([value, label]) => `<option value="${value}"${value === topic ? ' selected' : ''}>${label}</option>`)
+    .join('');
+  return `
+    <form class="contact-form" novalidate>
+      <div class="contact-row">
+        ${contactField({ id: 'name', label: 'Name', required: true, maxLength: FIELD_LIMITS.name })}
+        ${contactField({ id: 'email', label: 'Email', type: 'email', required: true, maxLength: FIELD_LIMITS.email })}
+      </div>
+      <div class="contact-row">
+        ${contactField({ id: 'company', label: 'Company', maxLength: FIELD_LIMITS.company })}
+        <p class="contact-field">
+          <label for="topic">Topic</label>
+          <select id="topic" name="topic">${options}</select>
+        </p>
+      </div>
+      ${contactField({ id: 'subject', label: 'Subject', required: true, maxLength: FIELD_LIMITS.subject })}
+      ${contactField({ id: 'message', label: 'Message', type: 'textarea', required: true, maxLength: FIELD_LIMITS.message, hint: `Up to ${FIELD_LIMITS.message.toLocaleString('en-US')} characters.` })}
+      <p class="contact-trap" aria-hidden="true">
+        <label for="website">Website</label>
+        <input id="website" name="website" type="text" tabindex="-1" autocomplete="off" />
+      </p>
+      <div class="contact-submit">
+        <button type="submit" class="contact-send">Send message</button>
+        <p class="contact-status" role="status" aria-live="polite"></p>
+      </div>
+    </form>`;
+}
+
+// Client-side validation mirrors the server so a visitor is told what is wrong
+// before a round trip. The server repeats all of it.
+function validateContactForm(values) {
+  const errors = {};
+  if (!values.name) errors.name = 'Enter your name.';
+  else if (values.name.length > FIELD_LIMITS.name) errors.name = 'Name is too long.';
+
+  if (!values.email) errors.email = 'Enter your email address.';
+  else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(values.email)) errors.email = 'Enter a valid email address.';
+  else if (values.email.length > FIELD_LIMITS.email) errors.email = 'Email address is too long.';
+
+  if (values.company && values.company.length > FIELD_LIMITS.company) errors.company = 'Company name is too long.';
+
+  if (!values.subject) errors.subject = 'Enter a subject.';
+  else if (values.subject.length > FIELD_LIMITS.subject) errors.subject = 'Subject is too long.';
+
+  if (!values.message) errors.message = 'Enter a message.';
+  else if (values.message.length > FIELD_LIMITS.message) errors.message = 'Message is too long.';
+
+  return errors;
+}
+
+function installContactForm() {
+  const form = document.querySelector('.contact-form');
+  if (!form) return;
+  const status = form.querySelector('.contact-status');
+  const button = form.querySelector('.contact-send');
+  const openedAt = Date.now();
+
+  const showErrors = (errors) => {
+    for (const node of form.querySelectorAll('[data-error-for]')) {
+      const field = node.dataset.errorFor;
+      const message = errors[field];
+      node.textContent = message || '';
+      node.hidden = !message;
+      const control = form.querySelector(`#${field}`);
+      if (control) {
+        control.setAttribute('aria-invalid', message ? 'true' : 'false');
+        control.classList.toggle('is-invalid', Boolean(message));
+      }
+    }
+    const first = Object.keys(errors)[0];
+    if (first) form.querySelector(`#${first}`)?.focus();
+  };
+
+  const setStatus = (text, kind) => {
+    status.textContent = text;
+    status.dataset.kind = kind || '';
+  };
+
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const values = {
+      name: form.name.value.trim(),
+      email: form.email.value.trim(),
+      company: form.company.value.trim(),
+      topic: form.topic.value,
+      subject: form.subject.value.trim(),
+      message: form.message.value.trim(),
+      website: form.website.value,
+      elapsedMs: Date.now() - openedAt,
+    };
+
+    const errors = validateContactForm(values);
+    if (Object.keys(errors).length > 0) {
+      showErrors(errors);
+      setStatus('Check the highlighted fields and try again.', 'error');
+      return;
+    }
+    showErrors({});
+
+    button.disabled = true;
+    form.classList.add('is-sending');
+    setStatus('Sending your message...', 'pending');
+
+    try {
+      const res = await fetch(CONTACT_ENDPOINT, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        // No cookie is attached. This endpoint is anonymous by design.
+        credentials: 'omit',
+        body: JSON.stringify(values),
+      });
+      const body = await res.json().catch(() => ({}));
+
+      if (res.ok && body?.success) {
+        form.classList.remove('is-sending');
+        form.classList.add('is-sent');
+        form.innerHTML = `
+          <div class="contact-success" role="status">
+            <strong>Message sent</strong>
+            <p>Thanks for getting in touch. Our team will reply to the address you provided.</p>
+          </div>`;
+        return;
+      }
+
+      if (res.status === 429) {
+        setStatus('Too many messages from this connection. Please wait a few minutes and try again.', 'error');
+      } else if (body?.fields) {
+        showErrors(body.fields);
+        setStatus('Check the highlighted fields and try again.', 'error');
+      } else {
+        setStatus(`We could not send that message. Please email ${SUPPORT} directly.`, 'error');
+      }
+    } catch {
+      setStatus(`We could not reach the server. Please email ${SUPPORT} directly.`, 'error');
+    } finally {
+      button.disabled = false;
+      form.classList.remove('is-sending');
+    }
+  });
+}
+
+function renderContact() {
+  const topicParam = new URLSearchParams(location.search).get('topic');
+  const topic = CONTACT_TOPICS.some(([value]) => value === topicParam) ? topicParam : 'sales';
+
+  document.body.className = 'legal-body';
+  setMeta(CONTACT_PATH, {
+    title: 'Contact DashFlo',
+    documentTitle: 'Contact DashFlo',
+    description: 'Contact the DashFlo team about product, account, sales, billing, technical, or privacy questions.',
+  });
+
+  document.getElementById('root').innerHTML = `
+    <a class="skip-link" href="#contact-content">Skip to contact form</a>
+    <header class="site-header is-compact"><div class="header-inner">${brand()}<nav aria-label="Primary"><a href="/privacy">Privacy</a><a href="/terms">Terms</a><a href="https://docs.dashflo.io">Docs</a><a class="sign-in" href="${APP_LOGIN}">Login</a></nav><div class="header-actions">${themeButton()}</div></div></header>
+    <main id="contact-content" class="legal-shell">
+      <div class="legal-hero"><div class="container"><span class="legal-eyebrow">CONTACT / DASHFLO</span><h1>Contact DashFlo</h1><p class="legal-summary">Reach the team about product, account, sales, billing, technical, or privacy questions. Tell us what you need and we will route it to the right people.</p></div></div>
+      <div class="container contact-layout">
+        <div class="contact-panel">${contactFormMarkup(topic)}</div>
+        <aside class="contact-aside" aria-label="Other ways to reach us">
+          <div class="contact-card">
+            <strong>Support</strong>
+            <p>General product and account questions.</p>
+            <a href="mailto:${escapeHtml(SUPPORT)}">${escapeHtml(SUPPORT)}</a>
+          </div>
+          <div class="contact-card">
+            <strong>Privacy and legal</strong>
+            <p>Privacy requests and questions about our policies.</p>
+            <a href="mailto:${escapeHtml(CONTACT)}">${escapeHtml(CONTACT)}</a>
+          </div>
+          <div class="contact-card">
+            <strong>Documentation</strong>
+            <p>Integration guides and API reference.</p>
+            <a href="https://docs.dashflo.io">docs.dashflo.io</a>
+          </div>
+        </aside>
+      </div>
+    </main>
+    <footer class="legal-site-footer">${footerMarkup()}</footer>`;
+
+  installTheme();
+  installContactForm();
+}
+
+/* Session awareness for the marketing call to action.
+ *
+ * The application session cookie is host-only to app.dashflo.io and stays that
+ * way. No token is copied into storage this site can read, nothing is moved to
+ * localStorage, and the cookie's flags are untouched.
+ *
+ * dashflo.io and app.dashflo.io share the registrable domain dashflo.io, so
+ * this request is same-site and the SameSite=Lax cookie is sent, while still
+ * being cross-origin and therefore subject to CORS. The application answers
+ * with a single boolean and nothing else: no identifier, role, email, or
+ * permission crosses the boundary.
+ *
+ * A plain GET with no custom request headers stays a CORS simple request, so
+ * there is no preflight ahead of it.
+ *
+ * Every failure path resolves false. A visitor is shown the logged-out call to
+ * action if the application is unreachable, slow, or returns anything
+ * unexpected. The homepage never waits on this and never breaks because of it.
+ */
+function readSessionStatus() {
+  const timeout = AbortSignal.timeout ? AbortSignal.timeout(2500) : undefined;
+  return fetch(SESSION_ENDPOINT, {
+    credentials: 'include',
+    cache: 'no-store',
+    signal: timeout,
+  })
+    .then((res) => (res.ok ? res.json() : null))
+    .then((body) => body?.authenticated === true)
+    .catch(() => false);
+}
+
+// Rewrite the calls to action in place rather than rebuilding them, so the
+// compiled button styling and layout are preserved exactly.
+function applyCta(authenticated) {
+  const heroActions = document.querySelector('.hero-actions');
+
+  if (authenticated) {
+    // One primary action. Registration and login are meaningless to a visitor
+    // who already has a session.
+    //
+    // Both lists are captured before anything is rewritten. The hero's trial
+    // button becomes the dashboard link, and a live query would then match it
+    // again in the second pass and remove the very element just promoted.
+    const registerLinks = [...document.querySelectorAll(`a[href="${APP_REGISTER}"]`)];
+    const loginLinks = [...document.querySelectorAll(`a[href="${APP_ORIGIN}"], a[href="${APP_LOGIN}"]`)];
+    const heroPrimary = heroActions?.querySelector(`a[href="${APP_REGISTER}"]`) || null;
+
+    for (const link of registerLinks) {
+      if (link === heroPrimary) {
+        link.href = APP_ORIGIN;
+        link.textContent = 'Go To Dashboard';
+      } else {
+        link.remove();
+      }
+    }
+
+    for (const link of loginLinks) {
+      // The hero carries the single primary action, so a second one there
+      // would be a duplicate.
+      if (heroActions?.contains(link)) {
+        link.remove();
+        continue;
+      }
+      link.href = APP_ORIGIN;
+      link.textContent = 'Dashboard';
+    }
+
+    // The compiled hero ships a secondary in-page anchor next to the trial
+    // button. With a session present the single dashboard action stands alone.
+    for (const link of heroActions?.querySelectorAll('a[href^="#"]') || []) link.remove();
+    return;
+  }
+
+  // Logged out: exactly two actions, Login and Start Free Trial.
+  for (const link of document.querySelectorAll(`a[href="${APP_ORIGIN}"]`)) {
+    link.href = APP_LOGIN;
+    link.textContent = 'Login';
+  }
+  if (heroActions) {
+    // The secondary hero slot carries the in-page platform anchor. Login is the
+    // action the homepage needs there.
+    const secondary = heroActions.querySelector('a[href^="#"]');
+    if (secondary) {
+      secondary.href = APP_LOGIN;
+      secondary.textContent = 'Login';
+    }
+  }
+}
+
+/* Hero motion.
+ *
+ * The compiled hero animates its packets with SMIL animateMotion and its core
+ * with CSS keyframes, all of which keep running while the section is scrolled
+ * out of view. On a phone that is continuous compositing work for something
+ * nobody is looking at.
+ *
+ * pauseAnimations is the documented way to stop an SVG's own timeline; the
+ * data attribute handles the CSS keyframes alongside it. Both are reversed as
+ * soon as the scene returns to view, so the desktop experience is unchanged.
+ */
+function installHeroMotionControl() {
+  const scene = document.querySelector('.hero-routing-scene');
+  if (!scene) return;
+  const svg = scene.querySelector('svg.hero-route-paths');
+  const reduced = window.matchMedia?.('(prefers-reduced-motion: reduce)');
+
+  const setPaused = (paused) => {
+    scene.dataset.motion = paused ? 'paused' : 'running';
+    try {
+      if (paused) svg?.pauseAnimations?.();
+      else svg?.unpauseAnimations?.();
+    } catch { /* SMIL control is best effort */ }
+  };
+
+  if (reduced?.matches) {
+    setPaused(true);
+    return;
+  }
+
+  if (typeof IntersectionObserver !== 'function') return;
+  const observer = new IntersectionObserver(
+    (entries) => { for (const entry of entries) setPaused(!entry.isIntersecting); },
+    { rootMargin: '120px' },
+  );
+  observer.observe(scene);
+}
+
+function patchHomepage(authenticated) {
   const apply = () => {
     const footer = document.querySelector('footer');
     if (!footer) return false;
     footer.classList.add('legal-site-footer');
     footer.innerHTML = footerMarkup();
-    for (const link of document.querySelectorAll('a[href="https://app.dashflo.io/register"]')) {
-      link.href = `mailto:${CONTACT}?subject=DashFlo%20Access%20Request`;
-      link.textContent = 'Request Access';
-    }
-    for (const link of document.querySelectorAll('a[href^="mailto:"]')) {
-      if (!link.href.includes(CONTACT)) link.href = `mailto:${CONTACT}?subject=DashFlo%20Enterprise`;
-    }
+    applyCta(authenticated);
+    installHeroMotionControl();
     return true;
   };
   if (apply()) return;
@@ -422,10 +794,63 @@ function patchHomepage() {
   observer.observe(document.getElementById('root'), { childList: true, subtree: true });
 }
 
+/* Web Vitals, measured locally and reported nowhere.
+ *
+ * No analytics vendor, no pixel, no network request, no identifier, no cookie.
+ * The numbers are collected from the browser's own performance entries and left
+ * on window.__dashfloVitals so a regression can be checked from a console or a
+ * headless run. Adding ?debug=perf prints them.
+ *
+ * This exists so the work done here stays measurable later, not to observe
+ * visitors.
+ */
+function measureVitals() {
+  // Node defines PerformanceObserver too, so the browser check has to be for a
+  // window. The legal route verifier renders this module without one.
+  if (typeof window === 'undefined' || typeof PerformanceObserver !== 'function') return;
+  const vitals = { fcp: null, lcp: null, cls: 0 };
+  window.__dashfloVitals = vitals;
+
+  const observe = (type, handler) => {
+    try {
+      new PerformanceObserver(handler).observe({ type, buffered: true });
+    } catch { /* unsupported entry type */ }
+  };
+
+  observe('paint', (list) => {
+    for (const entry of list.getEntries()) {
+      if (entry.name === 'first-contentful-paint') vitals.fcp = Math.round(entry.startTime);
+    }
+  });
+  observe('largest-contentful-paint', (list) => {
+    const entries = list.getEntries();
+    vitals.lcp = Math.round(entries[entries.length - 1].startTime);
+  });
+  observe('layout-shift', (list) => {
+    for (const entry of list.getEntries()) if (!entry.hadRecentInput) vitals.cls += entry.value;
+  });
+
+  if (new URLSearchParams(location.search).get('debug') === 'perf') {
+    addEventListener('load', () => setTimeout(() => {
+      console.log('[dashflo] vitals', { ...vitals, cls: Number(vitals.cls.toFixed(4)) });
+    }, 3000));
+  }
+}
+
+measureVitals();
+
 const normalizedPath = location.pathname.length > 1 ? location.pathname.replace(/\/+$/, '') : '/';
+
 if (LEGAL_PATHS.has(normalizedPath)) {
   renderLegal(normalizedPath);
+} else if (normalizedPath === CONTACT_PATH) {
+  renderContact();
 } else {
+  // Both start together. The session answer is a few hundred bytes and settles
+  // well before the compiled bundle has been fetched, parsed, and mounted, so
+  // the correct call to action is known by the time the hero first paints and
+  // the visitor does not see it change under them.
+  const session = readSessionStatus();
   await import('/assets/index-od46Pw2o.js');
-  patchHomepage();
+  patchHomepage(await session);
 }

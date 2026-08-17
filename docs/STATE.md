@@ -1387,3 +1387,176 @@ not a code change.
 - No lead has ever been delivered to a buyer by this deployment.
 - Google sign-in has no Client ID configured yet, so the button does not render
   in production and the flow is proven by tests only.
+
+## Marketing site UX, performance, contact, and app code splitting, 17 August 2026
+
+Website and application work only. No lead path, routing rule, supplier or
+buyer key, Base44 surface, migration import, or production record was touched.
+
+### Hero diagram
+
+The compiled bundle shipped a separate mobile treatment that stacked sources,
+DashFlo, and buyers vertically, hid the connector SVG, and grew the scene past
+1000px tall on a 390px viewport. That is a different diagram, not a smaller
+one.
+
+`marketing/dist/assets/hero.css` restores the single canonical composition at
+every width. The connector SVG is `viewBox="0 0 1000 420"` with
+`preserveAspectRatio="none"` at 100% by 100%, so it stretches to the scene box
+and its path anchors sit on fixed fractions of it. Node stacks are placed on
+those same fractions, so every line stays attached with one set of geometry.
+Anchor values are recorded in the file.
+
+Measured in Chrome, scene height by viewport width:
+
+| Width | Before | After |
+| --- | --- | --- |
+| 1440 | 470 | 470 (unchanged) |
+| 768 | stacked | 440 |
+| 430 | stacked | 353 |
+| 390 | 1002 | 328 |
+| 360 | stacked | 302 |
+
+No horizontal overflow at 1440, 1024, 768, 430, 390, or 360. Connector paths
+render at every width. Secondary labels and the processor row are dropped below
+600px rather than shrunk past legibility.
+
+### Call to action
+
+`Request Access` was not in the approved bundle. `site-router.js` was rewriting
+the bundle's own `/register` links into a mailto. That rewrite is removed.
+
+Logged out: Start Free Trial to `app.dashflo.io/register` and Login to
+`app.dashflo.io/login`. Logged in: one Go To Dashboard to `app.dashflo.io`,
+with registration and login links removed. Both states verified in Chrome
+against a stubbed session endpoint.
+
+Session awareness is `GET /api/auth/session-status` in
+`server/src/routes/publicSite.js`, returning `{"authenticated":boolean}` and
+nothing else. The application session cookie stays host-only, HttpOnly, and
+unreadable by the marketing site; no token crosses the boundary and nothing is
+moved to localStorage. dashflo.io and app.dashflo.io share a registrable
+domain, so the request is same-site and the SameSite=Lax cookie is sent while
+CORS still applies. `MARKETING_ORIGIN` is deliberately not added to
+`ALLOWED_ORIGINS`, because that list also grants CSRF standing for
+cookie-authenticated writes. Every failure path resolves to logged out.
+
+### Marketing performance
+
+Measured on the live site with Chrome before the change: 1654 KB transferred,
+14 requests, FCP 2388ms and LCP 3288ms at 1440, FCP 2164ms and LCP 3048ms at
+390.
+
+Causes found:
+
+- no compression at all, so roughly 460 KB of text was served raw;
+- 1254px PNGs used as favicons, 385 KB each, fetched three times;
+- the webfont CSS pulled in by an `@import` inside the 160 KB stylesheet, so
+  it could not start until that file had downloaded and parsed;
+- unfingerprinted assets served `immutable` for a year.
+
+Changes: gzip in `deploy/nginx/dashflo.io.conf` (text types only; brotli needs
+a non-stock module and is left as a follow-up); resized icons, with the 1254px
+originals kept in `marketing/brand-src/` and out of the deployed tree; the
+webfont stylesheet named in the head with preconnect so the identical URL
+starts during HTML parse; offscreen hero animation pausing through
+IntersectionObserver and `pauseAnimations`, plus `prefers-reduced-motion`.
+
+Transferred bytes, gzip level 6 as configured: 1590 KB to 133 KB, a 91.6%
+reduction. Google Fonts adds about 67 KB in both cases.
+
+UNPROVEN: FCP, LCP, and CLS after the change. They depend on nginx compression
+and cannot be measured until this is deployed. Only byte counts are proven.
+
+### Caching correctness
+
+`site-router.js`, `brand.css`, `legal.css`, and `hero.css` keep stable
+filenames but were served `public, immutable` for one year. A returning visitor
+would have kept the old router and never received this or any future deploy.
+Fingerprinted bundle assets keep the one-year immutable policy through a regex
+location; the hand-authored files now revalidate.
+
+### Contact page and SMTP
+
+`/contact` renders through the same shell, header, footer, tokens, and theme
+system as the legal routes. Fields: name, email, company (optional), topic,
+subject, message. Accessible labels, `aria-live` status, client and server
+validation, loading, success, and failure states, both themes, no horizontal
+overflow at 390.
+
+`POST /api/contact` is rate limited to 5 per hour per address, carries a
+honeypot and a fill-time check (both accepted and discarded so a bot learns
+nothing), validates and length-bounds every field, and strips control
+characters so no header can be forged. The recipient is fixed server-side from
+`CONTACT_RECIPIENT`, so the endpoint cannot be used as a relay. From is the
+SMTP-authorised sender; Reply-To is the visitor. Message content is never
+written to the application log; only topic and delivery outcome are.
+
+17 tests in `server/test/contactForm.test.js` cover validation, length bounds,
+header injection, recipient fixing, and sender identity.
+
+UNPROVEN: real SMTP delivery. No credentials are configured, so the endpoint
+answers 503 rather than reporting success. Required values are listed in
+`server/.env.example`: `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`,
+`SMTP_PASS`, `SMTP_FROM`, `SMTP_FROM_NAME`.
+
+### Footer and legal contact
+
+The public footer is branded DashFlo, shows `support@dashflo.io`, and adds
+Contact / Support. The operating company name is removed from it. Legal
+documents still identify `Next Consulting LLC dba DashFlo`, and their contact
+address moved from `info@next-consulting.co` to `info@dashflo.io`.
+`scripts/verify-marketing-legal.mjs` now enforces all of this, plus the contact
+route, its accessible labelling, and the call-to-action routing.
+
+### Application performance
+
+The route table imported all 57 pages statically, and `docsConfig` imported 11
+more, producing one 3595 KB chunk (932 KB gzipped) that had to arrive before
+the login form could paint.
+
+Route-level `React.lazy` with one Suspense boundary above every branch in
+`App.jsx`, a second in `OffscreenCapture.jsx` for its detached root, lazy docs
+registry, and vendor chunking in `vite.config.js`. Login and Register stay
+eager because they are the marketing site's landing points.
+
+`clsx`, `tailwind-merge`, and `class-variance-authority` are pinned to the
+always-needed chunk. Left unassigned, Rollup hoisted them into the charts
+chunk, which made the entry statically depend on it and preloaded 110 KB of
+recharts on the login screen.
+
+Initial load, gzip: 952 KB to 161 KB, an 83% reduction, across 297 chunks.
+Verified in Chrome against the built output: the login page fetches three
+scripts and renders, `/docs` lazily fetches ten more and renders, no console
+errors.
+
+UNPROVEN: authenticated dashboard timings, startup API waterfalls, and query
+latency. Those need a populated database and a real session.
+
+### Instrumentation
+
+Slow request logging in `server/src/index.js` and slow query logging in
+`server/src/db/pool.js`, both threshold driven, logging route or truncated
+statement text and duration only, never parameters, bodies, or caller
+identity. Web Vitals on the marketing site are collected from the browser's own
+performance entries, left on `window.__dashfloVitals`, and sent nowhere. No
+analytics vendor, pixel, cookie, or identifier was added.
+
+### Evidence
+
+- `npm run gate` passed: tests, function loader, lint, production build, bundle
+  purity, secret scan, added-copy check.
+- `npm run verify:legal` passed for five legal routes and the contact route.
+- `git diff --check` passed.
+- No SMTP credential appears in any tracked file or built bundle.
+- Hero geometry, both call-to-action states, contact form validation and
+  submission, theme switching, and the built application boot were exercised in
+  Chrome.
+
+### Not done
+
+- Not deployed. No SSH access to `2.24.130.44` from this session; all four
+  local keys were refused. Everything above is proven locally only.
+- Compression, cache headers, and the live call to action cannot be confirmed
+  until `nginx -t` and a reload have run on the VPS.
+- No production contact message has been delivered.

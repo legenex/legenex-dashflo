@@ -1,3 +1,4 @@
+import { Suspense } from 'react';
 import { Toaster } from "@/components/ui/toaster"
 import { QueryClientProvider } from '@tanstack/react-query'
 import { queryClientInstance } from '@/lib/query-client'
@@ -136,13 +137,25 @@ const AuthenticatedApp = () => {
   );
 };
 
+// Route components are code split, so the tree suspends while a page chunk is
+// fetched. One boundary above every branch of AuthenticatedApp covers all of
+// them, rather than a boundary per Routes block that would each need their own
+// fallback and each drift.
+//
+// The fallback is deliberately blank. A spinner that appears for the 40ms a
+// local chunk takes is a flash, not feedback, and every route below already
+// renders its own loading state once mounted.
+const RouteFallback = () => <div className="min-h-screen bg-background" aria-busy="true" />;
+
 function App() {
   return (
     <AuthProvider>
       <QueryClientProvider client={queryClientInstance}>
         <Router>
           <ScrollToTop />
-          <AuthenticatedApp />
+          <Suspense fallback={<RouteFallback />}>
+            <AuthenticatedApp />
+          </Suspense>
         </Router>
         <Toaster />
       </QueryClientProvider>

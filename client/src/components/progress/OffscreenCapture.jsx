@@ -1,4 +1,4 @@
-import React, { useCallback, useRef, useState } from 'react';
+import React, { Suspense, useCallback, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import { QueryClientProvider } from '@tanstack/react-query';
@@ -185,7 +185,12 @@ export async function captureOffscreen(page, {
             <QueryClientProvider client={queryClientInstance}>
               <MemoryRouter initialEntries={[page.route || '/']}>
                 <CaptureBoundary onError={(e) => { renderError = e; }}>
-                  <Routes>{tree}</Routes>
+                  {/* The shared route table is code split, so this detached
+                      root needs its own boundary. Without it a captured route
+                      throws instead of waiting for its chunk. */}
+                  <Suspense fallback={<div />}>
+                    <Routes>{tree}</Routes>
+                  </Suspense>
                 </CaptureBoundary>
               </MemoryRouter>
             </QueryClientProvider>

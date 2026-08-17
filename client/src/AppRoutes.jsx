@@ -8,6 +8,7 @@
 // Duplicating the table would guarantee drift, and a screenshot of a route table
 // that no longer matches the app is worse than no screenshot.
 
+import { lazy } from 'react';
 import { Toaster } from "@/components/ui/toaster"
 import { QueryClientProvider } from '@tanstack/react-query'
 import { queryClientInstance } from '@/lib/query-client'
@@ -19,76 +20,96 @@ import ProtectedRoute from '@/components/ProtectedRoute';
 import PermissionRoute from '@/components/PermissionRoute';
 import ScrollToTop from './components/ScrollToTop';
 import { hostScope, isAllowedOnProgressHost } from '@/lib/hostScope';
+import { DOCS_ROUTES } from '@/components/docs/docsConfig';
+
+// The authentication entry points stay eagerly imported. They are the first
+// thing an unauthenticated visitor renders, including everyone arriving from the
+// marketing site's Login and Start Free Trial buttons, so putting a second
+// network round trip in front of the login form would give the win back at
+// exactly the wrong moment.
 import Login from '@/pages/Login';
 import Register from '@/pages/Register';
-import ForgotPassword from '@/pages/ForgotPassword';
-import ResetPassword from '@/pages/ResetPassword';
-import ApiStatus from '@/pages/ApiStatus';
-import Apply from '@/pages/Apply';
-import DocsLayout from '@/components/docs/DocsLayout';
-import { DOCS_ROUTES } from '@/components/docs/docsConfig';
-import AppLayout from '@/components/layout/AppLayout';
-import DistributionLayout from '@/components/distribution/DistributionLayout';
-import LeadsLayout from '@/components/leads/LeadsLayout';
-import CallsLayout from '@/components/calls/CallsLayout';
-import CallsView from '@/pages/CallsView';
-import FinancesLayout from '@/components/finances/FinancesLayout';
-import OperationsLayout from '@/components/operations/OperationsLayout';
-import AdManagerLayout from '@/components/admanager/AdManagerLayout';
-import ToolsLayout from '@/components/tools/ToolsLayout';
-import Overview from '@/pages/Overview';
-import DistributionDashboard from '@/pages/DistributionDashboard';
-import LeadsView from '@/pages/LeadsView';
-import QueueRecovery from '@/pages/QueueRecovery';
-import Campaigns from '@/pages/Campaigns';
-import SupplierDetail from '@/pages/SupplierDetail';
-import BuyerDetail from '@/pages/BuyerDetail';
-import Reports from '@/pages/Reports';
-import Finances from '@/pages/Finances';
-import Deliveries from '@/pages/Deliveries';
-import ConversionEvents from '@/pages/ConversionEvents';
-import RouteSimulator from '@/pages/RouteSimulator';
-import RouteGroups from '@/pages/RouteGroups';
-import Notifications from '@/pages/Notifications';
-import Verification from '@/pages/Verification';
-import Settings from '@/pages/Settings';
-import CustomCalculations from '@/pages/CustomCalculations';
-import OperationsBuyers from '@/pages/operations/OperationsBuyers';
-import OperationsSuppliers from '@/pages/operations/OperationsSuppliers';
-import OperationsActiveStates from '@/pages/operations/OperationsActiveStates';
-import OperationsVerticals from '@/pages/operations/OperationsVerticals';
-import OperationsBillingReports from '@/pages/operations/OperationsBillingReports';
-import OperationsBuyerOnboarding from '@/pages/operations/OperationsBuyerOnboarding';
-import OperationsDashboard from '@/pages/operations/OperationsDashboard';
-import AdPerformanceDashboard from '@/pages/admanager/AdPerformanceDashboard';
-import AdReports from '@/pages/admanager/AdReports';
-import CreativeAnalyzer from '@/pages/admanager/CreativeAnalyzer';
-import AdBuilder from '@/pages/admanager/AdBuilder';
-import PayloadTester from '@/pages/PayloadTester';
-import ToolsDashboard from '@/pages/ToolsDashboard';
-import ProgressLayout from '@/components/progress/ProgressLayout';
-import CommandCenter from '@/pages/progress/CommandCenter';
-import ApplicationReview from '@/pages/progress/ApplicationReview';
-import Migration from '@/pages/progress/Migration';
-import Gates from '@/pages/progress/Gates';
-import Findings from '@/pages/progress/Findings';
-import ChangeRequests from '@/pages/progress/ChangeRequests';
-import PromptStudio from '@/pages/progress/PromptStudio';
-import BuildActivity from '@/pages/progress/BuildActivity';
-import ProgressSettings from '@/pages/progress/ProgressSettings';
-import PortalLayout from '@/components/portal/PortalLayout';
-import PortalDashboard from '@/pages/portal/PortalDashboard';
-import PortalLeads from '@/pages/portal/PortalLeads';
-import PortalReports from '@/pages/portal/PortalReports';
-import PortalReturns from '@/pages/portal/PortalReturns';
-import PortalSettings from '@/pages/portal/PortalSettings';
-import SupplierPortalLayout from '@/components/supplierportal/SupplierPortalLayout';
-import SupplierPortalDashboard from '@/pages/supplierportal/SupplierPortalDashboard';
-import SupplierPortalLeads from '@/pages/supplierportal/SupplierPortalLeads';
-import SupplierPortalReports from '@/pages/supplierportal/SupplierPortalReports';
-import SupplierPortalReturns from '@/pages/supplierportal/SupplierPortalReturns';
-import SupplierPortalApi from '@/pages/supplierportal/SupplierPortalApi';
-import SupplierPortalSettings from '@/pages/supplierportal/SupplierPortalSettings';
+
+/* Everything below is fetched the first time its route is visited.
+ *
+ * These were all static imports, which put every page, portal, layout and chart
+ * into one chunk: 3.6 MB raw, 932 KB gzipped, all of it required before the
+ * login form could paint. Nobody visits more than a handful of these in a
+ * session, and an unauthenticated visitor visits none of them.
+ *
+ * React.lazy needs a default export, which every one of these modules has. The
+ * Suspense boundary that covers them lives in App.jsx, above the route tree, so
+ * a single fallback serves every branch. The screenshot capturer in
+ * components/progress/OffscreenCapture.jsx carries its own boundary because it
+ * renders this table into a detached root.
+ */
+const ForgotPassword = lazy(() => import('@/pages/ForgotPassword'));
+const ResetPassword = lazy(() => import('@/pages/ResetPassword'));
+const ApiStatus = lazy(() => import('@/pages/ApiStatus'));
+const Apply = lazy(() => import('@/pages/Apply'));
+const DocsLayout = lazy(() => import('@/components/docs/DocsLayout'));
+const AppLayout = lazy(() => import('@/components/layout/AppLayout'));
+const DistributionLayout = lazy(() => import('@/components/distribution/DistributionLayout'));
+const LeadsLayout = lazy(() => import('@/components/leads/LeadsLayout'));
+const CallsLayout = lazy(() => import('@/components/calls/CallsLayout'));
+const CallsView = lazy(() => import('@/pages/CallsView'));
+const FinancesLayout = lazy(() => import('@/components/finances/FinancesLayout'));
+const OperationsLayout = lazy(() => import('@/components/operations/OperationsLayout'));
+const AdManagerLayout = lazy(() => import('@/components/admanager/AdManagerLayout'));
+const ToolsLayout = lazy(() => import('@/components/tools/ToolsLayout'));
+const Overview = lazy(() => import('@/pages/Overview'));
+const DistributionDashboard = lazy(() => import('@/pages/DistributionDashboard'));
+const LeadsView = lazy(() => import('@/pages/LeadsView'));
+const QueueRecovery = lazy(() => import('@/pages/QueueRecovery'));
+const Campaigns = lazy(() => import('@/pages/Campaigns'));
+const SupplierDetail = lazy(() => import('@/pages/SupplierDetail'));
+const BuyerDetail = lazy(() => import('@/pages/BuyerDetail'));
+const Reports = lazy(() => import('@/pages/Reports'));
+const Finances = lazy(() => import('@/pages/Finances'));
+const Deliveries = lazy(() => import('@/pages/Deliveries'));
+const ConversionEvents = lazy(() => import('@/pages/ConversionEvents'));
+const RouteSimulator = lazy(() => import('@/pages/RouteSimulator'));
+const RouteGroups = lazy(() => import('@/pages/RouteGroups'));
+const Notifications = lazy(() => import('@/pages/Notifications'));
+const Verification = lazy(() => import('@/pages/Verification'));
+const Settings = lazy(() => import('@/pages/Settings'));
+const CustomCalculations = lazy(() => import('@/pages/CustomCalculations'));
+const OperationsBuyers = lazy(() => import('@/pages/operations/OperationsBuyers'));
+const OperationsSuppliers = lazy(() => import('@/pages/operations/OperationsSuppliers'));
+const OperationsActiveStates = lazy(() => import('@/pages/operations/OperationsActiveStates'));
+const OperationsVerticals = lazy(() => import('@/pages/operations/OperationsVerticals'));
+const OperationsBillingReports = lazy(() => import('@/pages/operations/OperationsBillingReports'));
+const OperationsBuyerOnboarding = lazy(() => import('@/pages/operations/OperationsBuyerOnboarding'));
+const OperationsDashboard = lazy(() => import('@/pages/operations/OperationsDashboard'));
+const AdPerformanceDashboard = lazy(() => import('@/pages/admanager/AdPerformanceDashboard'));
+const AdReports = lazy(() => import('@/pages/admanager/AdReports'));
+const CreativeAnalyzer = lazy(() => import('@/pages/admanager/CreativeAnalyzer'));
+const AdBuilder = lazy(() => import('@/pages/admanager/AdBuilder'));
+const PayloadTester = lazy(() => import('@/pages/PayloadTester'));
+const ToolsDashboard = lazy(() => import('@/pages/ToolsDashboard'));
+const ProgressLayout = lazy(() => import('@/components/progress/ProgressLayout'));
+const CommandCenter = lazy(() => import('@/pages/progress/CommandCenter'));
+const ApplicationReview = lazy(() => import('@/pages/progress/ApplicationReview'));
+const Migration = lazy(() => import('@/pages/progress/Migration'));
+const Gates = lazy(() => import('@/pages/progress/Gates'));
+const Findings = lazy(() => import('@/pages/progress/Findings'));
+const ChangeRequests = lazy(() => import('@/pages/progress/ChangeRequests'));
+const PromptStudio = lazy(() => import('@/pages/progress/PromptStudio'));
+const BuildActivity = lazy(() => import('@/pages/progress/BuildActivity'));
+const ProgressSettings = lazy(() => import('@/pages/progress/ProgressSettings'));
+const PortalLayout = lazy(() => import('@/components/portal/PortalLayout'));
+const PortalDashboard = lazy(() => import('@/pages/portal/PortalDashboard'));
+const PortalLeads = lazy(() => import('@/pages/portal/PortalLeads'));
+const PortalReports = lazy(() => import('@/pages/portal/PortalReports'));
+const PortalReturns = lazy(() => import('@/pages/portal/PortalReturns'));
+const PortalSettings = lazy(() => import('@/pages/portal/PortalSettings'));
+const SupplierPortalLayout = lazy(() => import('@/components/supplierportal/SupplierPortalLayout'));
+const SupplierPortalDashboard = lazy(() => import('@/pages/supplierportal/SupplierPortalDashboard'));
+const SupplierPortalLeads = lazy(() => import('@/pages/supplierportal/SupplierPortalLeads'));
+const SupplierPortalReports = lazy(() => import('@/pages/supplierportal/SupplierPortalReports'));
+const SupplierPortalReturns = lazy(() => import('@/pages/supplierportal/SupplierPortalReturns'));
+const SupplierPortalApi = lazy(() => import('@/pages/supplierportal/SupplierPortalApi'));
+const SupplierPortalSettings = lazy(() => import('@/pages/supplierportal/SupplierPortalSettings'));
 
 function LegacySupplierRedirect() {
   const { id } = useParams();

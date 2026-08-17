@@ -26,6 +26,33 @@ export default defineConfig({
   },
   build: {
     outDir: 'dist',
+    // Source maps stay off in production. They would roughly double what is
+    // published and hand a reader the unminified application.
     sourcemap: false,
+    rollupOptions: {
+      output: {
+        // Route-level splitting alone would copy these into many route chunks
+        // or leave them in the entry. Pinning the large, stable dependencies to
+        // their own files means a page visit downloads only what it adds, and a
+        // release that touches application code does not invalidate the vendor
+        // bytes a returning user already has.
+        manualChunks(id) {
+          if (!id.includes('node_modules')) return undefined;
+          // These tiny helpers are used by the entry and by recharts alike.
+          // Left unassigned, Rollup hoists them into vendor-charts, which makes
+          // the entry statically depend on it: the browser then preloads 110 KB
+          // of charting on the login screen to get a few hundred bytes of class
+          // name helper. Pinning them to the always-needed chunk removes that
+          // edge entirely.
+          if (/[\\/]node_modules[\\/](clsx|tailwind-merge|class-variance-authority)[\\/]/.test(id)) return 'vendor-react';
+          if (/[\\/]node_modules[\\/](react|react-dom|react-router|react-router-dom|scheduler)[\\/]/.test(id)) return 'vendor-react';
+          if (id.includes('node_modules/recharts') || id.includes('node_modules/d3-') || id.includes('node_modules/victory-vendor')) return 'vendor-charts';
+          if (id.includes('node_modules/framer-motion')) return 'vendor-motion';
+          if (id.includes('node_modules/@radix-ui')) return 'vendor-radix';
+          if (id.includes('node_modules/html2canvas')) return 'vendor-canvas';
+          return undefined;
+        },
+      },
+    },
   },
 });

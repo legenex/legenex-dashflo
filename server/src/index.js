@@ -17,6 +17,7 @@ import integrationRoutes from './routes/integrations.js';
 import functionRoutes from './routes/functions.js';
 import publicFunctionRoutes from './routes/publicFunctions.js';
 import migrationRoutes from './routes/migrations.js';
+import publicSiteRoutes from './routes/publicSite.js';
 
 async function main() {
   // Refuse to boot a production deployment with a development secret, a
@@ -73,9 +74,30 @@ async function main() {
   fs.mkdirSync(config.uploadDir, { recursive: true });
   app.use('/uploads', express.static(config.uploadDir));
 
+  // Slow request visibility.
+  //
+  // A single line per slow request, with no body, no query string, and no
+  // caller identity. The route template is enough to find the offender and
+  // carries no lead or account data. Threshold is generous so ordinary traffic
+  // stays silent and a regression stands out.
+  const slowRequestMs = Number.parseInt(process.env.SLOW_REQUEST_MS || '', 10) || 1500;
+  app.use((req, res, next) => {
+    const startedAt = process.hrtime.bigint();
+    res.on('finish', () => {
+      const ms = Number(process.hrtime.bigint() - startedAt) / 1e6;
+      if (ms >= slowRequestMs) {
+        console.warn(`[slow] ${req.method} ${req.baseUrl || ''}${req.route?.path || req.path} ${res.statusCode} ${ms.toFixed(0)}ms`);
+      }
+    });
+    next();
+  });
+
   // API surface.
   app.get('/api/health', (_req, res) => res.json({ status: 'ok' }));
   app.use('/api/auth', authRoutes);
+  // Public marketing surfaces. Mounted after the application routes so it can
+  // never shadow one of them.
+  app.use('/api', publicSiteRoutes);
   app.use('/api/entities', entityRoutes);
   app.use('/api/integrations', integrationRoutes);
   app.use('/api/functions', functionRoutes);

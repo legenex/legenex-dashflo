@@ -1,0 +1,290 @@
+/* Responsive hero operating-system diagram.
+ *
+ * The approved desktop composition is the canonical design: sources on the
+ * left, DashFlo in the center, buyers on the right, with animated lead and
+ * sale packets travelling along connecting paths. The compiled bundle ships a
+ * separate mobile treatment that stacks those three groups vertically, hides
+ * the connectors entirely, and grows the scene past 1000px tall. That reads as
+ * a different diagram, not a smaller one.
+ *
+ * This file restores the single canonical composition at every width and
+ * scales it instead of reflowing it.
+ *
+ * Why percentages rather than a transform: the connector SVG is declared
+ * viewBox="0 0 1000 420" preserveAspectRatio="none" at width/height 100%, so
+ * it stretches to whatever box the scene occupies and its path anchors land on
+ * fixed fractions of the scene. Positioning the nodes on those same fractions
+ * keeps every line attached at any size, with no second geometry to maintain.
+ *
+ * Anchor fractions read from the bundle's path data:
+ *   source path start  x = 185/1000 = 18.5%
+ *   core left / right  x = 365/1000 = 36.5%  and  635/1000 = 63.5%
+ *   buyer path end     x = 815/1000 = 81.5%
+ *   source path ends   y = 62,132,202,272,342 of 420
+ *   buyer path ends    y = 108,210,312 of 420
+ *
+ * Node stacks are laid out so their row centers sit on those y fractions
+ * exactly. Each stack is deliberately wider than its anchor so the line
+ * emerges from beneath the node rather than butting against it, which is what
+ * the desktop layout already does and is why small vertical drift is not
+ * visible.
+ */
+
+@media (width <= 820px) {
+  /* Undo the stacked column and return to the absolutely positioned canvas. */
+  .hero-routing-scene {
+    display: block;
+    height: clamp(300px, 76vw, 440px);
+    min-height: 0;
+    gap: 0;
+    margin-top: 48px;
+    padding: 0;
+    background: radial-gradient(circle at 50% 50%, var(--coral-soft), transparent 30%);
+  }
+
+  /* The vertical spine only made sense for the stacked variant. */
+  .hero-routing-scene::after {
+    content: none;
+  }
+
+  /* Connectors are the point of the diagram. */
+  .hero-route-paths {
+    display: block;
+  }
+
+  .hero-route-label {
+    position: absolute;
+    top: 7px;
+    font-size: 6px;
+  }
+
+  .hero-route-label.source-label {
+    inset: 7px auto auto 10px;
+  }
+
+  .hero-route-label.buyer-label {
+    inset: 7px 10px auto auto;
+  }
+
+  .hero-source-stack,
+  .hero-buyer-stack {
+    position: absolute;
+    z-index: 2;
+    display: grid;
+    grid-template-columns: 1fr;
+    width: 27%;
+    gap: 2%;
+  }
+
+  /* Rows centered on 14.76 / 31.4 / 48.1 / 64.8 / 81.4 percent. */
+  .hero-source-stack {
+    inset: 6.4% auto auto 1.5%;
+    height: 83.3%;
+    grid-template-rows: repeat(5, 1fr);
+  }
+
+  /* Rows centered on 25.7 / 50 / 74.3 percent. */
+  .hero-buyer-stack {
+    inset: 13.5% 1.5% auto auto;
+    height: 72.9%;
+    grid-template-rows: repeat(3, 1fr);
+  }
+
+  .hero-source-stack > div,
+  .hero-buyer-stack > div {
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    padding: 4px 5px 4px 15px;
+    border-block: 1px solid var(--border-soft);
+    background: linear-gradient(90deg, var(--surface), transparent);
+    text-align: left;
+  }
+
+  .hero-buyer-stack > div {
+    padding: 4px 15px 4px 5px;
+    background: linear-gradient(270deg, var(--surface), transparent);
+    text-align: right;
+  }
+
+  /* The status dot is the visual join between node and connector. */
+  .hero-source-stack i,
+  .hero-buyer-stack i {
+    display: block;
+    position: absolute;
+    top: 50%;
+    left: 5px;
+    width: 5px;
+    height: 5px;
+    margin-top: -2.5px;
+    box-shadow: 0 0 0 3px var(--border-soft);
+  }
+
+  .hero-buyer-stack i {
+    left: auto;
+    right: 5px;
+  }
+
+  .hero-source-stack span,
+  .hero-buyer-stack span {
+    font-size: 9px;
+    line-height: 1.15;
+  }
+
+  .hero-source-stack small,
+  .hero-buyer-stack small {
+    margin-top: 1px;
+    font-size: 5px;
+    line-height: 1.2;
+  }
+
+  .hero-source-stack .active,
+  .hero-buyer-stack .active {
+    background: linear-gradient(90deg, var(--green-soft), transparent);
+    transform: translate(3px);
+  }
+
+  .hero-buyer-stack .active {
+    background: linear-gradient(270deg, var(--green-soft), transparent);
+    transform: translate(-3px);
+  }
+
+  /* Core spans 36.5 to 63.5 percent so both path bundles meet its edge. */
+  .hero-route-core {
+    position: absolute;
+    inset: 50% auto auto 50%;
+    align-self: auto;
+    width: 27%;
+    max-width: 190px;
+    height: auto;
+    aspect-ratio: 1;
+    transform: translate(-50%, -50%);
+    box-shadow: 0 0 50px var(--coral-soft);
+  }
+
+  .hero-route-core > .brand-mark {
+    margin-bottom: 5px;
+    transform: scale(.8);
+  }
+
+  .hero-route-core > b {
+    font-size: 10px;
+    letter-spacing: .6px;
+  }
+
+  .hero-route-core > em {
+    margin-top: 5px;
+    font-size: 5px;
+  }
+
+  .hero-processors {
+    transform: scale(.72);
+  }
+
+  .hero-event-strip {
+    bottom: 8px;
+    gap: 6px;
+    padding: 5px 9px;
+    font-size: 6px;
+  }
+}
+
+/* Below the phone breakpoint the secondary labels stop being legible, so they
+ * are dropped rather than shrunk further. The three groups, the connectors and
+ * the packet animation all stay. */
+@media (width <= 600px) {
+  .hero-routing-scene {
+    height: clamp(296px, 82vw, 400px);
+    padding-inline: 0;
+    min-height: 0;
+  }
+
+  .hero-source-stack,
+  .hero-buyer-stack {
+    grid-template-columns: 1fr;
+    width: 29%;
+    gap: 2%;
+  }
+
+  .hero-source-stack small,
+  .hero-buyer-stack small,
+  .hero-processors,
+  .hero-route-core > em {
+    display: none;
+  }
+
+  .hero-source-stack span,
+  .hero-buyer-stack span {
+    font-size: 8px;
+  }
+
+  .hero-route-core > b {
+    font-size: 9px;
+  }
+
+  .hero-route-core > .brand-mark {
+    margin-bottom: 3px;
+    transform: scale(.7);
+  }
+
+  .hero-event-strip {
+    max-width: calc(100% - 16px);
+    bottom: 6px;
+    padding: 4px 8px;
+    font-size: 5px;
+  }
+}
+
+@media (width <= 400px) {
+  .hero-routing-scene {
+    height: clamp(290px, 84vw, 340px);
+    min-height: 0;
+  }
+
+  .hero-source-stack > div,
+  .hero-buyer-stack > div {
+    padding-left: 13px;
+  }
+
+  .hero-buyer-stack > div {
+    padding-right: 13px;
+    padding-left: 4px;
+  }
+
+  .hero-source-stack span,
+  .hero-buyer-stack span {
+    font-size: 7.5px;
+    letter-spacing: -.1px;
+  }
+}
+
+@media (width <= 390px) {
+  .hero-routing-scene {
+    min-height: 0;
+  }
+}
+
+/* Motion.
+ *
+ * The bundle animates the packet circles with SMIL animateMotion, which keeps
+ * running while the hero is scrolled out of view and cannot be paused from
+ * CSS. Section observers below handle that; here we only respect the user's
+ * stated preference. */
+@media (prefers-reduced-motion: reduce) {
+  .hero-routing-scene,
+  .hero-source-stack > div,
+  .hero-buyer-stack > div,
+  .hero-route-paths path {
+    transition: none;
+  }
+}
+
+/* Offscreen and reduced-motion pausing, driven by assets/site-router.js. The
+ * attribute is set on the scene wrapper so the whole subtree stops compositing
+ * rather than each element being toggled individually. */
+.hero-routing-scene[data-motion='paused'] .core-orbit,
+.hero-routing-scene[data-motion='paused'] .hero-lead-packet,
+.hero-routing-scene[data-motion='paused'] .hero-sale-packet {
+  animation-play-state: paused;
+}

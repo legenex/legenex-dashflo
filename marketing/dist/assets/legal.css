@@ -180,3 +180,133 @@ button:focus-visible {
   html { scroll-behavior: auto; }
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }
+
+/* Contact route.
+ *
+ * Reuses the legal shell (header, hero band, container, footer) so the page is
+ * the same document type as the policy pages rather than a form bolted onto the
+ * site. Every colour comes from the approved tokens, so both themes follow
+ * automatically. */
+.contact-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.55fr) minmax(240px, .85fr);
+  gap: 54px;
+  padding: 64px 0 96px;
+  align-items: start;
+}
+
+.contact-panel {
+  padding: 30px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.contact-row { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+
+.contact-field { display: flex; flex-direction: column; gap: 7px; margin: 0 0 18px; }
+
+.contact-field label {
+  font: 600 12px/1.4 var(--font);
+  letter-spacing: .2px;
+  color: var(--text);
+}
+
+.contact-field .optional { color: var(--text-3); font-weight: 400; }
+
+.contact-field input,
+.contact-field select,
+.contact-field textarea {
+  width: 100%;
+  padding: 11px 13px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-soft);
+  color: var(--text);
+  font: 400 14px/1.5 var(--font);
+  transition: border-color .18s, box-shadow .18s;
+}
+
+.contact-field textarea { resize: vertical; min-height: 150px; }
+
+.contact-field input:focus,
+.contact-field select:focus,
+.contact-field textarea:focus {
+  outline: none;
+  border-color: var(--coral);
+  box-shadow: 0 0 0 3px var(--coral-soft);
+}
+
+.contact-field .is-invalid { border-color: var(--coral); }
+
+.contact-hint { color: var(--text-3); font: 400 11px/1.4 var(--mono); }
+
+.contact-error { color: var(--coral-bright); font: 500 12px/1.4 var(--font); }
+
+/* Honeypot. Kept in the accessibility tree's blind spot without display:none,
+ * which some bots detect and skip. A human never reaches it: the wrapper is
+ * aria-hidden and the control is removed from the tab order. */
+.contact-trap {
+  position: absolute;
+  left: -9999px;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+}
+
+.contact-submit { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+
+.contact-send {
+  padding: 12px 22px;
+  border: 1px solid var(--coral);
+  border-radius: var(--radius-sm);
+  background: var(--coral);
+  color: #fff;
+  font: 600 13px/1 var(--font);
+  cursor: pointer;
+  transition: background .18s, opacity .18s;
+}
+
+.contact-send:hover:not(:disabled) { background: var(--coral-bright); }
+.contact-send:disabled { opacity: .6; cursor: progress; }
+
+.contact-status { margin: 0; font: 500 12.5px/1.5 var(--font); color: var(--text-2); }
+.contact-status[data-kind="error"] { color: var(--coral-bright); }
+.contact-status[data-kind="pending"] { color: var(--text-2); }
+
+.contact-success {
+  padding: 26px;
+  border: 1px solid color-mix(in srgb, var(--green) 45%, var(--border));
+  border-radius: var(--radius-sm);
+  background: var(--green-soft);
+}
+
+.contact-success strong { display: block; margin-bottom: 7px; font-size: 15px; color: var(--text); }
+.contact-success p { margin: 0; color: var(--text-2); font-size: 13.5px; line-height: 1.6; }
+
+.contact-aside { display: flex; flex-direction: column; gap: 16px; }
+
+.contact-card {
+  padding: 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--card);
+}
+
+.contact-card strong { display: block; margin-bottom: 6px; font-size: 13.5px; color: var(--text); }
+.contact-card p { margin: 0 0 10px; color: var(--text-2); font-size: 12.5px; line-height: 1.55; }
+.contact-card a { font: 600 12.5px/1.4 var(--mono); color: var(--coral); word-break: break-word; }
+
+@media (max-width: 900px) {
+  .contact-layout { grid-template-columns: 1fr; gap: 34px; padding: 46px 0 72px; }
+  .contact-aside { flex-direction: row; flex-wrap: wrap; }
+  .contact-card { flex: 1 1 220px; }
+}
+
+@media (max-width: 560px) {
+  .contact-panel { padding: 20px; }
+  .contact-row { grid-template-columns: 1fr; gap: 0; }
+  .contact-aside { flex-direction: column; }
+  .contact-submit { align-items: flex-start; flex-direction: column; gap: 12px; }
+  .contact-send { width: 100%; }
+}

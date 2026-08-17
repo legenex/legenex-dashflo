@@ -73,13 +73,30 @@ export const config = {
     openaiModel: process.env.OPENAI_MODEL || 'gpt-4o-mini',
   },
 
-  // Email (password reset / OTP / notifications). Optional.
+  // The public marketing website. It may read a single authentication boolean
+  // so the homepage can render the right call to action.
+  //
+  // This is deliberately separate from ALLOWED_ORIGINS. That set also decides
+  // which origins may perform cookie-authenticated writes, so widening it to
+  // include the marketing site would hand a static, publicly editable surface
+  // CSRF trust over the application. The session-status route opts this one
+  // origin in for one read instead.
+  marketingOrigin: process.env.MARKETING_ORIGIN || 'https://dashflo.io',
+
+  // Public contact form. The destination is fixed here so a browser can never
+  // choose who a submission is delivered to.
+  contact: {
+    recipient: process.env.CONTACT_RECIPIENT || 'info@dashflo.io',
+  },
+
+  // Email (password reset / OTP / notifications / contact form). Optional.
   smtp: {
     host: process.env.SMTP_HOST || '',
     port: int(process.env.SMTP_PORT, 587),
     user: process.env.SMTP_USER || '',
     pass: process.env.SMTP_PASS || '',
     from: process.env.SMTP_FROM || 'DashOS <no-reply@localhost>',
+    fromName: process.env.SMTP_FROM_NAME || 'DashFlo Support',
     secure: bool(process.env.SMTP_SECURE, false),
   },
 
