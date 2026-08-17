@@ -47,7 +47,7 @@ afterEach(() => {
 
 describe('api key hashing primitives', () => {
   it('hashes to sha256 hex and is stable', () => {
-    const raw = 'lgnx_sup_example';
+    const raw = 'dshflo_sup_example';
     const expected = crypto.createHash('sha256').update(raw, 'utf8').digest('hex');
     expect(hashApiKey(raw)).toBe(expected);
     expect(hashApiKey(raw)).toBe(hashApiKey(raw));
@@ -61,12 +61,13 @@ describe('api key hashing primitives', () => {
     expect(keys.size).toBe(200);
 
     const one = mintApiKey('supplier');
-    expect(one.startsWith('lgnx_sup_')).toBe(true);
-    expect(mintApiKey('master').startsWith('lgnx_mst_')).toBe(true);
+    expect(one.startsWith('dshflo_sup_')).toBe(true);
+    expect(mintApiKey('master').startsWith('dshflo_mst_')).toBe(true);
+    expect(mintApiKey('buyer').startsWith('dshflo_byr_')).toBe(true);
 
     // The random segment must be long enough to be unguessable. 24 bytes
     // base64url is 32 characters.
-    expect(one.slice('lgnx_sup_'.length)).toHaveLength(32);
+    expect(one.slice('dshflo_sup_'.length)).toHaveLength(32);
   });
 
   it('derives the stored shape without the raw value', () => {

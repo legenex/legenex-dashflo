@@ -42,12 +42,80 @@ const KEY_BYTES = 24;
 // deliberate, bounded disclosure: the operator needs to tell one key from
 // another in a list. 16 characters of a 32 character key would be half the
 // secret, so the prefix is the tag plus a short discriminator instead.
+//
+// Under the DashFlo namespace the tag is 11 characters, so the discriminator
+// is 5 characters of base64url, about 30 bits. That is ample to tell keys
+// apart in a list and discloses less of the secret than the 7 characters the
+// shorter legacy tag left exposed.
 const PREFIX_LENGTH = 16;
 
+// ── Credential namespace ────────────────────────────────────────────────────
+//
+// Every credential DashFlo mints carries a `dshflo_` prefix followed by a
+// three letter type tag. One rule, no exceptions:
+//
+//   dshflo_mst_<random>   master / system ingest key
+//   dshflo_sup_<random>   supplier ingest key
+//   dshflo_byr_<random>   buyer key (minted by functions/systemKeys.js)
+//
+// The explicit `sup` tag is used rather than a bare `dshflo_` supplier key so
+// that every credential reads its own type. An operator holding a value can
+// tell what it is without looking it up, and the migration below can map a
+// legacy value to the right namespace deterministically.
+//
+// `lgnx_` was the Legenex-era namespace. Nothing mints it any more. It survives
+// here only as a translation table, because Base44 is a migration source that
+// still contains values in the old shape, and a stored DashFlo row may predate
+// this change. See translateCredentialNamespace.
+
+export const KEY_NAMESPACE = 'dshflo_';
+
 export const KEY_TAGS = {
-  master: 'lgnx_mst_',
-  supplier: 'lgnx_sup_',
+  master: 'dshflo_mst_',
+  supplier: 'dshflo_sup_',
+  buyer: 'dshflo_byr_',
 };
+
+// Legacy tag -> DashFlo tag. Ordered longest first so `lgnx_mst_` is matched
+// before the bare `lgnx_` fallback.
+export const LEGACY_TAG_TRANSLATIONS = [
+  ['lgnx_mst_', 'dshflo_mst_'],
+  ['lgnx_sup_', 'dshflo_sup_'],
+  ['lgnx_byr_', 'dshflo_byr_'],
+  ['lgnx_ext_', 'dshflo_ext_'],
+  ['lgnx_', 'dshflo_'],
+];
+
+export function isLegacyNamespace(raw) {
+  return /^lgnx_/.test(String(raw ?? '').trim());
+}
+
+export function isDashfloNamespace(raw) {
+  return String(raw ?? '').trim().startsWith(KEY_NAMESPACE);
+}
+
+// Map a credential value into the DashFlo namespace.
+//
+// The transformation is a pure prefix swap and is deliberately deterministic:
+// the same input always produces the same output, so a migration that runs
+// twice produces the same key, the same SHA-256 hash and the same stored row.
+// That is what makes the Base44 import idempotent without needing to remember
+// whether it already converted a given record.
+//
+// The secret material after the tag is preserved verbatim. It is 24 bytes of
+// base64url entropy in both namespaces, the hash is taken over the whole
+// string rather than the suffix, and there is no checksum or length rule that
+// the prefix participates in, so preserving it is safe and keeps the record's
+// identity intact. A value that is already DashFlo, or is not a recognised
+// credential at all, is returned unchanged.
+export function translateCredentialNamespace(raw) {
+  const value = String(raw ?? '');
+  if (!value || !isLegacyNamespace(value)) return value;
+  for (const [from, to] of LEGACY_TAG_TRANSLATIONS) {
+    if (value.startsWith(from)) return `${to}${value.slice(from.length)}`;
+  }
+  return value;
+}
 
 // SHA-256 hex of a presented key. Exported so the backfill script and the
 // tests derive the hash exactly the way the resolver does, rather than
@@ -144,7 +212,12 @@ export async function resolveActiveApiKey(db, rawKey) {
 }
 
 export default {
+  KEY_NAMESPACE,
   KEY_TAGS,
+  LEGACY_TAG_TRANSLATIONS,
+  isLegacyNamespace,
+  isDashfloNamespace,
+  translateCredentialNamespace,
   hashApiKey,
   mintApiKey,
   keyPrefixOf,

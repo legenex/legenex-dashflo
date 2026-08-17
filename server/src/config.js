@@ -41,6 +41,26 @@ export const config = {
     jwtSecret: process.env.JWT_SECRET || 'dev-insecure-change-me',
     jwtExpiresIn: process.env.JWT_EXPIRES_IN || '30d',
     cookieName: 'dashos_token',
+
+    // Google sign-in. The Identity Services ID token flow is used, so only the
+    // Client ID is required and it is a public value by design: it is sent to
+    // the browser so Google's button can be rendered. No Client Secret is
+    // needed for login and none should be set for that purpose.
+    //
+    // GOOGLE_ALLOWED_DOMAINS restricts sign-in to named Workspace domains
+    // (comma separated). Empty means no restriction, which is correct when
+    // access is controlled by invitation instead.
+    //
+    // GOOGLE_ALLOW_SIGNUP lets an unknown, uninvited Google account create an
+    // ordinary user. Off by default: authentication is not authorization.
+    google: {
+      clientId: process.env.GOOGLE_CLIENT_ID || '',
+      allowedDomains: String(process.env.GOOGLE_ALLOWED_DOMAINS || '')
+        .split(',')
+        .map((d) => d.trim().toLowerCase())
+        .filter(Boolean),
+      allowSignup: bool(process.env.GOOGLE_ALLOW_SIGNUP, false),
+    },
   },
 
   // LLM provider adapter. LLM_PROVIDER = anthropic | openai

@@ -21,16 +21,8 @@ import { supplierCostMetrics, payoutSummary } from '@/lib/supplierCost';
 import SupplierSourceRows from '@/components/campaigns/SupplierSourceRows';
 import SourceCreateDialog from '@/components/campaigns/SourceCreateDialog';
 import RowActionsMenu from '@/components/campaigns/RowActionsMenu';
+import { createSupplierKey } from '@/lib/supplierKeys';
 
-function generateKey(supplierType = '') {
-  const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
-  let prefix = 'lgnx_ext_';
-  if (supplierType === 'Internal') prefix = 'lgnx_int_';
-  else if (supplierType === 'Calls') prefix = 'lgnx_cls_';
-  let key = prefix;
-  for (let i = 0; i < 32; i++) key += chars[Math.floor(Math.random() * chars.length)];
-  return key;
-}
 
 const BLANK = {
   name: '', sid: '', supplier_type: '', vertical: '', payout_type: '', payout_value: null,
@@ -134,12 +126,10 @@ export default function CampaignSuppliers() {
       payment_method: s.payment_method, billing_contact_email: s.billing_contact_email,
       portal_enabled: false, active: s.active,
     });
-    const key = generateKey(s.supplier_type);
-    await api.entities.ApiKey.create({
-      name: supplier.name, type: 'supplier', supplier_name: supplier.name, supplier_id: supplier.id,
-      vertical: s.vertical, key, key_prefix: key.substring(0, 16), active: s.active, request_count: 0,
+    const issued = await createSupplierKey({
+      name: supplier.name, supplierId: supplier.id, supplierName: supplier.name, vertical: s.vertical,
     });
-    setNewKey(key); setEditId(null); setModal(true);
+    setNewKey(issued.key); setEditId(null); setModal(true);
     qc.invalidateQueries({ queryKey: ['suppliers'] });
     qc.invalidateQueries({ queryKey: ['api-keys'] });
     toast.success('Supplier cloned - copy the new API key now!');
@@ -174,12 +164,10 @@ export default function CampaignSuppliers() {
 
   const createSupplier = async () => {
     const supplier = await api.entities.Supplier.create({ ...supplierPayload(), portal_enabled: false });
-    const key = generateKey(form.supplier_type);
-    await api.entities.ApiKey.create({
-      name: form.name, type: 'supplier', supplier_name: form.name, supplier_id: supplier.id,
-      vertical: form.vertical, key, key_prefix: key.substring(0, 16), active: form.active, request_count: 0,
+    const issued = await createSupplierKey({
+      name: form.name, supplierId: supplier.id, supplierName: form.name, vertical: form.vertical,
     });
-    setNewKey(key);
+    setNewKey(issued.key);
     qc.invalidateQueries({ queryKey: ['suppliers'] });
     qc.invalidateQueries({ queryKey: ['api-keys'] });
     toast.success('Supplier created - copy the API key now!');

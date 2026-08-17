@@ -5,6 +5,7 @@ import {
   mergeOrdinarySecrets,
   normalizeMigrationBundle,
   prepareMigrationRecord,
+  NAMESPACE_MIGRATED_FIELD,
 } from '../src/lib/migrationImport.js';
 import {
   ENTITY_ORDER,
@@ -12,7 +13,7 @@ import {
   MIGRATION_ENTITY_ORDER,
   MIGRATION_ONLY_ENTITIES,
 } from '../src/functions/systemTransfer.generated.js';
-import { hashApiKey } from '../src/lib/apiKeys.js';
+import { hashApiKey, keyPrefixOf, translateCredentialNamespace } from '../src/lib/apiKeys.js';
 
 const PASSPHRASE = 'correct horse battery staple';
 
@@ -73,10 +74,38 @@ describe('Base44 owner migration package compatibility', () => {
 
   it('derives the supplier authentication hash and does not retain cleartext', () => {
     const raw = 'lgnx_sup_existing-production-value';
+    const dashflo = translateCredentialNamespace(raw);
     const prepared = prepareMigrationRecord('owner', 'ApiKey', { id: 'k1', key: raw, active: true });
-    expect(prepared.data.key_hash).toBe(hashApiKey(raw));
-    expect(prepared.data.key_prefix).toBe(raw.slice(0, 16));
+
+    // The credential is stored in the DashFlo namespace, not the Base44 one.
+    // DashFlo is the canonical system, so its namespace wins on import.
+    expect(prepared.data.key_hash).toBe(hashApiKey(dashflo));
+    expect(prepared.data.key_hash).not.toBe(hashApiKey(raw));
+    expect(prepared.data.key_prefix).toBe(keyPrefixOf(dashflo));
+    expect(prepared.data.key_prefix.startsWith('dshflo_sup_')).toBe(true);
     expect(prepared.data).not.toHaveProperty('key');
+    expect(prepared.namespaceMigrated).toBe(true);
+
+    // The old Legenex value is not recoverable from what was stored.
+    expect(JSON.stringify(prepared.data)).not.toContain(raw);
+  });
+
+  it('reruns the same credential without rotating or restamping it', () => {
+    const raw = 'lgnx_sup_existing-production-value';
+    const source = { id: 'k1', key: raw, active: true, updated_date: '2026-08-17T12:00:00.000Z' };
+    const first = prepareMigrationRecord('owner', 'ApiKey', source);
+    const second = prepareMigrationRecord('owner', 'ApiKey', source, first.data);
+
+    // Byte identical on the second run, which is what makes the record
+    // compare equal and be preserved rather than updated.
+    expect(second.data).toEqual(first.data);
+    expect(second.data.key_hash).toBe(first.data.key_hash);
+    expect(second.data[NAMESPACE_MIGRATED_FIELD]).toBe(first.data[NAMESPACE_MIGRATED_FIELD]);
+
+    // A record that already arrived in the DashFlo namespace is left alone.
+    const already = prepareMigrationRecord('owner', 'ApiKey', { id: 'k2', key: translateCredentialNamespace(raw) });
+    expect(already.data.key_hash).toBe(first.data.key_hash);
+    expect(already.namespaceMigrated).toBe(false);
   });
 
   it('drops passwords, sessions, refresh tokens, invite tokens and OAuth state', () => {

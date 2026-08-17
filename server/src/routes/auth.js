@@ -7,6 +7,10 @@ import { config } from '../config.js';
 import { signToken, requireAuth } from '../middleware/auth.js';
 import { sendMail } from '../lib/mailer.js';
 import { rateLimit } from '../middleware/rateLimit.js';
+import { createServerClient } from '../lib/serverClient.js';
+import { resolveGoogleAppCreds } from '../lib/googleAppCreds.js';
+import { verifyGoogleIdToken, GoogleIdentityError } from '../lib/googleIdentity.js';
+import { decideGoogleLink, LINK_ACTION } from '../lib/googleAccountLink.js';
 
 const router = express.Router();
 
@@ -21,6 +25,7 @@ const limitLoginPerAccount = rateLimit({ name: 'login-account', limit: 5, window
 const limitRegister = rateLimit({ name: 'register', limit: 5, windowMs: 60 * 60_000 });
 const limitOtp = rateLimit({ name: 'otp', limit: 10, windowMs: 15 * 60_000, by: byEmail });
 const limitReset = rateLimit({ name: 'reset', limit: 5, windowMs: 60 * 60_000 });
+const limitGoogle = rateLimit({ name: 'google', limit: 20, windowMs: 15 * 60_000 });
 
 const genOtp = () => String(crypto.randomInt(100000, 1000000));
 const normalizeEmail = (e) => String(e || '').trim().toLowerCase();
@@ -215,6 +220,16 @@ router.post('/login', limitLogin, limitLoginPerAccount, async (req, res) => {
   if (!cred || !cred.password_hash) return res.status(401).json({ error: 'Invalid email or password' });
   const ok = await bcrypt.compare(String(password || ''), cred.password_hash);
   if (!ok) return res.status(401).json({ error: 'Invalid email or password' });
+  // A disabled account has no login route at all, password or federated.
+  // Checked after the password so a disabled account is not distinguishable
+  // from a wrong password to somebody who does not hold the password.
+  if (cred.disabled) {
+    await recordAuthEvent({
+      event: 'password_login', provider: 'password', outcome: 'refused',
+      reason: 'ACCOUNT_DISABLED', subject_email: email, user_id: cred.user_id,
+    });
+    return res.status(403).json({ error: 'This account is not able to sign in. Contact an operator.' });
+  }
 
   const user = await provisionUserOnLogin(cred, email);
   const token = signToken({ id: cred.user_id, email });
@@ -249,6 +264,214 @@ async function provisionUserOnLogin(cred, email) {
   }
   return user;
 }
+
+// ── Google sign-in ──────────────────────────────────────────────────────────
+//
+// Two endpoints. `/google/config` tells the browser whether Google sign-in is
+// available and, if so, the Client ID needed to render Google's button. That
+// value is public by design and is the only Google value that ever reaches a
+// client. `/google` takes the resulting ID token and turns it into a session.
+//
+// Nothing here logs an ID token, an authorization code, an access token, a
+// refresh token or a client secret. The audit record carries the email that
+// was attempted and a stable reason code, which is what an operator needs to
+// answer "why can this person not get in" without holding credential material.
+
+async function recordAuthEvent(fields) {
+  try {
+    await createServerClient(null).entities.AuthAuditEvent.create({
+      ...fields,
+      at: new Date().toISOString(),
+    });
+  } catch {
+    // An audit write must never be the reason a login fails. The failure is
+    // still visible in the response the caller receives.
+  }
+}
+
+async function googleSettings() {
+  const db = createServerClient(null);
+  const creds = await resolveGoogleAppCreds(db, process.env, config.auth.google);
+  return { db, creds };
+}
+
+router.get('/google/config', async (_req, res) => {
+  try {
+    const { creds } = await googleSettings();
+    res.json({
+      enabled: creds.configured,
+      client_id: creds.clientId,
+      source: creds.source,
+      // Echoed so the login page can say which domains are accepted rather
+      // than showing a button that always refuses.
+      allowed_domains: config.auth.google.allowedDomains,
+    });
+  } catch {
+    res.json({ enabled: false, client_id: '', source: 'none', allowed_domains: [] });
+  }
+});
+
+router.post('/google', limitGoogle, async (req, res) => {
+  const credential = req.body?.credential || req.body?.id_token || req.body?.token;
+  const expectedNonce = req.body?.nonce ? String(req.body.nonce) : null;
+
+  let identity;
+  let creds;
+  try {
+    ({ creds } = await googleSettings());
+    if (!creds.configured) {
+      return res.status(503).json({
+        error: 'Google sign-in is not configured',
+        message: 'An operator must set the Google Client ID in Settings > API Keys > System Keys.',
+      });
+    }
+    identity = await verifyGoogleIdToken(credential, {
+      clientId: creds.clientId,
+      expectedNonce,
+    });
+  } catch (err) {
+    if (err instanceof GoogleIdentityError) {
+      await recordAuthEvent({
+        event: 'google_login', provider: 'google', outcome: 'refused',
+        reason: err.code, detail: 'Google token verification failed',
+      });
+      // Verification failures are all one answer to the caller. Which check
+      // failed is in the audit trail, not in a response that would help
+      // somebody probe the verifier.
+      return res.status(401).json({ error: 'Google sign-in could not be verified', code: err.code });
+    }
+    throw err;
+  }
+
+  // Gather the state the policy needs. Both lookups are exact and indexed.
+  const [{ rows: bySub }, { rows: byEmail }] = await Promise.all([
+    pool.query('SELECT * FROM auth_credentials WHERE google_sub = $1', [identity.sub]),
+    pool.query('SELECT * FROM auth_credentials WHERE lower(email) = lower($1)', [identity.email]),
+  ]);
+
+  let invitation = null;
+  if (bySub.length === 0 && byEmail.length === 0) {
+    try {
+      const invites = await repo('Invitation').filter({ email: identity.email });
+      invitation = invites.find((i) => String(i.status || 'pending').toLowerCase() === 'pending')
+        || invites[0]
+        || null;
+    } catch { /* Invitation entity may be empty */ }
+  }
+
+  const decision = decideGoogleLink({
+    identity,
+    credentialBySub: bySub[0] || null,
+    credentialsByEmail: byEmail,
+    invitation,
+    allowSelfSignup: config.auth.google.allowSignup,
+    allowedDomains: config.auth.google.allowedDomains,
+  });
+
+  if (decision.action === LINK_ACTION.REFUSE) {
+    await recordAuthEvent({
+      event: 'google_login', provider: 'google', outcome: 'refused',
+      reason: decision.reason, subject_email: identity.email, detail: decision.detail,
+    });
+    // 403 rather than 401: Google did authenticate this person. DashFlo is
+    // declining to authorize them, which is a different thing and the login
+    // page says so.
+    return res.status(403).json({ error: decision.message, code: decision.reason });
+  }
+
+  let userId = decision.userId || null;
+
+  if (decision.action === LINK_ACTION.LINK_AND_LOGIN) {
+    // Conditional on google_sub still being unset, so two simultaneous first
+    // logins cannot both claim the row. The UNIQUE index is the second line of
+    // defence if a different Google account races for the same row.
+    const linked = await pool.query(
+      `UPDATE auth_credentials
+          SET google_sub = $2, google_email = $3, google_linked_at = now()
+        WHERE user_id = $1 AND google_sub IS NULL
+        RETURNING user_id`,
+      [decision.userId, identity.sub, identity.email],
+    );
+    if (linked.rows.length === 0) {
+      const { rows } = await pool.query('SELECT google_sub FROM auth_credentials WHERE user_id = $1', [decision.userId]);
+      if (rows[0]?.google_sub !== identity.sub) {
+        await recordAuthEvent({
+          event: 'google_link', provider: 'google', outcome: 'refused',
+          reason: 'IDENTITY_CONFLICT', subject_email: identity.email, user_id: decision.userId,
+        });
+        return res.status(403).json({ error: 'This Google account cannot be linked automatically. Contact an operator.', code: 'IDENTITY_CONFLICT' });
+      }
+    }
+    await recordAuthEvent({
+      event: 'google_link', provider: 'google', outcome: 'allowed',
+      subject_email: identity.email, user_id: decision.userId,
+      detail: decision.hadPassword
+        ? 'Linked to an existing password account; password sign-in remains available'
+        : 'Linked to an existing account',
+    });
+  }
+
+  if (decision.action === LINK_ACTION.ACTIVATE_INVITATION || decision.action === LINK_ACTION.PROVISION_NEW) {
+    userId = newId();
+    try {
+      await pool.query(
+        `INSERT INTO auth_credentials (user_id, email, google_sub, google_email, google_linked_at)
+         VALUES ($1, $2, $3, $2, now())`,
+        [userId, identity.email, identity.sub],
+      );
+    } catch (err) {
+      if (err?.code === '23505') {
+        // Somebody registered this address in the race. Nothing has been
+        // granted, so refusing and asking for a retry is safe.
+        return res.status(409).json({ error: 'This account is being set up. Try again.', code: 'RACE' });
+      }
+      throw err;
+    }
+
+    // The User record carries role and permissions. For an invitation those
+    // come from the invitation, which an operator created. For open sign-up
+    // they are the fixed ordinary-user values the policy pinned, and there is
+    // no input that makes them anything else.
+    await repo('User').create({
+      id: userId,
+      email: identity.email,
+      full_name: decision.fullName || identity.name || identity.email.split('@')[0],
+      role: decision.role || 'user',
+      base_role: decision.baseRole || decision.base_role || 'manager',
+      permissions: decision.permissions || undefined,
+    });
+
+    if (decision.invitationId) {
+      try { await repo('Invitation').update(decision.invitationId, { status: 'accepted' }); } catch { /* best effort */ }
+    }
+
+    await recordAuthEvent({
+      event: decision.action === LINK_ACTION.ACTIVATE_INVITATION ? 'google_invitation_activated' : 'google_signup',
+      provider: 'google', outcome: 'allowed', subject_email: identity.email, user_id: userId,
+      detail: decision.action === LINK_ACTION.ACTIVATE_INVITATION
+        ? 'Activated from a pending invitation; role taken from the invitation'
+        : 'Open Google sign-up created an ordinary user',
+    });
+  }
+
+  const user = await repo('User').get(userId);
+  if (!user) {
+    return res.status(500).json({ error: 'Account record could not be resolved' });
+  }
+
+  const token = signToken({ id: userId, email: user.email || identity.email });
+  await recordAuthEvent({
+    event: 'google_login', provider: 'google', outcome: 'allowed',
+    subject_email: identity.email, user_id: userId,
+    detail: decision.emailChangedAtGoogle
+      ? 'Signed in; the Google address differs from the DashFlo address and was not copied over'
+      : 'Signed in',
+  });
+
+  res
+    .cookie(config.auth.cookieName, token, sessionCookieOptions())
+    .json({ access_token: token, user });
+});
 
 router.get('/me', requireAuth, (req, res) => {
   res.json(req.user);

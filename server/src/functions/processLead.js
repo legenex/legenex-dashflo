@@ -769,7 +769,7 @@ function getTriggerEventName(conn, trigger) {
 
 // Fire all matching connectors for a given trigger. Fire-and-forget: returns
 // immediately, results handled in background.
-function fireConnectors(db, connectors, trigger, leadData, leadId, supplierAttribution, supplierRecord) {
+function dispatchConnectors(db, connectors, trigger, leadData, leadId, supplierAttribution, supplierRecord) {
   for (const conn of connectors) {
     if (!conn.enabled) continue;
     const triggers = parseJsonArray(conn.triggers);
@@ -869,7 +869,7 @@ function exposeRevenueFor(apiKeyRecord, supplierRecord) {
 
 // Fire matching Deliveries destinations (non-default LeadByteConnector records).
 // Same filter/condition/trigger logic as Conversion Events connectors.
-function fireDeliveries(db, destinations, trigger, leadData, leadId, supplierAttribution, supplierRecord) {
+function dispatchDeliveries(db, destinations, trigger, leadData, leadId, supplierAttribution, supplierRecord) {
   for (const dest of destinations) {
     if (!dest.enabled) continue;
     if (dest.is_default) continue;
@@ -1321,6 +1321,38 @@ export default async function processLead(ctx) {
   let leadId = null;
   let capturedRevenue = null;
 
+  // ── Receipt conclusion state ────────────────────────────────────────────
+  //
+  // Invariant 3: a committed receipt is replayable after a crash, and replay
+  // cannot double-deliver or double-bill. That needs two things, and until now
+  // this function did neither reliably.
+  //
+  // First, every exit must conclude the receipt. completeReceipt used to run
+  // on exactly one of the sixteen returns below. The other fifteen left the
+  // receipt at status `received` with a NULL terminal_outcome, which is
+  // precisely the state a replay reads as "not delivered and not billed".
+  // Three of those fifteen returned *after* delivery had already fired. The
+  // single test post made against production is sitting in that state right
+  // now: a receipt with no outcome and no lead.
+  //
+  // Second, the effects flag has to be honest. It is what a replay consults to
+  // tell "already done" from "not yet done", so it is set at the outbound
+  // sites themselves rather than inferred at the end.
+  let effectsApplied = false;
+  let concludeReceipt = null;
+
+  // Local shadows of the outbound dispatchers. Every delivery and every
+  // connector call goes through one of these, so the flag cannot drift from
+  // what actually left the building. Fire-and-forget semantics are unchanged.
+  const fireConnectors = (...args) => {
+    effectsApplied = true;
+    return dispatchConnectors(...args);
+  };
+  const fireDeliveries = (...args) => {
+    effectsApplied = true;
+    return dispatchDeliveries(...args);
+  };
+
   try {
     const body = ctx.body || {};
     const payload = body.payload || body;
@@ -1512,6 +1544,61 @@ export default async function processLead(ctx) {
         message: capture.dnc?.message || 'Suppression list unavailable',
         Response: 'Error',
       }), 503);
+    }
+
+    // ── Every exit from here on concludes the receipt exactly once ────────
+    //
+    // Rather than adding a completeReceipt call to sixteen separate returns and
+    // hoping the seventeenth remembers, the response boundary itself is
+    // wrapped. `ctx` is rebound to a context whose json() concludes first and
+    // then answers. Every `return ctx.json(...)` below, including the one in
+    // the outer catch, therefore concludes, and a return added later does too
+    // without anyone having to know this rule exists.
+    //
+    // completeReceipt is already idempotent: its UPDATE carries
+    // `AND terminal_outcome IS NULL`, so the explicit call on the success path
+    // and this wrapper cannot both take effect. The local guard avoids the
+    // redundant round trip.
+    //
+    // The outcome is derived from the envelope the pipeline built, so the
+    // receipt records the same verdict the supplier was given. A receipt that
+    // cannot be concluded does not fail the response: the lead has already
+    // been processed, and leaving it retryable is the safe direction.
+    concludeReceipt = async (envelope) => {
+      if (!capture?.receipt?.id) return;
+      const body = envelope && typeof envelope === 'object' ? envelope : {};
+      const rejected = body.ok === false;
+      // A persisted Lead row counts as an applied effect in its own right: a
+      // replay that re-ran this receipt would create a second one. So the flag
+      // is "an outbound call fired, or a durable lead exists", not just the
+      // former.
+      const applied = effectsApplied || Boolean(leadId);
+      try {
+        await completeReceipt({
+          id: capture.receipt.id,
+          outcome: rejected ? 'rejected' : 'processed',
+          reason: String(body.lead_status || body.code || body.acceptance || 'processed').slice(0, 200),
+          effectsApplied: applied,
+          db: receiptPool,
+        });
+      } catch (e) {
+        console.error('processLead: could not conclude receipt', e.message);
+      }
+    };
+
+    {
+      let concluded = false;
+      const inner = ctx;
+      ctx = {
+        ...inner,
+        json: async (payloadBody, status = 200) => {
+          if (!concluded) {
+            concluded = true;
+            await concludeReceipt(payloadBody);
+          }
+          return inner.json(payloadBody, status);
+        },
+      };
     }
 
     await db.entities.ApiKey.update(apiKeyRecord.id, {
@@ -2656,24 +2743,10 @@ export default async function processLead(ctx) {
       response_returned: JSON.stringify(finalEnvelope),
     });
 
-    // Conclude the receipt. Task I3. Without this every processed lead would
-    // sit in the pending backlog forever and a replay would reprocess it.
-    // effectsApplied records that delivery and billing have already run, which
-    // is what a replay reads to tell "already done" from "not yet done".
-    try {
-      await completeReceipt({
-        id: capture.receipt.id,
-        outcome: 'processed',
-        reason: finalStatus,
-        effectsApplied: true,
-        db: receiptPool,
-      });
-    } catch (e) {
-      // A receipt that cannot be concluded stays retryable, which is the safe
-      // direction: the lead is already delivered and the replay guard is the
-      // effects_applied flag, not this write.
-      console.error('processLead: could not conclude receipt', e.message);
-    }
+    // The receipt is concluded by the wrapped ctx.json below, which is the one
+    // place that concludes for every exit rather than only this one. The
+    // explicit call that used to live here is gone: keeping it would have made
+    // this path look like the rule when it was the exception.
 
     // Fire outbound webhooks async (non-blocking)
     try {

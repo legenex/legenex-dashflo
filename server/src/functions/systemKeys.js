@@ -1,9 +1,9 @@
-import crypto from 'node:crypto';
 import { resolveRoleClass, ROLE } from '../lib/entityPolicy.js';
 import { resolveMetaAppCreds } from '../lib/metaAppCreds.js';
+import { mintApiKey, keyPrefixOf, isLegacyNamespace } from '../lib/apiKeys.js';
 
 const ADMIN_ROLES = new Set([ROLE.OWNER, ROLE.ADMIN]);
-const SYSTEM_PROVIDERS = new Set(['openai', 'anthropic', 'gemini', 'meta', 'mcp_server', 'other']);
+const SYSTEM_PROVIDERS = new Set(['openai', 'anthropic', 'gemini', 'meta', 'google', 'stripe', 'mcp_server', 'other']);
 
 function ownerOnly(user) {
   return resolveRoleClass(user) === ROLE.OWNER;
@@ -46,8 +46,85 @@ async function audit(db, caller, fields) {
   }).catch(() => {});
 }
 
+// Buyer keys come from the one canonical generator in lib/apiKeys.js so that
+// there is a single place where a DashFlo credential is created and a single
+// namespace rule. This used to build its own value with its own hardcoded
+// Legenex prefix, which is exactly how a second namespace gets introduced.
 function mintBuyerKey() {
-  return `lgnx_byr_${crypto.randomBytes(24).toString('base64url')}`;
+  return mintApiKey('buyer');
+}
+
+// Counts for the API Keys dashboard.
+//
+// This exists so the landing page can show how many credentials of each kind
+// there are, and how many are active, without listing them. Nothing here
+// returns a credential value, a masked value or even a prefix: it is counts
+// and status only, so opening the page discloses nothing.
+//
+// Categories the caller may not manage are reported as locked rather than
+// omitted, so a manager sees that System Keys exist and are owner-only instead
+// of seeing a page that looks like it has nothing on it.
+async function overview(db, caller) {
+  const isOwner = ownerOnly(caller);
+  const isAdmin = adminOrOwner(caller);
+
+  const categories = {};
+
+  if (isOwner) {
+    const rows = await db.entities.SystemKey.list('-updated_date', 500).catch(() => []);
+    const withSecret = rows.filter((row) => Boolean(row.secret));
+    categories.system = {
+      locked: false,
+      stored: rows.length,
+      active: rows.filter((row) => row.active !== false).length,
+      configured: withSecret.length,
+      // Which named platform integrations actually have a credential. The
+      // dashboard uses this to show a per-provider status without listing the
+      // records themselves.
+      providers: [...new Set(rows.filter((r) => r.active !== false && r.secret).map((r) => r.provider || 'other'))].sort(),
+    };
+  } else {
+    categories.system = { locked: true, reason: 'System Keys are owner only' };
+  }
+
+  if (isAdmin) {
+    const [supplierRows, buyerRows, buyers] = await Promise.all([
+      db.entities.ApiKey.list('-created_date', 1000).catch(() => []),
+      db.entities.BuyerApiKey.list('-created_date', 1000).catch(() => []),
+      db.entities.Buyer.list('-created_date', 1000).catch(() => []),
+    ]);
+
+    const active = (row) => row.active !== false;
+    // A key still carrying the retired Legenex prefix needs rotating. Counting
+    // it here is what makes the dashboard able to say so out loud.
+    const legacy = supplierRows.filter((row) => isLegacyNamespace(row.key_prefix));
+
+    categories.supplier = {
+      locked: false,
+      issued: supplierRows.length,
+      active: supplierRows.filter(active).length,
+      master: supplierRows.filter((row) => row.type === 'master').length,
+      requests: supplierRows.reduce((sum, row) => sum + (Number(row.request_count) || 0), 0),
+      legacy_namespace: legacy.length,
+    };
+
+    const legacyBuyerCredentials = buyers.filter((buyer) => Boolean(buyer.buyer_api_key));
+    categories.buyer = {
+      locked: false,
+      issued: buyerRows.length + legacyBuyerCredentials.length,
+      active: buyerRows.filter(active).length + legacyBuyerCredentials.filter(active).length,
+      buyers_covered: new Set([
+        ...buyerRows.filter(active).map((row) => row.buyer_id),
+        ...legacyBuyerCredentials.map((buyer) => buyer.id),
+      ].filter(Boolean)).size,
+      buyers_total: buyers.length,
+    };
+  } else {
+    categories.supplier = { locked: true, reason: 'Supplier keys are admin only' };
+    categories.buyer = { locked: true, reason: 'Buyer keys are admin only' };
+  }
+
+  return { success: true, categories };
 }
 
 export default async function systemKeys(ctx) {
@@ -57,6 +134,13 @@ export default async function systemKeys(ctx) {
   const db = ctx.db;
 
   try {
+    if (op === 'overview') {
+      if (!adminOrOwner(caller) && !ownerOnly(caller)) {
+        return ctx.json({ error: 'Not permitted to view API key configuration' }, 403);
+      }
+      return overview(db, caller);
+    }
+
     if (op.startsWith('system_')) {
       if (!ownerOnly(caller)) return ctx.json({ error: 'System Keys are owner only' }, 403);
 
@@ -181,7 +265,7 @@ export default async function systemKeys(ctx) {
         buyer_name: buyer.company_name || buyer.buyer_code || '',
         name: String(body.name || '').trim() || `${buyer.company_name || buyer.buyer_code || 'Buyer'} API key`,
         key: raw,
-        key_prefix: raw.slice(0, 16),
+        key_prefix: keyPrefixOf(raw),
         scopes: typeof body.scopes === 'string' ? body.scopes : JSON.stringify(['feedback', 'returns']),
         active: true,
         request_count: 0,
@@ -219,7 +303,7 @@ export default async function systemKeys(ctx) {
       const raw = mintBuyerKey();
       const saved = await db.entities.BuyerApiKey.update(id, {
         key: raw,
-        key_prefix: raw.slice(0, 16),
+        key_prefix: keyPrefixOf(raw),
         request_count: 0,
         last_used_at: null,
         rotated_at: new Date().toISOString(),

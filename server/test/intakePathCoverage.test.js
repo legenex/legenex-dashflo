@@ -74,11 +74,44 @@ describe('the canonical intake sequence is wired into processLead', () => {
     expect(src).toContain('INTAKE_OUTCOME.DUPLICATE');
   });
 
-  it('concludes the receipt on the success path', () => {
-    // Without this every processed lead stays in the pending backlog and a
-    // replay reprocesses it.
+  it('concludes the receipt on every exit, not only the success path', () => {
+    // This used to assert a literal `effectsApplied: true` on the one
+    // completeReceipt call at the end of the function. That call existed and
+    // the assertion passed, while fifteen other returns concluded nothing.
+    // The production test post is sitting in exactly that state: a receipt at
+    // status `received` with no outcome and no lead.
+    //
+    // So the property is checked rather than the string. Conclusion happens at
+    // the response boundary, which every return goes through by construction.
     expect(src).toContain('completeReceipt(');
-    expect(src).toContain('effectsApplied: true');
+    expect(src).toContain('concludeReceipt');
+
+    // Exactly one place concludes, and it is the wrapper. A second
+    // completeReceipt call site would mean a path that concludes twice or a
+    // path that bypasses the wrapper.
+    const callSites = src.match(/await completeReceipt\(/g) || [];
+    expect(callSites).toHaveLength(1);
+
+    // The wrapper is installed before any post-capture return can be reached.
+    const wrapper = src.indexOf('concludeReceipt = async');
+    const capture = src.indexOf('await captureAndScreen(');
+    const counters = src.indexOf('await db.entities.ApiKey.update(apiKeyRecord.id');
+    expect(wrapper).toBeGreaterThan(capture);
+    expect(wrapper).toBeLessThan(counters);
+  });
+
+  it('tracks applied effects at the outbound sites rather than assuming them', () => {
+    // effects_applied is what a replay reads to tell "already delivered" from
+    // "not yet delivered", so it has to reflect what actually fired. Hardcoding
+    // true made every rejected lead claim it had been delivered and billed.
+    expect(src).not.toMatch(/effectsApplied:\s*true/);
+    expect(src).toContain('const fireDeliveries = (...args) => {');
+    expect(src).toContain('const fireConnectors = (...args) => {');
+    expect(src).toContain('effectsApplied = true;');
+
+    // Nothing may call the raw dispatchers directly and skip the flag.
+    const rawCalls = src.match(/(?<!function )dispatch(Deliveries|Connectors)\(/g) || [];
+    expect(rawCalls).toHaveLength(2); // the two calls inside the wrappers
   });
 });
 

@@ -1,0 +1,37 @@
+{
+  "name": "AuthAuditEvent",
+  "type": "object",
+  "properties": {
+    "event": {
+      "type": "string",
+      "description": "What happened, for example google_login, google_link, google_refused, credential_namespace_migrated"
+    },
+    "provider": {
+      "type": "string",
+      "description": "Identity provider involved, for example google or password"
+    },
+    "outcome": {
+      "type": "string",
+      "enum": ["allowed", "refused", "error"],
+      "description": "Whether the attempt resulted in a session"
+    },
+    "reason": {
+      "type": "string",
+      "description": "Stable machine readable code, for example NOT_REGISTERED or BAD_AUDIENCE"
+    },
+    "subject_email": {
+      "type": "string",
+      "description": "Address the attempt named. Never a token, code or secret."
+    },
+    "user_id": {
+      "type": "string",
+      "description": "DashFlo user the attempt resolved to, when it resolved to one"
+    },
+    "detail": {
+      "type": "string",
+      "description": "Human readable context. Must never contain an ID token, authorization code, access token, refresh token, client secret or API key value."
+    },
+    "at": { "type": "string", "format": "date-time" }
+  },
+  "required": ["event", "outcome", "at"]
+}

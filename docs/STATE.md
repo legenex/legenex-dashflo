@@ -1258,3 +1258,132 @@ and exemptions are not established. The separate health policy is justified by
 actual accident, injury, treatment, insurance, and qualification fields, while
 geographic applicability and any required consent or sale authorization remain
 for owner and counsel review.
+
+## Session 17 August 2026, later: Google auth, credential namespace, receipt conclusion
+
+### The finding that mattered most
+
+The single lead posted to `https://api.dashflo.io/functions/leads` did not
+become a lead. Production evidence, read directly:
+
+```
+lead_receipts: 1 row, status=received, terminal_outcome=NULL,
+               effects_applied=false, supplier_key_id=a182794eb8ef...
+e_lead:        0 rows
+e_error_log:   no entry for that post
+```
+
+It authenticated, committed a receipt, then returned 200 from one of the
+fifteen exits that concluded nothing. This is the blocker the previous session
+recorded as "do not build the replay worker before fixing it", now observed in
+production rather than predicted.
+
+Fixed by wrapping the response boundary instead of adding a sixteenth
+`completeReceipt` call. After the capture succeeds, `ctx` is rebound to a
+context whose `json()` concludes the receipt and then answers. Every existing
+return goes through it, including the outer catch, and so does any return added
+later. `completeReceipt` already guards on `terminal_outcome IS NULL`, so the
+wrapper cannot double-conclude.
+
+`effects_applied` is now tracked at the outbound sites. `fireDeliveries` and
+`fireConnectors` are local wrappers that set a flag before delegating to the
+renamed module-level `dispatchDeliveries` / `dispatchConnectors`, and a
+persisted Lead row counts as an effect too. The old code hardcoded `true` on its
+single conclusion, which would have told a replay that a refused lead had
+already been delivered and billed.
+
+Evidence: `server/test/receiptConclusion.test.js`, 7 tests against a real
+disposable PostgreSQL, covering the no-configuration exit, the missing-required-
+fields exit, the outer catch, double-conclusion, and the two paths that must
+write no receipt at all (dry run, unauthenticated).
+
+### Credential namespace, Legenex to DashFlo
+
+One rule, in `server/src/lib/apiKeys.js`:
+
+```
+dshflo_mst_<random>   master and system ingest keys
+dshflo_sup_<random>   supplier ingest keys
+dshflo_byr_<random>   buyer keys
+```
+
+`translateCredentialNamespace` is a pure prefix swap and is deterministic, which
+is what makes the Base44 import idempotent: converting the same value twice
+produces the same key, the same SHA-256 and the same stored row, so a rerun
+compares equal and preserves rather than rotates.
+
+Three browser-side generators were found and removed. They were not only in the
+wrong namespace, they were broken: each minted with `Math.random()` and wrote
+`ApiKey.key` through the generic entity route, where `WRITE_DENY_FIELDS` strips
+it. Every supplier key created that way was displayed to an operator, told to be
+copied, and stored with no credential on it. The supplier could never post
+successfully and nothing said so. All three now call the server minter.
+
+- `client/src/components/settings/SettingsSuppliers.jsx` migrated
+- `client/src/components/campaigns/CampaignSuppliers.jsx` migrated
+- `client/src/components/settings/SettingsKeys.jsx` deleted, unreferenced
+
+`server/test/credentialNamespace.test.js` scans executable client and server
+source and fails on any `lgnx_` credential literal, so a fourth generator cannot
+be added quietly. The `LGNX` supplier SID in `webhook.js`, `backfillLeadType.js`
+and `dataBot.js` is business data, not a credential, and is asserted untouched.
+
+### Google authentication
+
+Google Identity Services ID token flow, verified server-side against Google's
+JWKS with Node's own `crypto`. No new dependency, so the lockfile and the Docker
+build are untouched, and the verifier is fully testable offline.
+
+Chosen over the authorization code flow because login needs identity and
+nothing else: no Client Secret, no redirect URI, no token to store. Scopes are
+`openid`, `email`, `profile`.
+
+Verified: RS256 pinned from a fixed value rather than read from the header,
+`kid` against the live key set, signature, issuer, audience, `azp`, expiry,
+`iat`, nonce in constant time, and `email_verified`. The provider identity is
+`sub`. A changed Google email is never copied onto the DashFlo account.
+
+Linking is a pure decision function, `server/src/lib/googleAccountLink.js`, so
+it is tested exhaustively without a database. Refusals: `NOT_REGISTERED`,
+`ACCOUNT_DISABLED`, `INVITATION_CANCELLED`, `IDENTITY_CONFLICT`,
+`AMBIGUOUS_ACCOUNT`, `DOMAIN_NOT_ALLOWED`. Open sign-up is off by default and,
+when on, can only ever produce `role: user` / `base_role: manager`. There is no
+input to that function that yields an owner.
+
+`auth_credentials` gains `google_sub` (UNIQUE where not null), `google_email`,
+`google_linked_at` and `disabled`, all additive. `disabled` is honoured by the
+password path as well.
+
+46 tests across `googleIdentity.test.js` and `googleAccountLink.test.js`,
+including alg-none, HS256-with-the-public-key, wrong audience, wrong `azp`,
+tampered payload, foreign signing key, expiry, nonce replay and key rotation.
+
+### API Keys surface
+
+The landing view is now a dashboard of three category cards with counts and
+status and no credential material of any kind, served by a new `overview`
+operation that returns counts only. System Keys is a list and detail of discrete
+platform credentials; the Meta application credential is one card among Google,
+Anthropic, OpenAI and Stripe rather than a permanently expanded form at the top
+of the page. `MetaAppCredentialsCard.jsx` deleted, superseded.
+
+### Distribution, measured not assumed
+
+The native engine exists and is substantial: waterfall routing, priority,
+weighted, round robin, auction and hybrid selection, caps, reservations,
+wallets, billing, ping/post, direct post, delivery attempts, a retry worker,
+destination health and route decision traces.
+
+It is not selling anything. Production has no `AppSettings` row at all, so
+`distribution_mode` falls through to `legacy_only`, which routes everything to
+LeadByte and runs none of the new code. Moving off `legacy_only` is a human gate,
+not a code change.
+
+### UNPROVEN
+
+- The authenticated supplier posting path has not been exercised against
+  production since the fix. The one production key is hash-only, so its
+  cleartext does not exist and a controlled test needs a key issued first.
+- No lead has ever been delivered to a buyer by this deployment.
+- Google sign-in has no Client ID configured yet, so the button does not render
+  in production and the flow is proven by tests only.

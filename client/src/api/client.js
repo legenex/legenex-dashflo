@@ -120,8 +120,27 @@ export const auth = {
     if (redirectUrl !== undefined) window.location.href = '/login';
   },
   redirectToLogin: () => { window.location.href = '/login'; },
-  // OAuth is an optional add-on; without a configured provider, route to login.
+
+  // Whether Google sign-in is switched on, and the Client ID needed to render
+  // Google's button. The Client ID is public by design; no Google secret is
+  // ever sent to the browser.
+  googleConfig: () => request('/auth/google/config'),
+
+  // Exchange a Google ID token for a DashFlo session. The token is verified
+  // server-side against Google's signing keys; the browser is never trusted
+  // for identity.
+  loginWithGoogle: async ({ credential, nonce } = {}) => {
+    const res = await request('/auth/google', { method: 'POST', body: { credential, nonce } });
+    if (res?.access_token) setToken(res.access_token);
+    return res;
+  },
+
+  // Kept for callers that ask for a provider by name.
   loginWithProvider: (provider) => {
+    if (String(provider || '').toLowerCase() === 'google') {
+      window.location.href = '/login';
+      return;
+    }
     window.location.href = `/login?oauth=${encodeURIComponent(provider || '')}&unavailable=1`;
   },
 };

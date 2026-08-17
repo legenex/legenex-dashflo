@@ -10,20 +10,13 @@ import { MultiSelect } from '@/components/ui/multi-select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
 import { Badge } from '@/components/ui/badge';
-import { Plus, Copy, RefreshCw, Eye, EyeOff, Trash2 } from 'lucide-react';
+import { Plus, Copy, RefreshCw, Trash2 } from 'lucide-react';
 import { format } from 'date-fns';
 import { toast } from 'sonner';
 import { resolveApiBaseUrl } from '@/lib/urls';
+import { createSupplierKey, rotateSupplierKey } from '@/lib/supplierKeys';
+import { issueApiKey } from '@/functions/issueApiKey';
 
-function generateKey(supplierType = '') {
-  const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
-  let prefix = 'lgnx_ext_';
-  if (supplierType === 'Internal') prefix = 'lgnx_int_';
-  else if (supplierType === 'Calls') prefix = 'lgnx_cls_';
-  let key = prefix;
-  for (let i = 0; i < 32; i++) key += chars[Math.floor(Math.random() * chars.length)];
-  return key;
-}
 
 const DEFAULT_FORM = {
   name: '', sid: '', supplier_type: '', vertical: '', payout_type: '', payout_value: null, email: '',
@@ -49,7 +42,6 @@ export default function SettingsSuppliers() {
   const [form, setForm] = useState(DEFAULT_FORM);
   const [editingSupplierId, setEditingSupplierId] = useState(null);
   const [newKeyFull, setNewKeyFull] = useState(null);
-  const [showKeys, setShowKeys] = useState({});
   const [baseUrl, setBaseUrl] = useState('');
   const [baseUrlSaved, setBaseUrlSaved] = useState(false);
   const [apiKeyCreateOpen, setApiKeyCreateOpen] = useState(false);
@@ -164,19 +156,10 @@ export default function SettingsSuppliers() {
     } else {
       const supplier = await api.entities.Supplier.create(payload);
       supplierId = supplier.id;
-      const key = generateKey(form.supplier_type);
-      setNewKeyFull(key);
-      await api.entities.ApiKey.create({
-        name: form.name,
-        type: 'supplier',
-        supplier_name: form.name,
-        supplier_id: supplierId,
-        vertical: form.vertical,
-        key,
-        key_prefix: key.substring(0, 16),
-        active: form.active,
-        request_count: 0,
+      const issued = await createSupplierKey({
+        name: form.name, supplierId, supplierName: form.name, vertical: form.vertical,
       });
+      setNewKeyFull(issued.key);
       toast.success('Supplier created - copy the key now!');
       await qc.invalidateQueries({ queryKey: ['suppliers'] });
       await qc.invalidateQueries({ queryKey: ['api-keys'] });
@@ -185,47 +168,38 @@ export default function SettingsSuppliers() {
 
   const regenerateKey = async (supplier) => {
     const existingKey = getKeyForSupplier(supplier.id);
-    const key = generateKey(supplier.supplier_type);
-    if (existingKey) {
-      await api.entities.ApiKey.update(existingKey.id, {
-        key,
-        key_prefix: key.substring(0, 16),
-        request_count: 0,
-        last_used_at: null,
-      });
-    } else {
-      await api.entities.ApiKey.create({
-        name: supplier.name,
-        type: 'supplier',
-        supplier_name: supplier.name,
-        supplier_id: supplier.id,
-        key,
-        key_prefix: key.substring(0, 16),
-        active: true,
-        request_count: 0,
-      });
+    try {
+      const issued = existingKey
+        ? await rotateSupplierKey(existingKey.id)
+        : await createSupplierKey({
+          name: supplier.name, supplierId: supplier.id, supplierName: supplier.name,
+        });
+      // Shown once, in the reveal dialog, and copied for convenience. The
+      // server does not hold the cleartext and cannot show it again.
+      setNewKeyFull(issued.key);
+      navigator.clipboard.writeText(issued.key).catch(() => {});
+      toast.success('New key issued. Copy it now, it is not shown again.');
+      qc.invalidateQueries({ queryKey: ['api-keys'] });
+    } catch (error) {
+      toast.error(error?.message || 'Could not issue a new key');
     }
-    navigator.clipboard.writeText(key);
-    toast.success('New key generated and copied!');
-    qc.invalidateQueries({ queryKey: ['api-keys'] });
   };
 
+  // A key cannot be copied back after it is issued. The server keeps only the
+  // SHA-256 hash and the entity route read-denies the rest, so this used to
+  // put an empty string on the clipboard and report success.
   const copyKey = (supplier) => {
     const k = getKeyForSupplier(supplier.id);
     if (!k) return toast.error('No key found');
-    if (showKeys[supplier.id]) {
-      navigator.clipboard.writeText(k.key);
-      toast.success('Key copied');
-    } else {
-      toast.info('Reveal the key first');
-    }
+    navigator.clipboard.writeText(k.key_prefix || '');
+    toast.info('Copied the key prefix. The full key is shown only when it is issued or rotated.');
   };
 
-  const copyEndpoint = (supplier) => {
-    const k = getKeyForSupplier(supplier.id);
-    const url = k ? `${endpointUrl}?key=${k.key}` : endpointUrl;
-    navigator.clipboard.writeText(url);
-    toast.success('Endpoint copied');
+  const copyEndpoint = () => {
+    // The endpoint, not the credential. A live key in a query string ends up in
+    // browser history, proxy logs and Referer headers.
+    navigator.clipboard.writeText(endpointUrl);
+    toast.success('Endpoint copied. Send the key in the X-API-KEY header.');
   };
 
   const [deleteTarget, setDeleteTarget] = useState(null);
@@ -253,22 +227,27 @@ export default function SettingsSuppliers() {
 
   const handleCreateApiKey = async () => {
     const supplier = apiKeyForm.supplier_id ? suppliers.find(s => s.id === apiKeyForm.supplier_id) : null;
-    const key = generateKey(supplier?.supplier_type || '');
-    await api.entities.ApiKey.create({
-      name: apiKeyForm.name,
-      type: apiKeyForm.type,
-      supplier_id: apiKeyForm.type === 'master' ? '' : (supplier?.id || ''),
-      supplier_name: apiKeyForm.type === 'master' ? 'Master' : (supplier?.name || ''),
-      vertical: apiKeyForm.vertical,
-      key,
-      key_prefix: key.substring(0, 16),
-      active: apiKeyForm.active,
-      request_count: 0,
-    });
-    qc.invalidateQueries({ queryKey: ['api-keys'] });
-    setApiKeyCreateOpen(false);
-    setApiKeyForm({ name: '', type: 'supplier', supplier_id: '', vertical: '', active: true });
-    toast.success('API key created');
+    try {
+      const issued = await issueApiKey({
+        op: 'create',
+        type: apiKeyForm.type,
+        name: apiKeyForm.name,
+        supplier_id: apiKeyForm.type === 'master' ? undefined : (supplier?.id || undefined),
+        supplier_name: apiKeyForm.type === 'master' ? 'Master' : (supplier?.name || ''),
+        vertical: apiKeyForm.vertical,
+      });
+      const data = issued?.data ?? issued;
+      if (!data?.key) throw new Error(data?.error || 'Could not issue the key');
+      // A new key is active by definition; the form's active switch applies to
+      // deactivating it afterwards, which is a separate update.
+      setNewKeyFull(data.key);
+      qc.invalidateQueries({ queryKey: ['api-keys'] });
+      setApiKeyCreateOpen(false);
+      setApiKeyForm({ name: '', type: 'supplier', supplier_id: '', vertical: '', active: true });
+      toast.success('API key created. Copy it now, it is not shown again.');
+    } catch (error) {
+      toast.error(error?.message || 'Could not create the API key');
+    }
   };
 
   return (
@@ -332,12 +311,9 @@ export default function SettingsSuppliers() {
                   <td className="px-4 py-3">
                     {k ? (
                       <div className="flex items-center gap-1.5">
-                        <span className="font-mono text-[11px] text-muted-foreground">
-                          {showKeys[s.id] ? k.key : `${k.key_prefix}...`}
+                        <span className="font-mono text-[11px] text-muted-foreground" title="Only the prefix is stored in readable form">
+                          {`${k.key_prefix}...`}
                         </span>
-                        <button onClick={() => setShowKeys(p => ({ ...p, [s.id]: !p[s.id] }))} className="text-muted-foreground hover:text-foreground">
-                          {showKeys[s.id] ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
-                        </button>
                       </div>
                     ) : <span className="text-muted-foreground text-[11px]">-</span>}
                   </td>
@@ -350,7 +326,7 @@ export default function SettingsSuppliers() {
                       <Button size="sm" variant="ghost" onClick={() => openEdit(s)} className="h-7 text-[11px] px-2">Edit</Button>
                       <Button size="sm" variant="ghost" onClick={() => copyKey(s)} className="h-7 w-7 p-0" title="Copy Key"><Copy className="w-3 h-3" /></Button>
                       <Button size="sm" variant="ghost" onClick={() => regenerateKey(s)} className="h-7 w-7 p-0" title="Regenerate Key"><RefreshCw className="w-3 h-3" /></Button>
-                      <Button size="sm" variant="ghost" onClick={() => copyEndpoint(s)} className="h-7 text-[11px] px-2">Endpoint</Button>
+                      <Button size="sm" variant="ghost" onClick={copyEndpoint} className="h-7 text-[11px] px-2">Endpoint</Button>
                       <Button size="sm" variant="ghost" onClick={() => toggleActive(s)} className="h-7 text-[11px] px-2 text-muted-foreground">
                         {s.active ? 'Deactivate' : 'Activate'}
                       </Button>

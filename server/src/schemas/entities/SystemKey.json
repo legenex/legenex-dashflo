@@ -5,7 +5,7 @@
     "name": { "type": "string", "description": "Owner-facing credential label" },
     "provider": {
       "type": "string",
-      "enum": ["openai", "anthropic", "gemini", "meta", "mcp_server", "other"],
+      "enum": ["openai", "anthropic", "gemini", "meta", "google", "stripe", "mcp_server", "other"],
       "default": "other"
     },
     "purpose": { "type": "string" },

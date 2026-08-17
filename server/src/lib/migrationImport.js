@@ -4,7 +4,7 @@ import { tableName } from '../schemas/index.js';
 import { entityExists, newId } from '../db/repo.js';
 import { ensureMigrationImportSchema } from '../db/migrationImportSchema.js';
 import { ensureBase44SyncSchema } from '../db/base44SyncSchema.js';
-import { hashApiKey } from './apiKeys.js';
+import { hashApiKey, keyPrefixOf, translateCredentialNamespace, isLegacyNamespace } from './apiKeys.js';
 import { fingerprint } from './base44Sync.js';
 import {
   ALL_ENTITIES,
@@ -305,6 +305,89 @@ function ownerSecretPatch(entity, incoming) {
   return patch;
 }
 
+// ── Credential namespace translation on import ──────────────────────────────
+//
+// Base44 is the migration source; DashFlo is the canonical system, so the
+// DashFlo namespace wins. A credential arriving as `lgnx_mst_<material>` is
+// stored as `dshflo_mst_<material>`: the record relationship, its id, its
+// active or revoked state and its usage metadata are all preserved, and only
+// the namespace changes.
+//
+// Why a prefix swap is the correct canonical conversion here, rather than
+// minting a fresh secret:
+//
+//   - The stored credential of record is the SHA-256 of the whole string. The
+//     hash is recomputed from the translated value, so it stays valid.
+//   - key_prefix is a display slice of that same string and is recomputed too.
+//   - There is no checksum, length rule or HMAC in which the prefix
+//     participates, so swapping it cannot invalidate anything downstream.
+//   - The secret material after the tag is unchanged, so the credential keeps
+//     the entropy it was issued with.
+//
+// The important property is determinism. translateCredentialNamespace maps a
+// value to exactly one output and is a no-op on an already-translated value,
+// so the second run of the same bundle produces the same key, the same hash
+// and the same prefix. The record therefore compares equal and is preserved
+// rather than rewritten. This is what stops a rerun rotating a credential.
+//
+// The raw value never survives the call: `key` is deleted from the record
+// before it is written, so the old Legenex value is not readable afterwards
+// and the new one is only ever held as a hash.
+
+const CREDENTIAL_ENTITIES = new Set(['ApiKey', 'BuyerApiKey']);
+
+// Which field carries the cleartext, and where the derived values go.
+const CREDENTIAL_SHAPE = {
+  ApiKey: { raw: 'key', hash: 'key_hash', prefix: 'key_prefix', dropRaw: true },
+  // BuyerApiKey is read back through its own service function, which masks it,
+  // and callers still compare the stored value directly. It keeps cleartext
+  // for now, so the translated value is written back rather than dropped.
+  BuyerApiKey: { raw: 'key', hash: null, prefix: 'key_prefix', dropRaw: false },
+};
+
+// Set on a record whose credential was moved into the DashFlo namespace, so
+// the run can report it and an operator can see it happened. It is a flag, not
+// a value: no credential material is recorded anywhere.
+export const NAMESPACE_MIGRATED_FIELD = 'credential_namespace_migrated_at';
+
+function applyCredentialNamespace(kind, entity, data, existingData = {}, meta = {}) {
+  const shape = CREDENTIAL_SHAPE[entity];
+  if (!shape) return false;
+
+  const incoming = String(data[shape.raw] ?? '').trim();
+  const usable = incoming && !isProtectedPlaceholder(incoming);
+
+  // An ordinary (redacted) export carries no usable credential. Keep whatever
+  // DashFlo already holds rather than overwriting a live secret with a mask.
+  if (kind !== 'owner' || !usable) {
+    if (shape.dropRaw) delete data[shape.raw];
+    else if (!usable && existingData[shape.raw] !== undefined) data[shape.raw] = existingData[shape.raw];
+    if (shape.hash && existingData[shape.hash]) data[shape.hash] = existingData[shape.hash];
+    if (existingData[shape.prefix] && isProtectedPlaceholder(data[shape.prefix])) {
+      data[shape.prefix] = existingData[shape.prefix];
+    }
+    return false;
+  }
+
+  const wasLegacy = isLegacyNamespace(incoming);
+  const translated = translateCredentialNamespace(incoming);
+
+  if (shape.hash) data[shape.hash] = hashApiKey(translated);
+  data[shape.prefix] = keyPrefixOf(translated);
+  if (shape.dropRaw) delete data[shape.raw];
+  else data[shape.raw] = translated;
+
+  if (wasLegacy) {
+    // Stamped from the source record's own timestamp, not from the clock, so
+    // rerunning the same bundle writes the same value and the record still
+    // compares equal. A wall-clock stamp here would make every rerun look like
+    // an update and defeat the idempotency this whole path exists for.
+    data[NAMESPACE_MIGRATED_FIELD] = existingData[NAMESPACE_MIGRATED_FIELD]
+      || String(meta.updated_date || meta.created_date || 'migrated');
+  }
+  return wasLegacy;
+}
+
 export function prepareMigrationRecord(kind, entity, source, existingData = {}) {
   const stripped = stripTransient(entity, source);
   if (!stripped) return null;
@@ -316,20 +399,12 @@ export function prepareMigrationRecord(kind, entity, source, existingData = {}) 
     data = { ...data, ...(IMPORT_FORCE[entity] || {}) };
   }
 
-  if (entity === 'ApiKey') {
-    const raw = String(data.key || '').trim();
-    if (kind === 'owner' && raw && !isProtectedPlaceholder(raw)) {
-      data.key_hash = hashApiKey(raw);
-      data.key_prefix ||= raw.slice(0, 16);
-      delete data.key;
-    } else if (kind === 'ordinary') {
-      delete data.key;
-      if (existingData.key_hash) data.key_hash = existingData.key_hash;
-      if (existingData.key_prefix && isProtectedPlaceholder(data.key_prefix)) data.key_prefix = existingData.key_prefix;
-    }
+  let namespaceMigrated = false;
+  if (CREDENTIAL_ENTITIES.has(entity)) {
+    namespaceMigrated = applyCredentialNamespace(kind, entity, data, existingData, meta);
   }
 
-  return { meta, data, preserved };
+  return { meta, data, preserved, namespaceMigrated };
 }
 
 function recordIds(value, kind) {
@@ -552,7 +627,15 @@ async function writeProvenance(client, entity, id, updatedDate, data, modified =
 
 async function applyNormalized(normalized, report) {
   if (!report.can_apply) throw new MigrationValidationError('Migration cannot be applied until validation errors are resolved', 409);
-  const result = { created: 0, updated: 0, preserved: 0, skipped: 0, conflicts: 0, failed: 0, entities: {} };
+  const result = {
+    created: 0, updated: 0, preserved: 0, skipped: 0, conflicts: 0, failed: 0,
+    // How many credentials were moved out of the legacy Legenex namespace on
+    // this run. On a rerun of the same bundle this stays above zero (the
+    // translation still applies) while created and updated fall to zero, which
+    // is what "converted once, not rotated again" looks like in the numbers.
+    credentials_namespaced: 0,
+    entities: {},
+  };
 
   await ensureBase44SyncSchema();
   await withTransaction(async (client) => {
@@ -565,7 +648,7 @@ async function applyNormalized(normalized, report) {
     for (const entity of ordered) {
       if (!entityExists(entity)) continue;
       const table = tableName(entity);
-      const stats = { created: 0, updated: 0, preserved: 0, skipped: 0, conflicts: 0, failed: 0 };
+      const stats = { created: 0, updated: 0, preserved: 0, skipped: 0, conflicts: 0, failed: 0, credentials_namespaced: 0 };
       for (const source of normalized.entities[entity] || []) {
         const id = String(source?.id || '').trim();
         if (!id) { stats.skipped += 1; result.skipped += 1; continue; }
@@ -576,6 +659,7 @@ async function applyNormalized(normalized, report) {
         const current = rowToExisting(rows[0]);
         const shaped = prepareMigrationRecord(normalized.kind, entity, source, current?.data || {});
         if (!shaped) { stats.skipped += 1; result.skipped += 1; continue; }
+        if (shaped.namespaceMigrated) { stats.credentials_namespaced += 1; result.credentials_namespaced += 1; }
 
         let data = shaped.data;
         let action = current ? 'updated' : 'created';
@@ -594,9 +678,14 @@ async function applyNormalized(normalized, report) {
                 stats.skipped += 1; result.skipped += 1; continue;
               }
               data = { ...current.data, ...secrets };
-              if (entity === 'ApiKey' && data.key) {
-                data.key_hash = hashApiKey(String(data.key));
-                data.key_prefix ||= String(data.key).slice(0, 16);
+              // Belt and braces. prepareMigrationRecord already translated and
+              // dropped the cleartext, so this branch should never see a raw
+              // key. If a future change reintroduces one, it is translated
+              // here too rather than being hashed in the old namespace.
+              if (CREDENTIAL_ENTITIES.has(entity) && data.key) {
+                const translated = translateCredentialNamespace(String(data.key));
+                data.key_hash = hashApiKey(translated);
+                data.key_prefix = keyPrefixOf(translated);
                 delete data.key;
               }
             } else {

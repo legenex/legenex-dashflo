@@ -11,6 +11,7 @@
     "migrate": "node scripts/migrate.js",
     "seed:admin": "node scripts/seed-admin.js",
     "backfill:api-key-hashes": "node scripts/backfill-api-key-hashes.js",
+    "migrate:key-namespace": "node scripts/migrate-key-namespace.js",
     "backfill:buyer-identity": "node scripts/backfill-buyer-identity.js",
     "recover:config": "node scripts/recover-configuration.js"
   },

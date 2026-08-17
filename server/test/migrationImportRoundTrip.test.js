@@ -28,6 +28,23 @@ async function maintenance(sql) {
   try { await client.query(sql); } finally { await client.end(); }
 }
 
+// Row counts for every entity table, so "the rerun created nothing" is checked
+// against the whole database rather than the handful of tables a test
+// remembered to name.
+async function tableCounts(pool) {
+  const { rows } = await pool.query(`
+    SELECT relname AS table_name FROM pg_class c
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+     WHERE n.nspname = 'public' AND c.relkind = 'r' AND relname LIKE 'e\\_%'
+     ORDER BY relname`);
+  const counts = {};
+  for (const row of rows) {
+    const { rows: [count] } = await pool.query(`SELECT count(*)::int AS n FROM ${row.table_name}`);
+    counts[row.table_name] = count.n;
+  }
+  return counts;
+}
+
 const OWNER = { id: 'owner-1', email: 'owner@example.test', base_role: 'owner', role: 'admin' };
 const PASSPHRASE = 'round trip passphrase 2026';
 const SUPPLIER_KEY = 'lgnx_sup_round_trip_existing_value';
@@ -38,6 +55,7 @@ describe.skipIf(!reachable)('real encrypted owner bundle round trip', () => {
   let runMigrationImport;
   let resolveApiKey;
   let hashApiKey;
+  let translateCredentialNamespace;
   let migrationOrder;
   let cryptoSpec;
   let bundle;
@@ -49,7 +67,7 @@ describe.skipIf(!reachable)('real encrypted owner bundle round trip', () => {
     const schema = await import('../src/db/schema.js');
     await schema.ensureSchema();
     ({ runMigrationImport } = await import('../src/lib/migrationImport.js'));
-    ({ resolveApiKey, hashApiKey } = await import('../src/lib/apiKeys.js'));
+    ({ resolveApiKey, hashApiKey, translateCredentialNamespace } = await import('../src/lib/apiKeys.js'));
     const catalog = await import('../src/functions/systemTransfer.generated.js');
     migrationOrder = catalog.MIGRATION_ENTITY_ORDER;
     cryptoSpec = catalog.MIGRATION_CRYPTO;
@@ -130,18 +148,31 @@ describe.skipIf(!reachable)('real encrypted owner bundle round trip', () => {
     expect(applied.applied.created).toBe(21);
     expect(applied.applied.failed).toBe(0);
 
+    // The Base44 credential lands in the DashFlo namespace. The record id, its
+    // supplier relationship and its usage metadata all survive; only the
+    // credential namespace changes.
+    const dashfloSupplierKey = translateCredentialNamespace(SUPPLIER_KEY);
+    const dashfloBuyerKey = translateCredentialNamespace(BUYER_KEY);
     const supplierKey = (await pool.query("SELECT id, data FROM e_api_key WHERE id = 'supplier-key-1'")).rows[0];
     expect(supplierKey.data.supplier_id).toBe('supplier-1');
-    expect(supplierKey.data.key_hash).toBe(hashApiKey(SUPPLIER_KEY));
+    expect(supplierKey.data.request_count).toBe(7);
+    expect(supplierKey.data.key_hash).toBe(hashApiKey(dashfloSupplierKey));
+    expect(supplierKey.data.key_hash).not.toBe(hashApiKey(SUPPLIER_KEY));
+    expect(supplierKey.data.key_prefix.startsWith('dshflo_sup_')).toBe(true);
     expect(supplierKey.data.key).toBeUndefined();
-    const authenticated = await resolveApiKey({ entities: { ApiKey: {
+
+    const resolver = { entities: { ApiKey: {
       filter: async (query) => (await pool.query('SELECT id, data, created_date, updated_date FROM e_api_key WHERE data->>\'key_hash\' = $1', [query.key_hash])).rows.map((row) => ({ id: row.id, ...row.data })),
       update: async () => null,
-    } } }, SUPPLIER_KEY);
+    } } };
+    const authenticated = await resolveApiKey(resolver, dashfloSupplierKey);
     expect(authenticated.record?.id).toBe('supplier-key-1');
     expect(authenticated.matchedBy).toBe('hash');
 
-    expect((await pool.query("SELECT data->>'key' AS value FROM e_buyer_api_key WHERE id = 'buyer-key-1'")).rows[0].value).toBe(BUYER_KEY);
+    // The retired Legenex value authenticates nothing after the migration.
+    expect((await resolveApiKey(resolver, SUPPLIER_KEY)).record).toBeNull();
+
+    expect((await pool.query("SELECT data->>'key' AS value FROM e_buyer_api_key WHERE id = 'buyer-key-1'")).rows[0].value).toBe(dashfloBuyerKey);
     expect((await pool.query("SELECT data->>'secret' AS value FROM e_system_key WHERE id = 'system-key-1'")).rows[0].value).toBe('meta-app-secret');
     expect((await pool.query("SELECT data->>'buyer_api_key' AS value FROM e_buyer WHERE id = 'buyer-1'")).rows[0].value).toBe(BUYER_KEY);
     expect((await pool.query("SELECT count(*)::int AS n FROM e_integration_config WHERE data->>'name' = 'meta_oauth_state'")).rows[0].n).toBe(0);
@@ -171,6 +202,55 @@ describe.skipIf(!reachable)('real encrypted owner bundle round trip', () => {
     expect((await pool.query("SELECT data->>'api_key_id' AS value FROM e_lead_source WHERE id = 'lead-source-1'")).rows[0].value).toBe('supplier-key-1');
   });
 
+  // The requirement that matters most for day to day use: reruns are safe.
+  // Base44 stays available as a reconciliation source, so this bundle will be
+  // imported again whenever the two systems disagree. A rerun must not
+  // duplicate a record, rotate a credential, reset a counter or break a link.
+  it('rerunning the identical bundle creates nothing, rotates nothing and duplicates nothing', async () => {
+    const countsBefore = await tableCounts(pool);
+    const keyBefore = (await pool.query("SELECT data FROM e_api_key WHERE id = 'supplier-key-1'")).rows[0].data;
+    const buyerKeyBefore = (await pool.query("SELECT data FROM e_buyer_api_key WHERE id = 'buyer-key-1'")).rows[0].data;
+
+    const second = await runMigrationImport({
+      kind: 'owner', mode: 'apply', bundle, passphrase: PASSPHRASE, user: OWNER, confirmed: true,
+    });
+
+    expect(second.result).toBe('success');
+    expect(second.applied.created).toBe(0);
+    expect(second.applied.failed).toBe(0);
+    // The translation still applies on every run, because it is derived from
+    // the source value rather than remembered. That is what makes it safe.
+    expect(second.applied.credentials_namespaced).toBeGreaterThan(0);
+
+    // Not one extra row anywhere.
+    expect(await tableCounts(pool)).toEqual(countsBefore);
+
+    // The credential is byte for byte what the first run produced. A rerun
+    // that re-minted would change key_hash and silently lock out a supplier.
+    const keyAfter = (await pool.query("SELECT data FROM e_api_key WHERE id = 'supplier-key-1'")).rows[0].data;
+    expect(keyAfter.key_hash).toBe(keyBefore.key_hash);
+    expect(keyAfter.key_prefix).toBe(keyBefore.key_prefix);
+    expect(keyAfter.request_count).toBe(keyBefore.request_count);
+    expect(keyAfter).toEqual(keyBefore);
+
+    const buyerKeyAfter = (await pool.query("SELECT data FROM e_buyer_api_key WHERE id = 'buyer-key-1'")).rows[0].data;
+    expect(buyerKeyAfter).toEqual(buyerKeyBefore);
+
+    // Relationships survive the rerun.
+    expect((await pool.query("SELECT data->>'supplier_id' AS v FROM e_api_key WHERE id = 'supplier-key-1'")).rows[0].v).toBe('supplier-1');
+    expect((await pool.query("SELECT data->>'api_key_id' AS v FROM e_lead_source WHERE id = 'lead-source-1'")).rows[0].v).toBe('supplier-key-1');
+    expect((await pool.query("SELECT data->>'delivery_id' AS v FROM e_sub_delivery WHERE id = 'sub-delivery-1'")).rows[0].v).toBe('delivery-1');
+
+    // And a third run is the same again, so this is a stable fixed point
+    // rather than a single lucky comparison.
+    const third = await runMigrationImport({
+      kind: 'owner', mode: 'apply', bundle, passphrase: PASSPHRASE, user: OWNER, confirmed: true,
+    });
+    expect(third.applied.created).toBe(0);
+    expect(await tableCounts(pool)).toEqual(countsBefore);
+    expect((await pool.query("SELECT data FROM e_api_key WHERE id = 'supplier-key-1'")).rows[0].data).toEqual(keyBefore);
+  });
+
   it('ordinary redacted re-import cannot destroy imported credentials', async () => {
     const ordinary = {
       manifest: { bundle_version: 1, source_app: 'legenex-dashboard', exported_at: '2026-08-17T12:00:00.000Z', counts: { ApiKey: 1, Buyer: 1 } },
@@ -181,7 +261,8 @@ describe.skipIf(!reachable)('real encrypted owner bundle round trip', () => {
     };
     const applied = await runMigrationImport({ kind: 'ordinary', mode: 'apply', bundle: ordinary, user: OWNER, confirmed: true });
     expect(applied.result).toBe('success');
-    expect((await pool.query("SELECT data->>'key_hash' AS value FROM e_api_key WHERE id = 'supplier-key-1'")).rows[0].value).toBe(hashApiKey(SUPPLIER_KEY));
+    expect((await pool.query("SELECT data->>'key_hash' AS value FROM e_api_key WHERE id = 'supplier-key-1'")).rows[0].value)
+      .toBe(hashApiKey(translateCredentialNamespace(SUPPLIER_KEY)));
     expect((await pool.query("SELECT data->>'buyer_api_key' AS value FROM e_buyer WHERE id = 'buyer-1'")).rows[0].value).toBe(BUYER_KEY);
   });
 
