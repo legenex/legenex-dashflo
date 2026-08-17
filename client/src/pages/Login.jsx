@@ -120,6 +120,11 @@ export default function Login() {
           )}
         </Button>
       </form>
+      <p className="mt-5 text-center text-xs text-muted-foreground">
+        <a href="https://dashflo.io/privacy" className="hover:text-foreground hover:underline">Privacy</a>
+        {' · '}
+        <a href="https://dashflo.io/terms" className="hover:text-foreground hover:underline">Terms</a>
+      </p>
     </AuthLayout>
   );
 }

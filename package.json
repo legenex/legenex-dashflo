@@ -17,6 +17,7 @@
     "lint": "npm --prefix client run lint",
     "verify:functions": "node scripts/verify-function-loader.mjs",
     "scan:secrets": "node scripts/secret-scan.mjs",
+    "verify:legal": "node scripts/verify-marketing-legal.mjs",
     "check:em-dashes": "node scripts/check-em-dashes.mjs",
     "check:bundle-purity": "node scripts/check-bundle-purity.mjs",
     "gate": "node scripts/gate.mjs"

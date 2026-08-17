@@ -1216,3 +1216,45 @@ Also open from the reviews, recorded rather than fixed:
 `docs/LIVE-URL-GATE.md`. It contains only human actions: name the hosting
 destination, register or name the domain, and confirm the staging database may
 be created. Everything else continues locally.
+
+## Production legal and privacy section, 17 August 2026
+
+Implemented a production legal baseline based on repository and read-only
+deployment evidence:
+
+- public Privacy Policy, Terms of Service, Cookie Policy, Privacy Choices, and
+  Consumer Health Data Privacy Policy routes in the static marketing site;
+- route-specific client metadata, shared legal navigation, accessible section
+  structure, theme support, responsive styles, and a corrected site footer;
+- account-registration notice at collection and Privacy and Terms links on the
+  application login screen;
+- `docs/LEGAL-REVIEW.md`, which separates established facts, owner-supplied
+  facts, and questions requiring business confirmation or counsel;
+- `docs/DPA-DRAFT.md`, retained internally because provider, transfer,
+  retention, security-schedule, address, and governing-law details are not yet
+  complete; and
+- `scripts/verify-marketing-legal.mjs` plus `npm run verify:legal` for route,
+  metadata, identity, navigation, theme-token, accessibility-hook, and public
+  claim checks.
+
+Evidence before release:
+
+- `npm run verify:legal` passed for all five legal routes.
+- `npm run gate` passed tests, function loading, lint, production build, bundle
+  purity, secret scan, and added-copy checks.
+- `git diff --check` passed.
+- Local HTTP checks returned 200 for `/`, all five clean legal routes, and a
+  trailing-slash legal route through the existing SPA fallback.
+- The in-app browser runtime had no browser instance available, so screenshot
+  review of desktop, mobile, light, and dark rendering remains unperformed.
+  Theme tokens, breakpoints, focus states, reduced-motion behavior, and
+  rendered DOM structure were checked programmatically. Do not restate this as
+  completed visual QA.
+
+The public language does not make a categorical sale or sharing claim. Code
+shows transfers to configured lead recipients and can associate payment or
+other consideration, but contracts, consumer direction, statutory thresholds,
+and exemptions are not established. The separate health policy is justified by
+actual accident, injury, treatment, insurance, and qualification fields, while
+geographic applicability and any required consent or sale authorization remain
+for owner and counsel review.

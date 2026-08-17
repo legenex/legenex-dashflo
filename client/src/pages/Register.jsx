@@ -223,6 +223,17 @@ export default function Register() {
           )}
         </Button>
       </form>
+      <p className="mt-5 text-center text-xs leading-relaxed text-muted-foreground">
+        We use your email and account credentials to create, verify, secure, and support your DashFlo account.
+        By creating an account, you agree to the{' '}
+        <a href="https://dashflo.io/terms" className="text-primary font-medium hover:underline">
+          Terms of Service
+        </a>{' '}
+        and acknowledge the{' '}
+        <a href="https://dashflo.io/privacy" className="text-primary font-medium hover:underline">
+          Privacy Policy
+        </a>.
+      </p>
     </AuthLayout>
   );
 }
