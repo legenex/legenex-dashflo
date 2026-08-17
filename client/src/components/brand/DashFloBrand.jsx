@@ -15,9 +15,12 @@ export default function DashFloBrand({
     typeof window !== 'undefined' &&
     window.matchMedia?.('(prefers-color-scheme: dark)').matches
   );
+  // The 180px variant. It is the largest size this mark is ever drawn at in the
+  // app, including on a 2x display, and it replaced the 1254px original that
+  // cost 385KB to render a 36px logo.
   const iconSrc = isDark
-    ? '/brand/dashflo-favi-dark.png'
-    : '/brand/dashflo-favi-light.png';
+    ? '/brand/dashflo-icon-dark-180.png'
+    : '/brand/dashflo-icon-light-180.png';
 
   return (
     <span className={`inline-flex items-center gap-2.5 min-w-0 ${className}`}>

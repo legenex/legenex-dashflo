@@ -138,6 +138,35 @@ describe('outgoing message construction', () => {
     expect(senderIdentity('DashFlo <no-reply@dashflo.io>', 'Ignored')).toBe('DashFlo <no-reply@dashflo.io>');
   });
 
+  /* The production Gmail identity.
+   *
+   * dashflo.io has catch-all INBOUND forwarding, which is why support@ and
+   * info@ receive mail. It says nothing about who may send as them, and Gmail
+   * is not authorised to, so From has to be the authenticated mailbox. Using
+   * support@dashflo.io there would be a forgery that SPF and DMARC are built to
+   * reject, and it would put delivery reputation behind a domain Gmail cannot
+   * vouch for.
+   *
+   * The visitor still sees DashFlo Support, replies still reach the visitor,
+   * and submissions still land at info@dashflo.io.
+   */
+  it('sends as the authenticated Gmail mailbox under the DashFlo Support name', () => {
+    const message = buildContactMessage({
+      value: validateContact(good).value,
+      recipient: 'info@dashflo.io',
+      from: 'team@legenex.com',
+      fromName: 'DashFlo Support',
+    });
+
+    expect(message.from).toBe('"DashFlo Support" <team@legenex.com>');
+    expect(message.to).toBe('info@dashflo.io');
+    expect(message.replyTo).toBe('dana@example.com');
+
+    // Not spoofed onto a dashflo.io mailbox that Gmail cannot send as.
+    expect(message.from).not.toContain('support@dashflo.io');
+    expect(message.from).not.toContain('info@dashflo.io');
+  });
+
   it('labels the subject with the topic and bounds its length', () => {
     expect(built().subject).toBe('[Billing] Invoice question');
     const long = buildContactMessage({

@@ -7,8 +7,14 @@
   "theme_color": "#0b0f17",
   "icons": [
     {
-      "src": "/brand/dashflo-favi-dark.png",
-      "sizes": "1254x1254",
+      "src": "/brand/dashflo-icon-dark-32.png",
+      "sizes": "32x32",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/brand/dashflo-icon-dark-180.png",
+      "sizes": "180x180",
       "type": "image/png",
       "purpose": "any"
     }

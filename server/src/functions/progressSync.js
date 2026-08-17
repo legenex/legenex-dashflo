@@ -1,4 +1,5 @@
 import { MANIFEST } from './_pageManifest.js';
+import { authorizeProgressCtx } from '../lib/progressAccess.js';
 
 // Synchronises the generated page inventory into ProgressPage records.
 //
@@ -8,7 +9,7 @@ import { MANIFEST } from './_pageManifest.js';
 // it twice in a row changes nothing, which is the point: adding a route must not
 // cost anyone their notes, owners, criticality or lifecycle judgements.
 //
-// Access: operator session, admin role or the progress_admin permission.
+// Access: the DashFlo owner alone. See lib/progressAccess.js.
 // Writes: ProgressPage only. Never touches operational records.
 
 const HUMAN_OWNED_FIELDS = [
@@ -53,28 +54,11 @@ export default async function progressSync(ctx) {
   try {
     const db = ctx.db;
 
-    const user = ctx.user;
-    if (!user) return ctx.json({ error: 'Unauthorized' }, 401);
-
-    const record = await db.entities.User.get(user.id).catch(() => null);
-    const caller = record || user;
-
-    // Portal accounts never reach the Progress Control Center.
-    if (caller.base_role === 'supplier' || caller.base_role === 'buyer') {
-      return ctx.json({ error: 'Forbidden' }, 403);
-    }
-    if (caller.linked_buyer_id || caller.linked_supplier_id) {
-      return ctx.json({ error: 'Forbidden' }, 403);
-    }
-
-    let permissions = {};
-    try {
-      permissions = typeof caller.permissions === 'string'
-        ? JSON.parse(caller.permissions || '{}')
-        : (caller.permissions || {});
-    } catch { permissions = {}; }
-    if (caller.role !== 'admin' && permissions.progress_admin !== true) {
-      return ctx.json({ error: 'Forbidden' }, 403);
+    // Owner only. Progress moved to its own hostname as internal owner tooling,
+    // so an admin role and a progress_* permission key no longer qualify.
+    const decision = await authorizeProgressCtx(ctx);
+    if (!decision.allowed) {
+      return ctx.json({ error: decision.status === 401 ? 'Unauthorized' : 'Forbidden' }, decision.status);
     }
 
     const body = ctx.body || {};

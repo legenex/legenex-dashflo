@@ -19,8 +19,8 @@ import manifest from '@/lib/progress/pageManifest.json';
 //      and moves to the next one. That is how "capture every page" works
 //      without a headless browser: it uses the session you are already in.
 //
-// Nothing captures without a progress permission, and portal roles never reach
-// this code because they never mount AppLayout.
+// Nothing captures unless the signed-in account is the owner, and portal roles
+// never reach this code because they never mount AppLayout.
 
 const QUEUE_KEY = 'progress_capture_queue';
 const RETURN_KEY = 'progress_capture_return';
@@ -72,7 +72,7 @@ export default function CaptureController() {
   const location = useLocation();
   const navigate = useNavigate();
   const [params, setParams] = useSearchParams();
-  const { can, role } = usePermissions();
+  const { role, realRole } = usePermissions();
   const { user } = useAuth();
   const isFetching = useIsFetching();
 
@@ -82,7 +82,11 @@ export default function CaptureController() {
   const busyRef = useRef(false);
   const settleRef = useRef(null);
 
-  const allowed = can('progress_write') || can('progress_admin');
+  // Owner only, matching the server. PageSnapshot became owner-only when the
+  // Control Center moved to its own hostname, so a progress_* permission key no
+  // longer buys anything here: showing the control to anyone else would offer a
+  // button whose every capture is refused by the entity route.
+  const allowed = realRole === 'owner';
   const requested = params.get('progress_capture');
   const page = pageKeyForLocation(location.pathname, location.search);
 

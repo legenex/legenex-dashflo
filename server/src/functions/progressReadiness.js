@@ -1,3 +1,4 @@
+import { authorizeProgressCtx } from '../lib/progressAccess.js';
 import {
   pageReadiness,
   weightedAverage,
@@ -19,7 +20,7 @@ import {
 //
 // Idempotent. Running it twice on the same day updates the same snapshot row.
 //
-// Access: operator session, admin role or progress_admin / progress_write.
+// Access: the DashFlo owner alone. See lib/progressAccess.js.
 // Writes: ProgressPage (computed fields only), ReleaseGate status for automatic
 // gates, ProgressSnapshot. Never touches operational records.
 
@@ -60,25 +61,12 @@ export default async function progressReadiness(ctx) {
   try {
     const db = ctx.db;
 
-    const user = ctx.user || null;
-    if (!user) return ctx.json({ error: 'Unauthorized' }, 401);
-
-    const record = await db.entities.User.get(user.id).catch(() => null);
-    const caller = record || user;
-    if (caller.base_role === 'supplier' || caller.base_role === 'buyer') {
-      return ctx.json({ error: 'Forbidden' }, 403);
+    // Owner only. Progress moved to its own hostname as internal owner tooling,
+    // so an admin role and a progress_* permission key no longer qualify.
+    const decision = await authorizeProgressCtx(ctx);
+    if (!decision.allowed) {
+      return ctx.json({ error: decision.status === 401 ? 'Unauthorized' : 'Forbidden' }, decision.status);
     }
-    if (caller.linked_buyer_id || caller.linked_supplier_id) {
-      return ctx.json({ error: 'Forbidden' }, 403);
-    }
-    let permissions = {};
-    try {
-      permissions = typeof caller.permissions === 'string'
-        ? JSON.parse(caller.permissions || '{}')
-        : (caller.permissions || {});
-    } catch { permissions = {}; }
-    const allowed = caller.role === 'admin' || permissions.progress_admin === true || permissions.progress_write === true;
-    if (!allowed) return ctx.json({ error: 'Forbidden' }, 403);
 
     const body = ctx.body || {};
     const persist = body?.persist !== false; // default true

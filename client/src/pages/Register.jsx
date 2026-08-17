@@ -4,12 +4,27 @@ import { api } from "@/api/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { UserPlus, Mail, Lock, Loader2 } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import { InputOTP, InputOTPGroup, InputOTPSlot } from "@/components/ui/input-otp";
 import AuthLayout from "@/components/AuthLayout";
-import GoogleIcon from "@/components/GoogleIcon";
+import GoogleSignInButton from "@/components/GoogleSignInButton";
 import { toast } from "@/components/ui/use-toast";
 
+/* Registration.
+ *
+ * The account rules are unchanged and are all decided on the server: whether an
+ * unknown Google account may create a user at all is GOOGLE_ALLOW_SIGNUP, which
+ * is off by default, and the email path still goes through the same one-time
+ * code before a session exists. Nothing here can bypass an invitation or an
+ * approval, because nothing here grants anything.
+ *
+ * The Google control used to be a look-alike button of our own that only
+ * redirected to /login, which is both a broken promise to the visitor and the
+ * kind of imitation Google's branding terms exist to stop. It is now the same
+ * real Google control the login page uses. An account that is not permitted to
+ * be created is refused by the server with a message, which is the honest
+ * outcome and the one that was going to happen anyway.
+ */
 export default function Register() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -66,23 +81,18 @@ export default function Register() {
     }
   };
 
-  const handleGoogle = () => {
-    api.auth.loginWithProvider("google", "/");
-  };
-
   if (showOtp) {
     return (
       <AuthLayout
-        icon={Mail}
         title="Verify your email"
-        subtitle={`We sent a code to ${email}`}
+        subtitle={`We sent a six digit code to ${email}.`}
       >
         {error && (
-          <div className="mb-4 p-3 rounded-lg bg-destructive/10 text-destructive text-sm">
+          <div role="alert" className="mb-5 rounded-lg bg-destructive/10 p-3 text-sm text-destructive">
             {error}
           </div>
         )}
-        <div className="flex justify-center mb-6">
+        <div className="mb-7 flex justify-center">
           <InputOTP
             maxLength={6}
             value={otpCode}
@@ -101,22 +111,26 @@ export default function Register() {
           </InputOTP>
         </div>
         <Button
-          className="w-full h-12 font-medium"
+          className="h-12 w-full text-[14px] font-semibold"
           onClick={handleVerify}
           disabled={loading || otpCode.length < 6}
         >
           {loading ? (
             <>
-              <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />
               Verifying...
             </>
           ) : (
             "Verify"
           )}
         </Button>
-        <p className="text-center text-sm text-muted-foreground mt-4">
-          Didn't receive the code?{" "}
-          <button onClick={handleResend} className="text-primary font-medium hover:underline">
+        <p className="mt-5 text-center text-[13px] text-muted-foreground">
+          Didn&apos;t receive the code?{" "}
+          <button
+            type="button"
+            onClick={handleResend}
+            className="rounded-sm font-medium text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+          >
             Resend
           </button>
         </p>
@@ -126,96 +140,73 @@ export default function Register() {
 
   return (
     <AuthLayout
-      icon={UserPlus}
       title="Create your account"
-      subtitle="Sign up to get started"
+      subtitle="Get set up on DashFlo in a couple of minutes."
       footer={
         <>
           Already have an account?{" "}
-          <Link to="/login" className="text-primary font-medium hover:underline">
+          <Link
+            to="/login"
+            className="rounded-sm font-medium text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+          >
             Log in
           </Link>
         </>
       }
     >
-      <Button
-        variant="outline"
-        className="w-full h-12 text-sm font-medium mb-6"
-        onClick={handleGoogle}
-      >
-        <GoogleIcon className="w-5 h-5 mr-2" />
-        Continue with Google
-      </Button>
-
-      <div className="relative mb-6">
-        <div className="absolute inset-0 flex items-center">
-          <div className="w-full border-t border-border" />
-        </div>
-        <div className="relative flex justify-center text-xs uppercase">
-          <span className="bg-card px-3 text-muted-foreground">or</span>
-        </div>
-      </div>
+      <GoogleSignInButton onError={setError} dividerLabel="or sign up with email" />
 
       {error && (
-        <div className="mb-4 p-3 rounded-lg bg-destructive/10 text-destructive text-sm">
+        <div role="alert" className="mb-5 rounded-lg bg-destructive/10 p-3 text-sm text-destructive">
           {error}
         </div>
       )}
 
-      <form onSubmit={handleSubmit} className="space-y-4">
+      <form onSubmit={handleSubmit} className="space-y-5">
         <div className="space-y-2">
-          <Label htmlFor="email">Email</Label>
-          <div className="relative">
-            <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" aria-hidden="true" />
-            <Input
-              id="email"
-              type="email"
-              autoComplete="email"
-              autoFocus
-              placeholder="you@example.com"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              className="pl-10 h-12"
-              required
-            />
-          </div>
+          <Label htmlFor="email" className="text-[13px]">Email</Label>
+          <Input
+            id="email"
+            type="email"
+            autoComplete="email"
+            autoFocus
+            placeholder="you@company.com"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            className="h-12"
+            required
+          />
         </div>
         <div className="space-y-2">
-          <Label htmlFor="password">Password</Label>
-          <div className="relative">
-            <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" aria-hidden="true" />
-            <Input
-              id="password"
-              type="password"
-              autoComplete="new-password"
-              placeholder="••••••••"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className="pl-10 h-12"
-              required
-            />
-          </div>
+          <Label htmlFor="password" className="text-[13px]">Password</Label>
+          <Input
+            id="password"
+            type="password"
+            autoComplete="new-password"
+            placeholder="Create a password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            className="h-12"
+            required
+          />
         </div>
         <div className="space-y-2">
-          <Label htmlFor="confirm">Confirm Password</Label>
-          <div className="relative">
-            <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" aria-hidden="true" />
-            <Input
-              id="confirm"
-              type="password"
-              autoComplete="new-password"
-              placeholder="••••••••"
-              value={confirmPassword}
-              onChange={(e) => setConfirmPassword(e.target.value)}
-              className="pl-10 h-12"
-              required
-            />
-          </div>
+          <Label htmlFor="confirm" className="text-[13px]">Confirm password</Label>
+          <Input
+            id="confirm"
+            type="password"
+            autoComplete="new-password"
+            placeholder="Re-enter your password"
+            value={confirmPassword}
+            onChange={(e) => setConfirmPassword(e.target.value)}
+            className="h-12"
+            required
+          />
         </div>
-        <Button type="submit" className="w-full h-12 font-medium" disabled={loading}>
+        <Button type="submit" className="h-12 w-full text-[14px] font-semibold" disabled={loading}>
           {loading ? (
             <>
-              <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />
               Creating account...
             </>
           ) : (
@@ -223,14 +214,24 @@ export default function Register() {
           )}
         </Button>
       </form>
-      <p className="mt-5 text-center text-xs leading-relaxed text-muted-foreground">
+
+      {/* Notice at Collection. Kept verbatim: it is the disclosure that has to
+          be on this screen at the point the account is created, not a caption
+          that can be trimmed for layout. */}
+      <p className="mt-6 text-[12px] leading-relaxed text-muted-foreground">
         We use your email and account credentials to create, verify, secure, and support your DashFlo account.
         By creating an account, you agree to the{' '}
-        <a href="https://dashflo.io/terms" className="text-primary font-medium hover:underline">
+        <a
+          href="https://dashflo.io/terms"
+          className="rounded-sm font-medium text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+        >
           Terms of Service
         </a>{' '}
         and acknowledge the{' '}
-        <a href="https://dashflo.io/privacy" className="text-primary font-medium hover:underline">
+        <a
+          href="https://dashflo.io/privacy"
+          className="rounded-sm font-medium text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+        >
           Privacy Policy
         </a>.
       </p>

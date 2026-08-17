@@ -6,9 +6,11 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const routerPath = path.join(root, 'marketing/dist/assets/site-router.js');
 const cssPath = path.join(root, 'marketing/dist/assets/legal.css');
 const indexPath = path.join(root, 'marketing/dist/index.html');
+const brandCssPath = path.join(root, 'marketing/dist/assets/brand.css');
 const routerSource = fs.readFileSync(routerPath, 'utf8');
 const cssSource = fs.readFileSync(cssPath, 'utf8');
 const indexSource = fs.readFileSync(indexPath, 'utf8');
+const brandCss = fs.readFileSync(brandCssPath, 'utf8');
 
 const LEGAL_CONTACT = 'info@dashflo.io';
 const SUPPORT_CONTACT = 'support@dashflo.io';
@@ -164,6 +166,43 @@ assert(/const APP_LOGIN = `\$\{APP_ORIGIN\}\/login`/.test(routerSource), 'login 
 assert(/const APP_REGISTER = `\$\{APP_ORIGIN\}\/register`/.test(routerSource), 'registration route missing');
 assert(!routerSource.includes('/signup'), 'obsolete signup route present');
 assert(routerSource.includes('Go To Dashboard'), 'authenticated call to action missing');
+
+/* Authenticated navigation call to action.
+ *
+ * Signed in, the header link becomes Dashboard and must carry the same primary
+ * treatment as the hero button rather than the quiet .sign-in text style. These
+ * pin the three parts that make that work, because each one fails silently:
+ * a missing class swap looks like a link, keeping .sign-in breaks the 1120px
+ * responsive rule, and a missing .nav-cta rule leaves a 42px button in a header
+ * sized for 36.
+ */
+assert(/function promoteToPrimaryCta/.test(routerSource), 'navbar Dashboard promotion helper missing');
+assert(
+  /promoteToPrimaryCta\(link\);/.test(routerSource),
+  'authenticated navbar link is not promoted to the primary call to action',
+);
+assert(
+  /classList\.remove\('sign-in'\)/.test(routerSource),
+  'promoted navbar link keeps the sign-in class, which breaks the 1120px responsive rule',
+);
+assert(
+  /classList\.add\('button', 'button-primary'\)/.test(routerSource),
+  'promoted navbar link does not take the primary button classes',
+);
+assert(brandCss.includes('.nav-cta'), 'compact navbar call-to-action sizing missing from brand.css');
+assert(brandCss.includes(':focus-visible'), 'navbar call to action has no visible focus state');
+
+/* Brand mark assets.
+ *
+ * brand.css named the 1254px originals, which are not part of dist/, so a clean
+ * deploy rendered no mark and a server still holding them from an earlier
+ * deploy sent 385KB to draw a 34px logo. Every URL this stylesheet references
+ * must exist in dist/brand/.
+ */
+for (const ref of brandCss.matchAll(/url\("(\/brand\/[^"]+)"\)/g)) {
+  const asset = path.join(root, 'marketing/dist', ref[1]);
+  assert(fs.existsSync(asset), `brand.css references ${ref[1]}, which is not in marketing/dist`);
+}
 assert(routerSource.includes('/api/auth/session-status'), 'session status lookup missing');
 assert(/credentials: 'include'/.test(routerSource), 'session status request does not send credentials');
 // The marketing site must never hold a token itself.

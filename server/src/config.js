@@ -83,6 +83,22 @@ export const config = {
   // origin in for one read instead.
   marketingOrigin: process.env.MARKETING_ORIGIN || 'https://dashflo.io',
 
+  // The Progress Control Center hostname. It runs the same application build
+  // and the same backend, reached through its own nginx server block, so the
+  // browser treats it as an ordinary same-origin app: the client calls
+  // /api on whatever host it was loaded from, and the session cookie it
+  // receives is host-only to that hostname.
+  //
+  // Nothing about the app.dashflo.io session is widened to make this work. The
+  // cookie is never scoped to .dashflo.io, no token is passed between hosts,
+  // and the two sessions are independent. What this value does is tell the CSRF
+  // guard and CORS that this origin is one of ours, which a cookie
+  // authenticated write from the Control Center needs in order to be accepted.
+  //
+  // Access on that host is still owner only and still decided on the server.
+  // See lib/progressAccess.js.
+  progressOrigin: process.env.PROGRESS_ORIGIN || 'https://progress.dashflo.io',
+
   // Public contact form. The destination is fixed here so a browser can never
   // choose who a submission is delivered to.
   contact: {
@@ -95,7 +111,7 @@ export const config = {
     port: int(process.env.SMTP_PORT, 587),
     user: process.env.SMTP_USER || '',
     pass: process.env.SMTP_PASS || '',
-    from: process.env.SMTP_FROM || 'DashOS <no-reply@localhost>',
+    from: process.env.SMTP_FROM || 'DashFlo <no-reply@localhost>',
     fromName: process.env.SMTP_FROM_NAME || 'DashFlo Support',
     secure: bool(process.env.SMTP_SECURE, false),
   },

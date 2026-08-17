@@ -1,6 +1,14 @@
-/* Production branding override for the approved prebuilt marketing bundle. */
+/* Production branding override for the approved prebuilt marketing bundle.
+ *
+ * This points at the 180px variants in dist/brand/. It previously named
+ * dashflo-favi-dark.png and dashflo-favi-light.png, which are the 1254px
+ * originals: they are not part of dist/, so a clean deploy of this directory
+ * rendered no brand mark at all, and the server that did still hold them from
+ * an earlier deploy was sending 385KB to draw a 34px logo. The sources stay in
+ * marketing/brand-src/ and are not deployed.
+ */
 .brand-mark {
-  background-image: url("/brand/dashflo-favi-dark.png");
+  background-image: url("/brand/dashflo-icon-dark-180.png");
   background-position: center;
   background-repeat: no-repeat;
   background-size: contain;
@@ -8,9 +16,35 @@
 }
 
 [data-theme="light"] .brand-mark {
-  background-image: url("/brand/dashflo-favi-light.png");
+  background-image: url("/brand/dashflo-icon-light-180.png");
 }
 
 .brand-mark i {
   display: none;
+}
+
+/* The authenticated navigation call to action.
+ *
+ * Signed in, the header's Login link becomes Dashboard. It used to keep the
+ * quiet .sign-in text treatment, which left the one action available to a
+ * signed-in visitor looking like a tertiary link. It now carries the same
+ * primary treatment as the hero button, applied by site-router.js swapping the
+ * class rather than by any new markup.
+ *
+ * .button and .button-primary already supply the fill, the hover, the active
+ * transform and the radius, and both light and dark themes resolve through
+ * var(--coral). Two things are added here: a compact size so it sits correctly
+ * in a 74px header next to the theme toggle, and a visible focus ring, which
+ * the compiled bundle does not define for buttons.
+ */
+.header-actions .button-primary.nav-cta {
+  height: 36px;
+  padding: 0 16px;
+  font-size: 12.5px;
+}
+
+.button-primary.nav-cta:focus-visible,
+.nav-mobile-actions .button-primary:focus-visible {
+  outline: 2px solid var(--coral-bright);
+  outline-offset: 3px;
 }

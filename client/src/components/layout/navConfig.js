@@ -1,4 +1,4 @@
-import { LayoutDashboard, FileText, Share2, Wrench, Settings as SettingsIcon, BarChart3, Wallet, SlidersHorizontal, Megaphone, CheckCircle2, XCircle, Ban, Slash, Clock, Layers, Users, Truck, Zap, Webhook, TrendingUp, CalendarDays, Target, DollarSign, PieChart, UserCheck, Building2, Landmark, Receipt, CreditCard, HandCoins, BadgeDollarSign, Cog, Gauge, MapPin, FileBarChart, UserPlus, Bell, Calculator, ShieldCheck, FlaskConical, User, Plug, Database, ListTree, KeyRound, AlertTriangle, BookOpen, Wallet2, LineChart, ImageIcon, PenTool, ClipboardCheck, Sparkles, Activity, ArrowRightLeft, GitPullRequest, Trophy, PhoneCall } from 'lucide-react';
+import { LayoutDashboard, FileText, Share2, Wrench, Settings as SettingsIcon, BarChart3, Wallet, SlidersHorizontal, Megaphone, CheckCircle2, XCircle, Ban, Slash, Clock, Layers, Users, Truck, Zap, Webhook, TrendingUp, CalendarDays, Target, DollarSign, PieChart, UserCheck, Building2, Landmark, Receipt, CreditCard, HandCoins, BadgeDollarSign, Cog, Gauge, MapPin, FileBarChart, UserPlus, Bell, Calculator, ShieldCheck, FlaskConical, User, Plug, Database, ListTree, KeyRound, AlertTriangle, BookOpen, Wallet2, LineChart, ImageIcon, PenTool, Trophy, PhoneCall } from 'lucide-react';
 
 export const navGroups = [
   { label: 'Overview', icon: LayoutDashboard, path: '/', type: 'single', permKey: 'overview' },
@@ -90,23 +90,13 @@ export const navGroups = [
       { label: 'Payload Tester', path: '/payload-tester', icon: FlaskConical, permKey: 'tools' },
     ],
   },
-  {
-    // The Progress Control Center used to render its own sidebar next to this
-    // one, which meant three nav columns before the thing being reviewed. It is
-    // a section like any other, so it lives here.
-    label: 'Progress', icon: ClipboardCheck, type: 'dropdown', path: '/progress', permKey: 'progress_access',
-    children: [
-      { label: 'Command Center', path: '/progress', icon: Gauge, permKey: 'progress_access' },
-      { label: 'Application Review', path: '/progress/review', icon: ListTree, permKey: 'progress_access' },
-      { label: 'Findings', path: '/progress/findings', icon: AlertTriangle, permKey: 'progress_access' },
-      { label: 'Change Requests', path: '/progress/changes', icon: GitPullRequest, permKey: 'progress_access' },
-      { label: 'Prompt Studio', path: '/progress/prompts', icon: Sparkles, permKey: 'progress_prompts' },
-      { label: 'Build Activity', path: '/progress/activity', icon: Activity, permKey: 'progress_access' },
-      { label: 'LeadByte Migration', path: '/progress/migration', icon: ArrowRightLeft, permKey: 'progress_access' },
-      { label: 'Release Gates', path: '/progress/gates', icon: ShieldCheck, permKey: 'progress_access' },
-      { label: 'Progress Settings', path: '/progress/settings', icon: Cog, permKey: 'progress_admin' },
-    ],
-  },
+  // Progress is deliberately absent from this table.
+  //
+  // The Control Center is internal owner tooling and now lives on its own
+  // hostname, progress.dashflo.io, where access is decided on the server. It is
+  // removed from the application navigation entirely rather than hidden from
+  // some roles, because a nav entry that is only conditionally rendered is a
+  // link, not a boundary, and the owner does not reach it from here either.
   {
     label: 'Settings', icon: SettingsIcon, type: 'dropdown', path: '/settings',
     children: [

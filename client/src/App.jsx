@@ -6,7 +6,7 @@ import { BrowserRouter as Router, Route, Routes, Navigate } from 'react-router-d
 import { AuthProvider, useAuth } from '@/lib/AuthContext';
 import UserNotRegisteredError from '@/components/UserNotRegisteredError';
 import ProtectedRoute from '@/components/ProtectedRoute';
-import PermissionRoute from '@/components/PermissionRoute';
+import OwnerRoute from '@/components/OwnerRoute';
 import ScrollToTop from './components/ScrollToTop';
 import { hostScope, isAllowedOnProgressHost } from '@/lib/hostScope';
 import { OperatorRoutes, DocsRoutes, ProgressRoutes } from './AppRoutes';
@@ -83,6 +83,17 @@ const AuthenticatedApp = () => {
   // goes to login and every other path lands back on the Command Center rather
   // than falling through to the operator app.
   if (isProgressHost()) {
+    // Keep the Control Center out of search results. The nginx host sends
+    // X-Robots-Tag, which is what a crawler actually obeys for this bundle;
+    // this tag is the second copy, so the page is still marked if it is ever
+    // served by something other than that server block.
+    if (typeof document !== 'undefined' && !document.querySelector('meta[name="robots"]')) {
+      const meta = document.createElement('meta');
+      meta.name = 'robots';
+      meta.content = 'noindex, nofollow, noarchive';
+      document.head.appendChild(meta);
+    }
+
     // Hard guard before any route matching. If a path is not on the allowlist,
     // redirect immediately rather than letting the route table decide, so adding
     // a route later cannot accidentally expose it on this domain.
@@ -100,7 +111,17 @@ const AuthenticatedApp = () => {
         <Route path="/forgot-password" element={<ForgotPassword />} />
         <Route path="/reset-password" element={<ResetPassword />} />
         <Route element={<ProtectedRoute unauthenticatedElement={<Navigate to="/login" replace />} />}>
-          <Route element={<PermissionRoute />}>
+          {/* Owner only. Being signed in is not enough and admin is not enough.
+              An account that authenticates here and is not the owner gets a bare
+              refusal, never a partly rendered Control Center: OwnerRoute renders
+              instead of the shell rather than around it, so no readiness figure,
+              finding, screenshot or internal note is fetched or painted first.
+
+              This is the second of two gates, not the only one. The server
+              refuses Progress entities and Progress functions to non-owners,
+              so removing this component from the bundle would change what is
+              drawn and nothing about what can be read. */}
+          <Route element={<OwnerRoute />}>
             {ProgressRoutes()}
           </Route>
         </Route>

@@ -26,6 +26,20 @@ export function allowedOrigins(config) {
   const origins = new Set();
   const base = originOf(config.publicBaseUrl);
   if (base) origins.add(base);
+
+  // The Progress Control Center host serves the same application from the same
+  // backend, so its requests are ours. It is added here rather than being left
+  // to ALLOWED_ORIGINS so that deploying the Control Center cannot be half done:
+  // an operator who installs the nginx host but forgets an environment variable
+  // would otherwise get a working page whose every write is refused.
+  //
+  // This grants an origin CSRF standing, which is exactly why the marketing
+  // site is deliberately NOT here. The difference is that this origin serves
+  // our own authenticated application and is owner gated on the server, while
+  // the marketing site is a public static bundle.
+  const progress = originOf(config.progressOrigin);
+  if (progress) origins.add(progress);
+
   for (const extra of String(process.env.ALLOWED_ORIGINS || '')
     .split(',')
     .map((s) => s.trim())

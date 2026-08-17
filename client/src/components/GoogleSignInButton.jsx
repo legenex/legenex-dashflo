@@ -21,7 +21,7 @@ function resolvedTheme() {
   return document.documentElement.classList.contains('dark') ? 'dark' : 'light';
 }
 
-export default function GoogleSignInButton({ onError, onSuccess }) {
+export default function GoogleSignInButton({ onError, onSuccess, dividerLabel = 'or continue with email' }) {
   const holder = useRef(null);
   const nonce = useRef(null);
   const [state, setState] = useState('checking');
@@ -106,23 +106,31 @@ export default function GoogleSignInButton({ onError, onSuccess }) {
   if (state === 'checking' || state === 'unavailable') return null;
 
   return (
-    <div className="mb-6">
+    <div className="mb-7">
+      {/* Google's control leads. It is the way most people sign in here, so it
+          sits above the email form rather than being tucked under it as an
+          afterthought, and it spans the full column width so it reads as a
+          primary action. The widget itself is still Google's own rendering,
+          which their branding terms require and which is what carries the
+          account chooser. */}
       <div className="relative min-h-[44px]">
         <div ref={holder} className="flex justify-center [color-scheme:light] dark:[color-scheme:dark]" />
         {(state === 'loading' || state === 'signing-in') && (
-          <div className="absolute inset-0 flex items-center justify-center gap-2 rounded-lg bg-card text-sm text-muted-foreground">
+          <div className="absolute inset-0 flex items-center justify-center gap-2 rounded-lg bg-background text-sm text-muted-foreground">
             {state === 'signing-in'
               ? <><Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> Signing in with Google...</>
               : <><GoogleIcon className="h-4 w-4" /> Preparing Google sign-in...</>}
           </div>
         )}
       </div>
-      <div className="relative mt-6">
-        <div className="absolute inset-0 flex items-center">
+      <div className="relative mt-7">
+        <div className="absolute inset-0 flex items-center" aria-hidden="true">
           <div className="w-full border-t border-border" />
         </div>
-        <div className="relative flex justify-center text-xs uppercase">
-          <span className="bg-card px-3 text-muted-foreground">or</span>
+        <div className="relative flex justify-center">
+          <span className="bg-background px-3 font-mono text-[11px] uppercase tracking-[0.14em] text-muted-foreground">
+            {dividerLabel}
+          </span>
         </div>
       </div>
     </div>

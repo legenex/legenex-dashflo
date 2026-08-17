@@ -14,6 +14,7 @@ import { QueryClientProvider } from '@tanstack/react-query'
 import { queryClientInstance } from '@/lib/query-client'
 import { BrowserRouter as Router, Route, Routes, Navigate, useParams, useSearchParams } from 'react-router-dom';
 import PageNotFound from './lib/PageNotFound';
+import ProgressRelocated from '@/components/progress/ProgressRelocated';
 import { AuthProvider, useAuth } from '@/lib/AuthContext';
 import UserNotRegisteredError from '@/components/UserNotRegisteredError';
 import ProtectedRoute from '@/components/ProtectedRoute';
@@ -271,10 +272,14 @@ export function OperatorRoutes() {
             <Route path="/payload-tester" element={<PayloadTester />} />
           </Route>
           <Route path="/settings" element={<Settings />} />
-          {/* Progress Control Center on the main dashboard host. Gated by the
-              progress permission keys through PermissionRoute like every other
-              operator route. */}
-          {ProgressRoutes()}
+          {/* The Control Center is not mounted on this host any more. It is
+              owner tooling and lives at progress.dashflo.io, so there is one
+              copy of it and one place that decides who reaches it.
+
+              The wildcard matters: /progress/findings and every other nested
+              path resolve here too, so no deeper route can slip past the
+              separation. See components/progress/ProgressRelocated.jsx. */}
+          <Route path="/progress/*" element={<ProgressRelocated />} />
           </Route>
         </Route>
       </Route>

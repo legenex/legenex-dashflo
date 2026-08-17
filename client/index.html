@@ -2,9 +2,15 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/png" href="/brand/dashflo-favi-light.png" media="(prefers-color-scheme: light)" />
-    <link rel="icon" type="image/png" href="/brand/dashflo-favi-dark.png" media="(prefers-color-scheme: dark)" />
-    <link rel="icon" type="image/png" href="/brand/dashflo-favi-dark.png" />
+    <!-- Theme-aware DashFlo mark, the same approved icon the marketing site
+         uses and at the same resized variants. The 1254px originals used to be
+         referenced here, which meant every tab loaded 385KB to draw a 16px
+         favicon. The unconditional link last is the fallback for browsers that
+         ignore the media attribute. -->
+    <link rel="icon" type="image/png" sizes="32x32" href="/brand/dashflo-icon-light-32.png" media="(prefers-color-scheme: light)" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/brand/dashflo-icon-dark-32.png" media="(prefers-color-scheme: dark)" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/brand/dashflo-icon-dark-32.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/brand/dashflo-icon-dark-180.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="manifest" href="/manifest.json" />
     <title>DashFlo</title>

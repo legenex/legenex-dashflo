@@ -1,4 +1,5 @@
-import { requireUser, HttpError } from './_runtime.js';
+import { HttpError } from './_runtime.js';
+import { authorizeProgressCtx } from '../lib/progressAccess.js';
 import { callLLM } from '../integrations/llm.js';
 
 // Prompt Studio generator.
@@ -14,7 +15,7 @@ import { callLLM } from '../integrations/llm.js';
 //   3. It never decides whether a surface is RED. That is a deterministic code
 //      check below, because an LLM getting it wrong once is one time too many.
 //
-// Access: operator session, admin role or progress_write.
+// Access: the DashFlo owner alone. See lib/progressAccess.js.
 // Writes: PromptDraft only.
 
 const RED_SURFACES = [
@@ -117,24 +118,11 @@ export default async function progressPrompt(ctx) {
   try {
     const db = ctx.db;
 
-    const user = requireUser(ctx);
-
-    const record = await db.entities.User.get(user.id).catch(() => null);
-    const caller = record || user;
-    if (caller.base_role === 'supplier' || caller.base_role === 'buyer') {
-      return ctx.json({ error: 'Forbidden' }, 403);
-    }
-    if (caller.linked_buyer_id || caller.linked_supplier_id) {
-      return ctx.json({ error: 'Forbidden' }, 403);
-    }
-    let permissions = {};
-    try {
-      permissions = typeof caller.permissions === 'string'
-        ? JSON.parse(caller.permissions || '{}')
-        : (caller.permissions || {});
-    } catch { permissions = {}; }
-    if (caller.role !== 'admin' && permissions.progress_admin !== true && permissions.progress_write !== true) {
-      return ctx.json({ error: 'Forbidden' }, 403);
+    // Owner only. Progress moved to its own hostname as internal owner tooling,
+    // so an admin role and a progress_* permission key no longer qualify.
+    const decision = await authorizeProgressCtx(ctx);
+    if (!decision.allowed) {
+      return ctx.json({ error: decision.status === 401 ? 'Unauthorized' : 'Forbidden' }, decision.status);
     }
 
     const body = ctx.body || {};

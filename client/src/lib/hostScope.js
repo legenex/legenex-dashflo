@@ -7,10 +7,15 @@
 //
 // Exactly one scope wins for any hostname, and the order below is the precedence.
 
+// Where the Progress Control Center lives. One constant so the redirect from the
+// retired /progress route, and anything else that needs to name the host, cannot
+// drift from the host the app actually recognises.
+export const PROGRESS_ORIGIN = 'https://progress.dashflo.io';
+
 export function hostScope(hostname = '') {
   const h = String(hostname).toLowerCase();
 
-  // api.legenex.com exists only to serve backend functions. Never gates on auth.
+  // api.dashflo.io exists only to serve backend functions. Never gates on auth.
   if (/(^|\.)api\./.test(h)) return 'api';
 
   // The Progress Control Center subdomain. Checked before docs and before the

@@ -681,6 +681,32 @@ function readSessionStatus() {
     .catch(() => false);
 }
 
+/* Give a promoted Dashboard link the primary call to action treatment.
+ *
+ * Signed in, the header's Login link becomes the only action on the page, and
+ * the quiet .sign-in text style it was keeping made the one thing a returning
+ * customer wants look like a footnote. It now matches the hero's Go To
+ * Dashboard button.
+ *
+ * The classes are the compiled bundle's own, not new ones, so the fill, hover,
+ * active transform and radius all come from the design that already shipped and
+ * both themes resolve through var(--coral). .nav-cta only tightens the height
+ * and padding for the header, and assets/brand.css adds the focus ring the
+ * bundle does not define.
+ *
+ * .sign-in is removed rather than left alongside, because at 1120px and below
+ * the bundle hides .sign-in and .header-actions > .button together: the element
+ * has to be one or the other for the responsive rule to keep working. Inside
+ * the mobile menu the link keeps the plain button treatment, since
+ * .nav-mobile-actions .button is the rule that reveals it there.
+ */
+function promoteToPrimaryCta(link) {
+  const inMobileMenu = Boolean(link.closest('.nav-mobile-actions'));
+  link.classList.remove('sign-in');
+  link.classList.add('button', 'button-primary');
+  if (!inMobileMenu) link.classList.add('nav-cta');
+}
+
 // Rewrite the calls to action in place rather than rebuilding them, so the
 // compiled button styling and layout are preserved exactly.
 function applyCta(authenticated) {
@@ -715,6 +741,7 @@ function applyCta(authenticated) {
       }
       link.href = APP_ORIGIN;
       link.textContent = 'Dashboard';
+      promoteToPrimaryCta(link);
     }
 
     // The compiled hero ships a secondary in-page anchor next to the trial

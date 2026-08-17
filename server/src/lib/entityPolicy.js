@@ -76,6 +76,14 @@ const adminOnly = () => ({
   read: OWNER_ADMIN, create: OWNER_ADMIN, update: OWNER_ADMIN, delete: OWNER_ADMIN,
 });
 
+// Internal owner tooling. Not admin, not a permission key, owner alone. Used by
+// the Progress Control Center, which holds findings, migration risk, review
+// state and internal notes. See lib/progressAccess.js for why the boundary is
+// the owner rather than a grantable permission.
+const ownerOnly = () => ({
+  read: [ROLE.OWNER], create: [ROLE.OWNER], update: [ROLE.OWNER], delete: [ROLE.OWNER],
+});
+
 // Read only for everyone operational. Written by backend functions.
 const operatorReadOnly = () => ({
   read: OPERATORS, create: [], update: [], delete: [],
@@ -133,7 +141,29 @@ export const ENTITY_POLICY = {
   AuditRun: operatorReadOnly(),
   AuditFinding: operatorReadOnly(),
   Report: operatorFull(),
-  PageSnapshot: operatorReadOnly(),
+
+  // ── Progress Control Center. Owner only. ──────────────────────────────────
+  //
+  // These were absent from this table, which denied them to everyone including
+  // the owner, so the Control Center could not read its own records through
+  // this route. Listing them owner-only restores the surface for the one
+  // account that is meant to have it and keeps it closed to every other role.
+  //
+  // The set is defined in lib/progressAccess.js so the policy, the backend
+  // functions and the tests cannot drift apart.
+  ProgressPage: ownerOnly(),
+  ProgressSnapshot: ownerOnly(),
+  ReleaseGate: ownerOnly(),
+  ReviewThread: ownerOnly(),
+  ChangeRequest: ownerOnly(),
+  PromptDraft: ownerOnly(),
+  MigrationRequirement: ownerOnly(),
+  VerificationRecord: ownerOnly(),
+
+  // Screenshots of internal application pages, captured for owner review. The
+  // images themselves are internal material, so this moved from operator read
+  // to owner only alongside the rest of the Control Center.
+  PageSnapshot: ownerOnly(),
 
   // Operator tooling.
   ImportTemplate: operatorFull(),
