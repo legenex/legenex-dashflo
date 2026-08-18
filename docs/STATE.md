@@ -1780,3 +1780,88 @@ data movement. Reverting restores the silent panel, so prefer forward fixes.
   UNPROVEN. The request failed and the browser discarded the reason. The next
   attempt will name it on screen and leave a `[migration]` line in the
   application log.
+
+## Automatic production deployment from main, 18 August 2026
+
+`.github/workflows/deploy-production.yml` is the first automated path to
+production. Every push to main runs the repository gate, and only a passing
+gate is allowed to deploy. `workflow_dispatch` runs the same thing by hand.
+
+### What the workflow does and does not do
+
+The gate job is `npm run gate`, unchanged, with a disposable PostgreSQL 16
+service on 5433, the port the database suites already look for. Without it the
+receipt, intake, migration and auth suites skip themselves and a green CI run
+would be weaker evidence than a local one.
+
+The deploy job runs under the `production` environment, in concurrency group
+`production-deploy` with `cancel-in-progress: false`, so a running deployment
+is never killed midway and a later push waits its turn. It is skipped unless
+the ref is main. There is no third-party SSH action: the key is written to a
+mode 600 file under `RUNNER_TEMP`, the host key comes from `ssh-keyscan`, and
+`StrictHostKeyChecking` stays on.
+
+On the host the sequence is fetch, checkout main, `pull --ff-only`, verify
+`git rev-parse HEAD` equals the SHA GitHub is deploying, `docker compose build
+app`, `docker compose up -d --no-deps app`, wait for container health, verify
+`http://127.0.0.1:4000/api/health`, then the two restricted helper commands,
+then `docker compose ps`, then the five public surfaces. The public surfaces
+are checked again from the runner afterwards, which is the only evidence that
+they are reachable from outside the VPS.
+
+`server/.env` is never written. It is required to exist before anything is
+touched and its digest is compared before and after, so a deployment that
+disturbed it fails instead of passing quietly. The digest itself is not
+printed. No secret is copied from GitHub to the host. Nothing recreates
+PostgreSQL, removes a volume, issues a certificate, imports Base44 data, runs
+an owner migration, or edits nginx outside the installed helper.
+
+Two guards exist because the failure they prevent is silent. An unset compose
+variable does not stop compose, it substitutes an empty string and would
+restart the application with a blank database password, so `docker compose
+config` is inspected for that warning before the running container is touched;
+only stderr is read, so no resolved value is printed. And the remote script
+arrives on stdin, so `GIT_TERMINAL_PROMPT=0` stops a credential prompt from
+consuming the rest of the script.
+
+### Evidence
+
+- YAML parses, and every `run:` block plus the generated remote script passes
+  `bash -n`.
+- The remote script was rehearsed against stubs for docker, sudo and curl with
+  a real local git remote: 31 assertions, all passing. The happy path proves
+  build, `--no-deps` restart, both helper commands, all five surface checks, no
+  `compose down` and no volume work, and an untouched `server/.env`. Nine
+  failure modes each stop at the right place: SHA mismatch and missing
+  `server/.env` stop before the build, an unset compose variable stops before
+  the build and names the variable, a build failure and a helper failure abort,
+  an unhealthy container stops before any root helper runs, a 502 on a public
+  surface fails, and a rewritten `server/.env` fails.
+- The URL check helper was exercised against a loopback mock: 7 cases covering
+  the exact `res.json` health body, a reformatted one, a followed redirect, a
+  wrong body, a 502 and a refused connection.
+- The runner steps were exercised directly: 11 cases covering each missing
+  input, an unscannable host, a mode 600 key file, no key material in the
+  output, a secret that is not a key, and a passphrase protected key, which is
+  refused rather than left to hang.
+- `npm run gate` PASS at this commit, seven steps, 88 test files, 1163 tests,
+  none skipped.
+- No live endpoint was contacted from this session. Every rehearsal used
+  loopback or stubs.
+
+### Rollback
+
+Delete `.github/workflows/deploy-production.yml` and push, or disable the
+workflow in the Actions tab. Deployment returns to the manual VPS command
+block. The workflow changes no application code and no host configuration, so
+nothing else has to be undone. A bad deployment is rolled back the same way it
+always was, by returning the host to the previous commit and rebuilding.
+
+### Not done
+
+- Whether the `production` environment carries a required reviewer is UNPROVEN
+  until the first run. If it does, the deploy job waits for approval rather
+  than failing.
+- The workflow assumes git, docker, curl and sha256sum exist on the host. It
+  checks for them and stops before mutating anything, but the check has not
+  been observed against the real VPS.

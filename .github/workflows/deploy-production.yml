@@ -1,0 +1,340 @@
+name: Deploy production
+
+# Every push to main is deployed to production, but only after the repository
+# gate passes. The gate is the same "npm run gate" that must pass before a
+# commit, so CI cannot deploy something a local run would have refused.
+#
+# Nothing here creates or edits sudoers, helper scripts, nginx configuration,
+# certificates or the production environment file. Root work on the VPS happens
+# only through the restricted helper that is already installed there.
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+# The workflow reads the repository and nothing else. Deployment authority is
+# the SSH key held in the production environment, not the GitHub token.
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    name: Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    # The suites that prove the durable receipt, intake and migration
+    # invariants skip themselves when no database is reachable, and a run with
+    # them skipped is not evidence. A disposable PostgreSQL on the port the
+    # tests already look for keeps the CI gate equal to the local one.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 12
+
+    env:
+      PGHOST: 127.0.0.1
+      PGPORT_TEST: "5433"
+      PGUSER: postgres
+      PGPASSWORD: postgres
+
+    steps:
+      - name: Check out the commit being deployed
+        uses: actions/checkout@v4
+        with:
+          # The em dash check compares against the merge base with origin/main,
+          # so it needs history rather than a single commit.
+          fetch-depth: 0
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            server/package-lock.json
+            client/package-lock.json
+
+      - name: Install dependencies
+        run: |
+          set -euo pipefail
+          npm ci
+          npm --prefix server ci
+          npm --prefix client ci
+
+      - name: Run the repository gate
+        run: npm run gate
+
+  deploy:
+    name: Deploy to production
+    needs: gate
+    # workflow_dispatch can be aimed at any ref. Production only ever takes main.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: production
+
+    # One production deployment at a time, and a running one is never killed
+    # midway. A later push waits for the current deployment to finish.
+    concurrency:
+      group: production-deploy
+      cancel-in-progress: false
+
+    env:
+      DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
+      DEPLOY_USER: ${{ vars.DEPLOY_USER }}
+      DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
+
+    steps:
+      - name: Check the deployment inputs are present
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          missing=0
+          for name in DEPLOY_HOST DEPLOY_USER DEPLOY_PATH DEPLOY_SSH_KEY; do
+            if [ -z "${!name}" ]; then
+              echo "::error::$name is not set on the production environment"
+              missing=1
+            fi
+          done
+          [ "$missing" -eq 0 ]
+          echo "Deploying ${GITHUB_SHA} to ${DEPLOY_USER}@${DEPLOY_HOST}:${DEPLOY_PATH}"
+
+      - name: Write the deployment key and the host key
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          umask 077
+          # The key is written from the environment, never echoed. A trailing
+          # newline is added because OpenSSH rejects a key file without one.
+          printf '%s\n' "$DEPLOY_SSH_KEY" > "$RUNNER_TEMP/deploy_key"
+          chmod 600 "$RUNNER_TEMP/deploy_key"
+          # Prove the file is a usable private key before connecting, without
+          # printing any part of it. Output goes to /dev/null deliberately.
+          ssh-keygen -y -P "" -f "$RUNNER_TEMP/deploy_key" > /dev/null \
+            || { echo "::error::DEPLOY_SSH_KEY is not a usable unencrypted private key"; exit 1; }
+          ssh-keyscan -T 15 -t rsa,ecdsa,ed25519 "$DEPLOY_HOST" > "$RUNNER_TEMP/known_hosts" 2>/dev/null || true
+          if [ ! -s "$RUNNER_TEMP/known_hosts" ]; then
+            echo "::error::Could not read a host key from $DEPLOY_HOST on port 22"
+            exit 1
+          fi
+          chmod 600 "$RUNNER_TEMP/known_hosts"
+          echo "Deployment key loaded, host key recorded for $DEPLOY_HOST"
+
+      - name: Verify SSH access
+        run: |
+          set -euo pipefail
+          ssh -i "$RUNNER_TEMP/deploy_key" \
+            -o IdentitiesOnly=yes \
+            -o UserKnownHostsFile="$RUNNER_TEMP/known_hosts" \
+            -o StrictHostKeyChecking=yes \
+            -o BatchMode=yes \
+            -o ConnectTimeout=15 \
+            "$DEPLOY_USER@$DEPLOY_HOST" \
+            'echo "connected to $(hostname) as $(id -un)"'
+
+      - name: Deploy on the VPS
+        run: |
+          set -euo pipefail
+
+          cat > "$RUNNER_TEMP/remote-deploy.sh" <<'REMOTE'
+          set -euo pipefail
+
+          log() { printf '[deploy] %s\n' "$*"; }
+          fail() { printf '[deploy] FAIL: %s\n' "$*" >&2; exit 1; }
+
+          : "${DEPLOY_PATH:?DEPLOY_PATH was not received}"
+          : "${DEPLOY_SHA:?DEPLOY_SHA was not received}"
+
+          # Fail before anything is mutated if a required tool is absent.
+          for cmd in git docker curl sha256sum; do
+            command -v "$cmd" >/dev/null 2>&1 || fail "$cmd is not available on the host"
+          done
+          docker compose version >/dev/null 2>&1 || fail "docker compose is not available on the host"
+
+          cd "$DEPLOY_PATH" || fail "cannot enter $DEPLOY_PATH"
+          log "host $(hostname), user $(id -un), path $(pwd)"
+
+          # The production environment file belongs to the host. This workflow
+          # never writes it and never copies secrets in from GitHub. It is
+          # fingerprinted before and after so a deploy that disturbed it cannot
+          # pass quietly. The fingerprint itself is not printed.
+          [ -f server/.env ] || fail "server/.env is missing on the host, refusing to deploy"
+          ENV_BEFORE="$(sha256sum server/.env | awk '{print $1}')"
+
+          # This script arrives on stdin, so anything that prompts would read
+          # the rest of it as an answer and hang or misbehave. git is told to
+          # fail instead of asking.
+          export GIT_TERMINAL_PROMPT=0
+          export GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh -o BatchMode=yes}"
+
+          log "commit before deploy $(git rev-parse HEAD)"
+          git fetch origin
+          git checkout main
+          git pull --ff-only origin main
+
+          HEAD_SHA="$(git rev-parse HEAD)"
+          if [ "$HEAD_SHA" != "$DEPLOY_SHA" ]; then
+            fail "host is at $HEAD_SHA but GitHub is deploying $DEPLOY_SHA"
+          fi
+          log "commit verified $HEAD_SHA"
+
+          # An unset compose variable does not stop compose, it substitutes an
+          # empty string and restarts the application with a broken database
+          # password. Detect that before touching the running container.
+          # Only stderr is inspected, so no resolved value is printed.
+          COMPOSE_WARNINGS="$(docker compose config 2>&1 >/dev/null || true)"
+          if printf '%s' "$COMPOSE_WARNINGS" | grep -qi 'variable is not set'; then
+            printf '%s\n' "$COMPOSE_WARNINGS" | grep -i 'variable is not set' >&2
+            fail "docker compose has unset variables on the host"
+          fi
+
+          log "building the application image"
+          docker compose build app
+
+          # --no-deps so the database container is left alone. No down, no
+          # volume removal, no recreation of PostgreSQL.
+          log "restarting the application container"
+          docker compose up -d --no-deps app
+
+          # Overridable so this script can be rehearsed against stubs without a
+          # four minute wait. Production uses the default.
+          HEALTH_TIMEOUT="${DEPLOY_HEALTH_TIMEOUT:-240}"
+          log "waiting up to ${HEALTH_TIMEOUT}s for the application to become healthy"
+          READY=0
+          DEADLINE=$((SECONDS + HEALTH_TIMEOUT))
+          while [ "$SECONDS" -lt "$DEADLINE" ]; do
+            STATE="$(docker inspect -f '{{.State.Status}}' dashflo-app 2>/dev/null || echo missing)"
+            HEALTH="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' dashflo-app 2>/dev/null || echo missing)"
+            if [ "$STATE" = "running" ] && [ "$HEALTH" = "healthy" ] \
+              && curl -fsS --max-time 10 http://127.0.0.1:4000/api/health >/dev/null 2>&1; then
+              READY=1
+              break
+            fi
+            sleep 5
+          done
+          if [ "$READY" -ne 1 ]; then
+            log "container state $(docker inspect -f '{{.State.Status}}' dashflo-app 2>/dev/null || echo missing)"
+            log "container health $(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' dashflo-app 2>/dev/null || echo missing)"
+            fail "the application did not become healthy within ${HEALTH_TIMEOUT} seconds. Inspect the container logs on the host."
+          fi
+          log "container healthy"
+
+          log "verifying http://127.0.0.1:4000/api/health"
+          LOCAL_HEALTH="$(curl -fsS --max-time 15 http://127.0.0.1:4000/api/health)" \
+            || fail "the local health endpoint did not respond"
+          printf '[deploy] local health responded %s\n' "$LOCAL_HEALTH"
+          # Tolerant of whitespace so a reformatted body cannot fail a healthy app.
+          printf '%s' "$LOCAL_HEALTH" | grep -Eq '"status"[[:space:]]*:[[:space:]]*"ok"' \
+            || fail "the local health endpoint did not report ok"
+
+          # Root work happens only through the installed restricted helper.
+          log "publishing the marketing site through the restricted helper"
+          sudo -n /usr/local/sbin/dashflo-deploy-root marketing
+          log "validating and reloading nginx through the restricted helper"
+          sudo -n /usr/local/sbin/dashflo-deploy-root nginx
+
+          log "container state after deployment"
+          docker compose ps
+          APP_STATE="$(docker inspect -f '{{.State.Status}}' dashflo-app 2>/dev/null || echo missing)"
+          [ "$APP_STATE" = "running" ] || fail "dashflo-app is $APP_STATE after the deployment"
+
+          # Public surfaces, checked from the host itself. The workflow checks
+          # them again from GitHub afterwards.
+          check_url() {
+            local url="$1" expect="${2:-}"
+            local out code body
+            out="$(curl -sSL --max-time 25 --retry 3 --retry-delay 5 -w '\n%{http_code}' "$url" 2>/dev/null)" \
+              || fail "$url could not be reached"
+            code="$(printf '%s' "$out" | tail -n 1)"
+            body="$(printf '%s' "$out" | sed '$d')"
+            [ "$code" = "200" ] || fail "$url returned HTTP $code"
+            if [ -n "$expect" ] && ! printf '%s' "$body" | grep -Eq "$expect"; then
+              fail "$url returned 200 but the body did not match $expect"
+            fi
+            log "OK $code $url"
+          }
+
+          check_url https://dashflo.io
+          check_url https://app.dashflo.io/login
+          check_url https://api.dashflo.io/api/health '"status"[[:space:]]*:[[:space:]]*"ok"'
+          check_url https://docs.dashflo.io
+          check_url https://progress.dashflo.io
+
+          ENV_AFTER="$(sha256sum server/.env | awk '{print $1}')"
+          [ "$ENV_BEFORE" = "$ENV_AFTER" ] || fail "server/.env changed during the deployment"
+          log "server/.env preserved unchanged"
+
+          log "deployed commit $HEAD_SHA"
+          log "deployment complete"
+          REMOTE
+
+          ssh -i "$RUNNER_TEMP/deploy_key" \
+            -o IdentitiesOnly=yes \
+            -o UserKnownHostsFile="$RUNNER_TEMP/known_hosts" \
+            -o StrictHostKeyChecking=yes \
+            -o BatchMode=yes \
+            -o ConnectTimeout=15 \
+            -o ServerAliveInterval=30 \
+            "$DEPLOY_USER@$DEPLOY_HOST" \
+            "DEPLOY_PATH='$DEPLOY_PATH' DEPLOY_SHA='$GITHUB_SHA' bash -s" \
+            < "$RUNNER_TEMP/remote-deploy.sh"
+
+      - name: Verify the public surfaces from GitHub
+        run: |
+          set -euo pipefail
+          check_url() {
+            local url="$1" expect="${2:-}"
+            local out code body
+            out="$(curl -sSL --max-time 25 --retry 3 --retry-delay 5 -w '\n%{http_code}' "$url" 2>/dev/null)" \
+              || { echo "::error::$url could not be reached from GitHub"; exit 1; }
+            code="$(printf '%s' "$out" | tail -n 1)"
+            body="$(printf '%s' "$out" | sed '$d')"
+            if [ "$code" != "200" ]; then
+              echo "::error::$url returned HTTP $code"
+              exit 1
+            fi
+            if [ -n "$expect" ] && ! printf '%s' "$body" | grep -Eq "$expect"; then
+              echo "::error::$url returned 200 but the body did not match $expect"
+              exit 1
+            fi
+            echo "OK $code $url"
+          }
+
+          check_url https://dashflo.io
+          check_url https://app.dashflo.io/login
+          check_url https://api.dashflo.io/api/health '"status"[[:space:]]*:[[:space:]]*"ok"'
+          check_url https://docs.dashflo.io
+          check_url https://progress.dashflo.io
+
+      - name: Remove the deployment key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/deploy_key" "$RUNNER_TEMP/known_hosts"
+
+      - name: Record the result
+        if: always()
+        run: |
+          set -euo pipefail
+          {
+            echo "### Production deployment"
+            echo
+            echo "- Commit: \`$GITHUB_SHA\`"
+            echo "- Host: \`$DEPLOY_HOST\`"
+            echo "- Path: \`$DEPLOY_PATH\`"
+            echo "- Result: ${{ job.status }}"
+          } >> "$GITHUB_STEP_SUMMARY"
