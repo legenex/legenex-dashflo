@@ -1,5 +1,15 @@
 import { describe, it, expect } from 'vitest';
-import { hostScope, isAllowedOnProgressHost, PROGRESS_ORIGIN } from './hostScope';
+import {
+  hostScope,
+  isAllowedOnProgressHost,
+  isProgressAuthPath,
+  canonicalProgressPath,
+  progressHostUrl,
+  PROGRESS_ORIGIN,
+  PROGRESS_ROOT_PATH,
+  PROGRESS_SURFACE_PATHS,
+  PROGRESS_AUTH_PATHS,
+} from './hostScope';
 
 describe('host scoping', () => {
   it('serves the Progress Control Center on the progress subdomain', () => {
@@ -49,13 +59,69 @@ describe('host scoping', () => {
     expect(hostScope(new URL(PROGRESS_ORIGIN).hostname)).toBe('progress');
   });
 
-  it('allows only progress and auth paths on the progress host', () => {
-    ['/progress', '/progress/review', '/progress/gates', '/login', '/reset-password', '/forgot-password']
+  it('serves the Command Center at the root of the progress host', () => {
+    // The Control Center is the whole of that host, so its address is the host.
+    // This is the assertion the blank page failed: / was refused, redirected to
+    // /progress, and nothing was ever drawn.
+    expect(PROGRESS_ROOT_PATH).toBe('/');
+    expect(isAllowedOnProgressHost('/')).toBe(true);
+    expect(canonicalProgressPath('/')).toBe('/');
+    expect(PROGRESS_SURFACE_PATHS).toContain('/');
+  });
+
+  it('allows the Control Center surfaces and the auth paths, and nothing else', () => {
+    [...PROGRESS_SURFACE_PATHS, ...PROGRESS_AUTH_PATHS]
       .forEach((p) => expect(isAllowedOnProgressHost(p), p).toBe(true));
 
-    // Operator surfaces, portals, docs and the public application form must all
-    // be unreachable on that domain.
-    ['/', '/leads', '/campaigns', '/finances', '/settings', '/portal', '/supplier-portal', '/docs', '/apply', '/register']
+    // Operator surfaces, the portals, the docs and the public application form
+    // must all be unreachable on that domain. / and /settings are absent from
+    // this list on purpose: on the progress host they are the Command Center and
+    // Progress Settings, served by the progress route table. The operator table
+    // that owns Overview and operator Settings is never mounted there.
+    ['/leads', '/campaigns', '/finances', '/portal', '/supplier-portal', '/docs', '/apply', '/register', '/operations']
       .forEach((p) => expect(isAllowedOnProgressHost(p), p).toBe(false));
+  });
+
+  it('treats /progress as retired rather than canonical', () => {
+    // The namespace the Control Center used to live under. It resolves, by
+    // mapping onto the canonical path, and it is never the canonical path.
+    expect(isAllowedOnProgressHost('/progress')).toBe(false);
+    expect(canonicalProgressPath('/progress')).toBe('/');
+    expect(canonicalProgressPath('/progress/')).toBe('/');
+    expect(canonicalProgressPath('/progress/findings')).toBe('/findings');
+    expect(canonicalProgressPath('/progress/review')).toBe('/review');
+    expect(canonicalProgressPath('/progress/settings')).toBe('/settings');
+    // A nested detail path under a surface keeps its tail.
+    expect(canonicalProgressPath('/progress/review/leads-view')).toBe('/review/leads-view');
+  });
+
+  it('sends anything the Control Center does not serve to the Command Center', () => {
+    // Never a dead end and never a rendered operator surface. Both matter: the
+    // first is the bug that shipped, the second is the security boundary.
+    ['/progress/leads', '/leads', '/campaigns', '/portal', '/docs', '/nonsense']
+      .forEach((p) => expect(canonicalProgressPath(p), p).toBe('/'));
+  });
+
+  it('leaves the authentication paths alone', () => {
+    // An unauthenticated visitor must be able to reach a login form. Rewriting
+    // these onto the Command Center would send them to a page they cannot see,
+    // and rewriting /login to /login is a reload loop.
+    PROGRESS_AUTH_PATHS.forEach((p) => {
+      expect(isProgressAuthPath(p), p).toBe(true);
+      expect(canonicalProgressPath(p), p).toBe(p);
+    });
+    expect(isProgressAuthPath('/')).toBe(false);
+    expect(isProgressAuthPath('/findings')).toBe(false);
+  });
+
+  it('builds the Control Center URL the application host hands off to', () => {
+    // What app.dashflo.io/progress redirects an owner to. The canonical URL has
+    // no /progress in it, which is also what the Google OAuth origin must be.
+    expect(progressHostUrl('/progress')).toBe('https://progress.dashflo.io/');
+    expect(progressHostUrl('/progress/findings')).toBe('https://progress.dashflo.io/findings');
+    expect(progressHostUrl('/progress/review', '?page=leads', '#top'))
+      .toBe('https://progress.dashflo.io/review?page=leads#top');
+    // The Google Authorized JavaScript origin is an origin, never a path.
+    expect(new URL(progressHostUrl('/progress')).origin).toBe(PROGRESS_ORIGIN);
   });
 });

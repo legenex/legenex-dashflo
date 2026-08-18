@@ -1,6 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import { navGroups } from '@/components/layout/navConfig';
-import { hostScope, isAllowedOnProgressHost, PROGRESS_ORIGIN } from './hostScope';
+import {
+  hostScope,
+  isAllowedOnProgressHost,
+  PROGRESS_ORIGIN,
+  PROGRESS_SURFACE_PATHS,
+  PROGRESS_AUTH_PATHS,
+} from './hostScope';
 
 /* The Progress Control Center is gone from the application, not hidden in it.
  *
@@ -55,15 +61,39 @@ describe('the Control Center is reachable only on its own host', () => {
   });
 
   it('serves no operator surface on the progress host', () => {
+    // The Control Center owns the root of its own host, and two of its surfaces
+    // are spelled the same as an operator one: / is the Command Center there and
+    // /settings is Progress Settings. They collide in spelling only. App.jsx
+    // chooses one route table per host before any matching happens, so the table
+    // that owns Overview and operator Settings is not mounted on that host and
+    // cannot be reached by typing either path.
+    const ownPaths = new Set(PROGRESS_SURFACE_PATHS);
+
     const operatorPaths = flatten(navGroups)
       .map((entry) => entry.path)
-      .filter((path) => typeof path === 'string');
+      .filter((path) => typeof path === 'string')
+      .filter((path) => !ownPaths.has(path));
 
-    // Every path the application navigation can produce must be refused there,
-    // so moving Progress out cannot have quietly let the dashboard in.
+    // Every other path the application navigation can produce must be refused
+    // there, so moving Progress out cannot have quietly let the dashboard in.
+    expect(operatorPaths.length).toBeGreaterThan(5);
     for (const path of operatorPaths) {
       expect(isAllowedOnProgressHost(path), path).toBe(false);
     }
+  });
+
+  it('allows a closed set of paths on the progress host', () => {
+    // The allowlist is the surfaces plus the authentication entry points and
+    // nothing else. A closed set is the assertion worth holding: it fails when a
+    // path is added, which is the moment to decide whether that path belongs on
+    // an owner only host, rather than after it is already being served.
+    const allowed = [...PROGRESS_SURFACE_PATHS, ...PROGRESS_AUTH_PATHS];
+    expect(new Set(allowed).size).toBe(allowed.length);
+    for (const path of allowed) {
+      expect(isAllowedOnProgressHost(path), path).toBe(true);
+    }
+    expect(allowed).toContain('/');
+    expect(allowed).not.toContain('/progress');
   });
 
   it('sends the owner to the Control Center host and nowhere else', () => {

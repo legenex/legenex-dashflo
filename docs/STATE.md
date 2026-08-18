@@ -1560,3 +1560,102 @@ analytics vendor, pixel, cookie, or identifier was added.
 - Compression, cache headers, and the live call to action cannot be confirmed
   until `nginx -t` and a reload have run on the VPS.
 - No production contact message has been delivered.
+
+## Progress host canonical URL and Google origin, 18 August 2026
+
+Base: `a49003d82e82c8e61d8a596268b7a965b0367b4d`, deployed and healthy. Two
+browser acceptance defects on the new Progress host, fixed here. No other work.
+
+### The blank page
+
+`https://progress.dashflo.io/` rendered the page background and nothing else,
+with the address bar showing `/progress`.
+
+Cause: `AuthenticatedApp` guarded the progress host by reading
+`window.location.pathname` and returning `<Navigate to="/progress" replace />`
+INSTEAD of the route table when the path was not on the allowlist. `/` was not
+on that allowlist. The redirect updated history, but the component that returned
+it holds no location and therefore never re-rendered, so the tree stayed a bare
+`<Navigate>` that draws nothing. The address bar moved and the page never did.
+Serving a static shell would not have helped: the failure was entirely in
+client-side route resolution.
+
+Fix: the Control Center is now addressed at the root of its own host, and every
+redirect on that host is a route inside `<Routes>` rather than a value returned
+in front of it.
+
+- `progress.dashflo.io/` renders the Command Center.
+- `/review`, `/findings`, `/changes`, `/prompts`, `/activity`, `/migration`,
+  `/gates`, `/settings` render the other eight surfaces.
+- `/login`, `/forgot-password`, `/reset-password` render the auth pages.
+- `/progress` redirects to `/`, and `/progress/<surface>` redirects to
+  `/<surface>`. Anything the host does not serve lands on `/`.
+- `app.dashflo.io/progress` as owner redirects to `https://progress.dashflo.io/`,
+  and `/progress/findings` to `https://progress.dashflo.io/findings`.
+- Non-owners on the application host still get the ordinary not-found page. The
+  `/progress` entries were removed from `PATH_KEYS` so a permission key cannot
+  answer first with a redirect to the user's own dashboard.
+- `/progress` remains absent from the operator sidebar.
+
+`PROGRESS_SURFACE_PATHS` in `client/src/lib/hostScope.js` is the single list the
+route table, the Control Center navigation and the host allowlist all read. The
+progress route table moved to `client/src/ProgressHostRoutes.jsx`: it is mounted
+on a different host from the operator table and shares nothing with it.
+
+`/` and `/settings` are spelled the same as an operator path and are not the
+same surface. `App.jsx` selects one route table per host before any matching
+happens, so the table that owns Overview and operator Settings is never mounted
+on the progress host.
+
+### Google sign-in on the Progress host
+
+Production showed `Error 400: origin_mismatch`. That is a Google Cloud console
+state, not a code defect: `https://progress.dashflo.io` is not yet an Authorized
+JavaScript origin on the existing Web Client.
+
+No change was made to the authentication implementation. The existing Google
+Identity Services ID-token flow is untouched and is already same-origin on this
+host: the browser reads `/api/auth/google/config` and posts the ID token to
+`/api/auth/google` on whatever host served it, `config.progressOrigin` already
+gives that origin CORS and CSRF standing, and the session cookie stays host-only.
+What this commit changes for sign-in is where it lands: the post-login
+`window.location.href = '/'` used to reach the blank page and now reaches the
+Command Center.
+
+Human action required: add `https://progress.dashflo.io` as an Authorized
+JavaScript origin. It is an origin, so no `/progress` path belongs in it.
+
+### Security posture, unchanged
+
+Owner only via `base_role`, server-side authorization still mandatory, Progress
+entities and functions still owner only, no `.dashflo.io` shared cookie, host
+sessions independent, no token transfer between hosts, CSRF and CORS untouched,
+`X-Robots-Tag: noindex, nofollow, noarchive` still on the progress server block
+with the robots meta tag as the second copy.
+
+### Evidence
+
+- `npm run gate` PASS, seven steps, 84 test files, 1101 tests, none skipped.
+- New `client/src/lib/progressHostRouting.test.jsx`, 22 tests: route resolution
+  against the real progress table, both redirect directions, the owner gate, the
+  non-owner not-found, and the anonymous login decision.
+- `client/src/lib/hostScope.test.js` and `progressSeparation.test.js` extended
+  for the canonical root, the retired namespace, and a closed allowlist.
+- `server/test/progressAccess.test.js` extended for the unauthenticated Google
+  token exchange posted from the progress origin.
+- No Base44 migration or sync data touched.
+
+### Rollback
+
+`git revert` this commit and redeploy. It is client routing plus one client
+permission map entry and three test files; no schema, no data, no server
+behaviour change. The previous commit `a49003d` is the known state, blank root
+page included.
+
+### Not done
+
+- Not deployed. The VPS deployment command block is handed to the operator; no
+  SSH was attempted from this session.
+- The Google Authorized JavaScript origin is a manual console change and is
+  UNPROVEN until it is made. Until then Google sign-in on the progress host
+  still returns `origin_mismatch`; the password form is unaffected.

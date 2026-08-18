@@ -205,6 +205,22 @@ describe('progress host origin', () => {
     expect(result.ok).toBe(true);
   });
 
+  it('accepts the Google sign-in exchange posted from the progress host', () => {
+    // Signing in on the Control Center host is the ordinary same-origin flow:
+    // the browser reads /auth/google/config and posts the Google ID token back
+    // to the host it was served from. There is no session cookie yet at that
+    // point, so nothing is forgeable, and the origin is one of ours either way.
+    // No second OAuth flow and no token handed between hosts.
+    const result = verifySameOrigin({
+      method: 'POST',
+      origin: 'https://progress.dashflo.io',
+      hasCookieAuth: false,
+      hasHeaderAuth: false,
+      allowed: allowedOrigins(config),
+    });
+    expect(result.ok).toBe(true);
+  });
+
   it('still refuses the marketing site and any other origin', () => {
     // The marketing site is a public static bundle and must never hold CSRF
     // standing over the application. Adding the progress host must not have

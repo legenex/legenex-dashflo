@@ -156,17 +156,15 @@ export const PATH_KEYS = {
   '/queue-recovery': 'leads_queued',
   '/suppliers': 'dist_suppliers',
   '/buyers': 'dist_buyers',
-  // Progress Control Center. Every route requires at least read access; the
-  // write, review, prompt and admin keys gate actions inside the surfaces.
-  '/progress': 'progress_access',
-  '/progress/review': 'progress_access',
-  '/progress/findings': 'progress_access',
-  '/progress/changes': 'progress_access',
-  '/progress/prompts': 'progress_prompts',
-  '/progress/activity': 'progress_access',
-  '/progress/migration': 'progress_access',
-  '/progress/gates': 'progress_access',
-  '/progress/settings': 'progress_admin',
+  // The Progress Control Center is deliberately absent. It is not served on this
+  // host at all: /progress and everything under it render ProgressRelocated,
+  // which sends the owner to progress.dashflo.io and shows everybody else the
+  // ordinary not-found page. A permission key here would only add a second,
+  // weaker answer, and a key holder who is not the owner would be redirected to
+  // their own dashboard instead of being told the path is not a page. The keys
+  // themselves still exist and still gate the surfaces on the Control Center
+  // host; see components/progress/progressNav.js and lib/progressAccess.js on
+  // the server.
 };
 
 // Settings ?tab= value -> permission key. Profile is always accessible (null key).
@@ -194,7 +192,6 @@ export function keyForLocation(pathname, search) {
     return SETTINGS_TAB_KEYS[tab] || 'set_integrations';
   }
   // Detail routes fall under their list permission.
-  if (pathname.startsWith('/progress/review/')) return 'progress_access';
   if (pathname.startsWith('/suppliers/')) return 'dist_suppliers';
   if (pathname.startsWith('/buyers/')) return 'dist_buyers';
   if (pathname.startsWith('/distribution/buyers/')) return 'dist_buyers';

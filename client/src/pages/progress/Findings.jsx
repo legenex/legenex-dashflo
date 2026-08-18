@@ -336,7 +336,7 @@ function FindingCard({ finding: f, pageTitle, canReview, changeRequests }) {
 
         {linked && (
           <p className="mt-2 text-[11px] text-muted-foreground">
-            Change request <Link to="/progress/changes" className="text-primary">{linked.reference}</Link>, status {humanise(linked.status)}.
+            Change request <Link to="/changes" className="text-primary">{linked.reference}</Link>, status {humanise(linked.status)}.
           </p>
         )}
 

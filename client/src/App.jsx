@@ -8,8 +8,10 @@ import UserNotRegisteredError from '@/components/UserNotRegisteredError';
 import ProtectedRoute from '@/components/ProtectedRoute';
 import OwnerRoute from '@/components/OwnerRoute';
 import ScrollToTop from './components/ScrollToTop';
-import { hostScope, isAllowedOnProgressHost } from '@/lib/hostScope';
-import { OperatorRoutes, DocsRoutes, ProgressRoutes } from './AppRoutes';
+import { hostScope, isProgressAuthPath } from '@/lib/hostScope';
+import ProgressNamespaceRedirect from '@/components/progress/ProgressNamespaceRedirect';
+import { OperatorRoutes, DocsRoutes } from './AppRoutes';
+import { ProgressRoutes } from './ProgressHostRoutes';
 
 import Login from '@/pages/Login';
 import ForgotPassword from '@/pages/ForgotPassword';
@@ -30,20 +32,19 @@ import ApiStatus from '@/pages/ApiStatus';
 // Host predicates live in src/lib/hostScope.js so they can be unit tested. Host
 // scoping is a security boundary, not a convenience.
 const currentHost = () => (typeof window !== 'undefined' ? window.location.hostname : '');
+const currentPath = () => (typeof window !== 'undefined' ? window.location.pathname : '/');
 const isDocsHost = () => hostScope(currentHost()) === 'docs';
 
 // api.legenex.com exists only to serve backend functions, so the frontend just
 // shows a status page and never gates on auth or redirects to login.
 const isApiHost = () => hostScope(currentHost()) === 'api';
 
-// progress.dashboard.legenex.com serves ONLY the authenticated Progress Control
-// Center. The operator dashboard, the portals, the docs and the public
-// application form are all unreachable there, enforced by the path allowlist
-// below rather than by which links happen to exist.
+// progress.dashflo.io serves ONLY the authenticated Progress Control Center, at
+// the root of the host. The operator dashboard, the portals, the docs and the
+// public application form are all unreachable there, because the route table
+// that contains them is never mounted on this host rather than because a link
+// to them happens not to exist.
 const isProgressHost = () => hostScope(currentHost()) === 'progress';
-
-// The progress route table, reused on both the progress subdomain (as the whole
-// app) and under /progress on the main dashboard.
 
 
 const AuthenticatedApp = () => {
@@ -82,6 +83,11 @@ const AuthenticatedApp = () => {
   // operator dashboard is never reachable here, so an unauthenticated visitor
   // goes to login and every other path lands back on the Command Center rather
   // than falling through to the operator app.
+  //
+  // The Control Center is this host, so its address is the root of the host.
+  // progress.dashflo.io/ is the Command Center; there is no /progress segment,
+  // and the operator route table is not mounted here at all, which is what makes
+  // / mean the Command Center and not Overview.
   if (isProgressHost()) {
     // Keep the Control Center out of search results. The nginx host sends
     // X-Robots-Tag, which is what a crawler actually obeys for this bundle;
@@ -94,14 +100,11 @@ const AuthenticatedApp = () => {
       document.head.appendChild(meta);
     }
 
-    // Hard guard before any route matching. If a path is not on the allowlist,
-    // redirect immediately rather than letting the route table decide, so adding
-    // a route later cannot accidentally expose it on this domain.
-    const path = typeof window !== 'undefined' ? window.location.pathname : '/progress';
-    if (!isAllowedOnProgressHost(path)) {
-      return <Navigate to="/progress" replace />;
-    }
-    if (authError) {
+    // A stale credential that no longer authenticates sends the visitor to the
+    // login form, exactly as it does on the application host. The auth paths are
+    // excluded for the same reason they are excluded there: bouncing the login
+    // page to the login page is a reload loop, not a redirect.
+    if (authError && !isProgressAuthPath(currentPath())) {
       if (authError.type === 'user_not_registered') return <UserNotRegisteredError />;
       if (authError.type === 'auth_required') { navigateToLogin(); return null; }
     }
@@ -110,6 +113,12 @@ const AuthenticatedApp = () => {
         <Route path="/login" element={<Login />} />
         <Route path="/forgot-password" element={<ForgotPassword />} />
         <Route path="/reset-password" element={<ResetPassword />} />
+        {/* The retired namespace, mapped onto the canonical path. This is a
+            route, not a guard in front of the table: a redirect returned in
+            place of <Routes> updates the address bar and then never re-renders,
+            which is exactly how this host came to answer its own root with an
+            empty page. */}
+        <Route path="/progress/*" element={<ProgressNamespaceRedirect />} />
         <Route element={<ProtectedRoute unauthenticatedElement={<Navigate to="/login" replace />} />}>
           {/* Owner only. Being signed in is not enough and admin is not enough.
               An account that authenticates here and is not the owner gets a bare
@@ -125,10 +134,10 @@ const AuthenticatedApp = () => {
             {ProgressRoutes()}
           </Route>
         </Route>
-        {/* Anything not on the allowlist goes back to the Command Center. This is
+        {/* Anything this host does not serve goes to the Command Center. This is
             what locks the subdomain: typing an operator route into the address
             bar on this host cannot render it. */}
-        <Route path="*" element={<Navigate to="/progress" replace />} />
+        <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     );
   }

@@ -3,7 +3,7 @@ import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import { Menu, X, ExternalLink, ShieldAlert } from 'lucide-react';
 import { usePermissions } from '@/lib/AuthContext';
 import { PROGRESS_NAV } from './progressNav';
-import { isProgressHost } from '@/lib/hostScope';
+import { isProgressHost, PROGRESS_ROOT_PATH } from '@/lib/hostScope';
 import ProgressErrorBoundary from './ProgressErrorBoundary';
 import { resolveApplicationBaseUrl } from '@/lib/urls';
 
@@ -24,8 +24,8 @@ function TopNav({ items }) {
     <nav className="flex items-center gap-0.5 overflow-x-auto">
       {items.map((item) => {
         const Icon = item.icon;
-        const active = item.to === '/progress'
-          ? location.pathname === '/progress'
+        const active = item.to === PROGRESS_ROOT_PATH
+          ? location.pathname === PROGRESS_ROOT_PATH
           : location.pathname.startsWith(item.to);
         return (
           <NavLink
@@ -53,8 +53,8 @@ function DrawerNav({ items, onNavigate }) {
     <nav className="flex flex-col gap-0.5 p-2">
       {items.map((item) => {
         const Icon = item.icon;
-        const active = item.to === '/progress'
-          ? location.pathname === '/progress'
+        const active = item.to === PROGRESS_ROOT_PATH
+          ? location.pathname === PROGRESS_ROOT_PATH
           : location.pathname.startsWith(item.to);
         return (
           <NavLink

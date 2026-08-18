@@ -8,11 +8,17 @@ import {
 // not part of the product Nick's team runs the business on.
 // `built` gates the sidebar. A surface that does not exist yet is not linked,
 // because a dead nav link is a defect, not a placeholder.
+//
+// Every `to` is a path on progress.dashflo.io, where the Control Center is the
+// whole application and its Command Center is the root of the host. These must
+// stay in step with PROGRESS_SURFACE_PATHS in lib/hostScope.js, which the route
+// table and the host allowlist read; progressSeparation.test.js holds them
+// together, so a link here cannot point at a path this host refuses to serve.
 export const PROGRESS_NAV = [
   {
     key: 'command',
     label: 'Command Center',
-    to: '/progress',
+    to: '/',
     icon: Gauge,
     permKey: 'progress_access',
     built: true,
@@ -21,7 +27,7 @@ export const PROGRESS_NAV = [
   {
     key: 'review',
     label: 'Application Review',
-    to: '/progress/review',
+    to: '/review',
     icon: ListTree,
     permKey: 'progress_access',
     tree: true,
@@ -31,7 +37,7 @@ export const PROGRESS_NAV = [
   {
     key: 'findings',
     label: 'Findings',
-    to: '/progress/findings',
+    to: '/findings',
     icon: AlertTriangle,
     permKey: 'progress_access',
     built: true,
@@ -40,7 +46,7 @@ export const PROGRESS_NAV = [
   {
     key: 'changes',
     label: 'Change Requests',
-    to: '/progress/changes',
+    to: '/changes',
     icon: GitPullRequest,
     permKey: 'progress_access',
     built: true,
@@ -49,7 +55,7 @@ export const PROGRESS_NAV = [
   {
     key: 'prompts',
     label: 'Prompt Studio',
-    to: '/progress/prompts',
+    to: '/prompts',
     icon: Sparkles,
     permKey: 'progress_prompts',
     built: true,
@@ -58,7 +64,7 @@ export const PROGRESS_NAV = [
   {
     key: 'activity',
     label: 'Build Activity',
-    to: '/progress/activity',
+    to: '/activity',
     icon: Activity,
     permKey: 'progress_access',
     built: true,
@@ -67,7 +73,7 @@ export const PROGRESS_NAV = [
   {
     key: 'migration',
     label: 'LeadByte Migration',
-    to: '/progress/migration',
+    to: '/migration',
     icon: ArrowRightLeft,
     permKey: 'progress_access',
     built: true,
@@ -76,7 +82,7 @@ export const PROGRESS_NAV = [
   {
     key: 'gates',
     label: 'Release Gates',
-    to: '/progress/gates',
+    to: '/gates',
     icon: ShieldCheck,
     permKey: 'progress_access',
     built: true,
@@ -85,7 +91,7 @@ export const PROGRESS_NAV = [
   {
     key: 'settings',
     label: 'Progress Settings',
-    to: '/progress/settings',
+    to: '/settings',
     icon: Cog,
     permKey: 'progress_admin',
     built: true,

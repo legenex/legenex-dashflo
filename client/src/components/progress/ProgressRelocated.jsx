@@ -1,7 +1,7 @@
 import React, { useEffect } from 'react';
 import { usePermissions } from '@/lib/AuthContext';
 import PageNotFound from '@/lib/PageNotFound';
-import { PROGRESS_ORIGIN } from '@/lib/hostScope';
+import { progressHostUrl } from '@/lib/hostScope';
 
 /* What /progress and everything under it now answers on the application host.
  *
@@ -13,7 +13,9 @@ import { PROGRESS_ORIGIN } from '@/lib/hostScope';
  *
  *   Owner: sent to the Control Center on its own host. Old bookmarks and links
  *   keep working, and the deep path is carried across so /progress/findings
- *   lands on findings rather than on the dashboard.
+ *   lands on findings rather than on the dashboard. /progress is not the
+ *   namespace over there: the Control Center is the whole of that host, so
+ *   /progress becomes its root and /progress/findings becomes /findings.
  *
  *   Everyone else: the ordinary not-found page. Not "access denied", not
  *   "moved to progress.dashflo.io", because either of those confirms the tool
@@ -36,9 +38,11 @@ export default function ProgressRelocated() {
     if (!isOwner) return;
     // Carry the path across, but only the path this app served. Building the
     // destination from location.pathname rather than from anything a query
-    // string supplied keeps this a fixed redirect to one known origin.
+    // string supplied keeps this a fixed redirect to one known origin, and
+    // mapping it means a path the Control Center does not serve lands on its
+    // Command Center instead of on a dead URL.
     const { pathname, search, hash } = window.location;
-    window.location.replace(`${PROGRESS_ORIGIN}${pathname}${search}${hash}`);
+    window.location.replace(progressHostUrl(pathname, search, hash));
   }, [isOwner]);
 
   if (!isOwner) return <PageNotFound />;

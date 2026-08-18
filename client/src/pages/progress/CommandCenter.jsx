@@ -308,11 +308,11 @@ export default function CommandCenter() {
         <Card>
           <CardHeader title="Attention" subtitle="Surfaces that need a human look" icon={Clock} />
           <div>
-            <Row><AttentionRow label="Never assessed" value={model.neverAssessed} to="/progress/review" tone="bad" /></Row>
-            <Row><AttentionRow label="Needs your business knowledge" value={model.needingReview} to="/progress/review" tone="warn" /></Row>
-            <Row><AttentionRow label="Reviews gone stale after code changes" value={model.staleReviews} to="/progress/review" tone="warn" /></Row>
-            <Row><AttentionRow label="Blocked surfaces" value={model.blocked} to="/progress/review" tone="bad" /></Row>
-            <Row><AttentionRow label="Open findings" value={model.openFindings.length} to="/progress/findings" tone="neutral" /></Row>
+            <Row><AttentionRow label="Never assessed" value={model.neverAssessed} to="/review" tone="bad" /></Row>
+            <Row><AttentionRow label="Needs your business knowledge" value={model.needingReview} to="/review" tone="warn" /></Row>
+            <Row><AttentionRow label="Reviews gone stale after code changes" value={model.staleReviews} to="/review" tone="warn" /></Row>
+            <Row><AttentionRow label="Blocked surfaces" value={model.blocked} to="/review" tone="bad" /></Row>
+            <Row><AttentionRow label="Open findings" value={model.openFindings.length} to="/findings" tone="neutral" /></Row>
           </div>
         </Card>
       </div>

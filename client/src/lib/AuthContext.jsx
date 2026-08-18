@@ -2,7 +2,10 @@ import React, { createContext, useState, useContext, useEffect } from 'react';
 import { api } from '@/api/client';
 import { ROLE_PRESETS, sanitizePermissions } from '@/lib/permissions';
 
-const AuthContext = createContext();
+// Exported so tests can render an auth dependent component against a fixed
+// user rather than standing a provider up and waiting for a network round trip.
+// Application code uses useAuth or usePermissions, never this directly.
+export const AuthContext = createContext();
 
 // Resolve the effective permission map for a user record.
 // Falls back to their base_role preset when no explicit permissions object is stored.

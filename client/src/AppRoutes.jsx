@@ -88,16 +88,6 @@ const CreativeAnalyzer = lazy(() => import('@/pages/admanager/CreativeAnalyzer')
 const AdBuilder = lazy(() => import('@/pages/admanager/AdBuilder'));
 const PayloadTester = lazy(() => import('@/pages/PayloadTester'));
 const ToolsDashboard = lazy(() => import('@/pages/ToolsDashboard'));
-const ProgressLayout = lazy(() => import('@/components/progress/ProgressLayout'));
-const CommandCenter = lazy(() => import('@/pages/progress/CommandCenter'));
-const ApplicationReview = lazy(() => import('@/pages/progress/ApplicationReview'));
-const Migration = lazy(() => import('@/pages/progress/Migration'));
-const Gates = lazy(() => import('@/pages/progress/Gates'));
-const Findings = lazy(() => import('@/pages/progress/Findings'));
-const ChangeRequests = lazy(() => import('@/pages/progress/ChangeRequests'));
-const PromptStudio = lazy(() => import('@/pages/progress/PromptStudio'));
-const BuildActivity = lazy(() => import('@/pages/progress/BuildActivity'));
-const ProgressSettings = lazy(() => import('@/pages/progress/ProgressSettings'));
 const PortalLayout = lazy(() => import('@/components/portal/PortalLayout'));
 const PortalDashboard = lazy(() => import('@/pages/portal/PortalDashboard'));
 const PortalLeads = lazy(() => import('@/pages/portal/PortalLeads'));
@@ -147,20 +137,6 @@ export const DocsRoutes = () => (
         element={<r.Component />}
       />
     ))}
-  </Route>
-);
-
-export const ProgressRoutes = () => (
-  <Route element={<ProgressLayout />}>
-    <Route path="/progress" element={<CommandCenter />} />
-    <Route path="/progress/review" element={<ApplicationReview />} />
-    <Route path="/progress/migration" element={<Migration />} />
-    <Route path="/progress/gates" element={<Gates />} />
-    <Route path="/progress/findings" element={<Findings />} />
-    <Route path="/progress/changes" element={<ChangeRequests />} />
-    <Route path="/progress/prompts" element={<PromptStudio />} />
-    <Route path="/progress/activity" element={<BuildActivity />} />
-    <Route path="/progress/settings" element={<ProgressSettings />} />
   </Route>
 );
 
