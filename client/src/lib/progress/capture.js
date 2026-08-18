@@ -225,67 +225,6 @@ async function supersedePrior(pageKey, viewport) {
   }
 }
 
-/**
- * Capture the page the operator is currently on and store it as a PageSnapshot.
- * Failures are recorded rather than swallowed, so a page with no usable capture
- * reads as a failed capture instead of as a page nobody has looked at.
- */
-export async function capturePage({
-  pageKey,
-  route,
-  target,
-  mask = true,
-  role,
-  capturedBy,
-  notes,
-}) {
-  const width = document.documentElement.clientWidth;
-  const viewport = viewportFor(width);
-  const base = {
-    page_key: pageKey,
-    route,
-    viewport,
-    width,
-    masked: mask,
-    theme: document.documentElement.classList.contains('light') ? 'light' : 'dark',
-    role_used: role || null,
-    app_commit: manifest.app_commit || null,
-    captured_by: capturedBy || null,
-    captured_at: new Date().toISOString(),
-    notes: notes || null,
-  };
-
-  try {
-    const el = target || document.querySelector('main') || document.body;
-    const { canvas, maskCount } = await rasterise(el, { mask });
-    if (!canvas || canvas.width === 0 || canvas.height === 0) {
-      throw new Error('Rasteriser returned an empty canvas');
-    }
-    const file = await canvasToFile(canvas, `${pageKey}-${viewport}-${Date.now()}.png`);
-    const { file_url: imageUrl } = await api.integrations.Core.UploadFile({ file });
-
-    await supersedePrior(pageKey, viewport);
-
-    return api.entities.PageSnapshot.create({
-      ...base,
-      height: canvas.height,
-      image_url: imageUrl,
-      capture_status: 'ok',
-      mask_count: maskCount,
-      superseded: false,
-    });
-  } catch (err) {
-    return api.entities.PageSnapshot.create({
-      ...base,
-      height: 0,
-      capture_status: 'failed',
-      failure_reason: String(err?.message || err).slice(0, 500),
-      mask_count: 0,
-      superseded: false,
-    });
-  }
-}
-
 /* ---------------------------------------------------------------- *
  * Region crops, for anchored comments
  * ---------------------------------------------------------------- */

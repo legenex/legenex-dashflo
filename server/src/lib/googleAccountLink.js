@@ -42,6 +42,8 @@
 //   NOT_REGISTERED       no account, no invitation, sign-up closed
 //   ACCOUNT_DISABLED     the credential is disabled
 //   INVITATION_CANCELLED the only invitation for this address was revoked
+//   INVITATION_NOT_LOCAL the only invitation for this address was imported
+//                        from Base44 rather than issued here
 //   IDENTITY_CONFLICT    this Google account is linked to a different DashFlo
 //                        account, or this DashFlo account is already linked to
 //                        a different Google account
@@ -51,6 +53,12 @@
 // IDENTITY_CONFLICT is refused rather than resolved on purpose. Both shapes of
 // it are ambiguous merges, and guessing wrong hands one person another
 // person's account. An operator unlinks deliberately instead.
+
+// Stamped by the migration importer onto every Invitation it brings in, and
+// checked below. Defined here rather than in the importer because this module
+// is the one that has to refuse it, and a marker whose meaning lives away from
+// its check is a marker somebody eventually stops setting.
+export const MIGRATED_INVITATION_FIELD = 'migrated_history';
 
 export const LINK_ACTION = {
   LOGIN_LINKED: 'login_linked',
@@ -64,6 +72,7 @@ export const LINK_REFUSAL = {
   NOT_REGISTERED: 'NOT_REGISTERED',
   ACCOUNT_DISABLED: 'ACCOUNT_DISABLED',
   INVITATION_CANCELLED: 'INVITATION_CANCELLED',
+  INVITATION_NOT_LOCAL: 'INVITATION_NOT_LOCAL',
   IDENTITY_CONFLICT: 'IDENTITY_CONFLICT',
   AMBIGUOUS_ACCOUNT: 'AMBIGUOUS_ACCOUNT',
   DOMAIN_NOT_ALLOWED: 'DOMAIN_NOT_ALLOWED',
@@ -76,6 +85,7 @@ const REFUSAL_MESSAGE = {
   [LINK_REFUSAL.NOT_REGISTERED]: 'This Google account is not registered with DashFlo. Ask an operator for an invitation.',
   [LINK_REFUSAL.ACCOUNT_DISABLED]: 'This account is not able to sign in. Contact an operator.',
   [LINK_REFUSAL.INVITATION_CANCELLED]: 'This Google account is not registered with DashFlo. Ask an operator for an invitation.',
+  [LINK_REFUSAL.INVITATION_NOT_LOCAL]: 'This Google account is not registered with DashFlo. Ask an operator for an invitation.',
   [LINK_REFUSAL.IDENTITY_CONFLICT]: 'This Google account cannot be linked automatically. Contact an operator.',
   [LINK_REFUSAL.AMBIGUOUS_ACCOUNT]: 'This Google account cannot be linked automatically. Contact an operator.',
   [LINK_REFUSAL.DOMAIN_NOT_ALLOWED]: 'This Google account is not in an allowed domain for this instance.',
@@ -164,11 +174,29 @@ export function decideGoogleLink({
     };
   }
 
-  // 3. No credential. An invitation is a human authorization decision made
-  // earlier, so it is honoured; a cancelled one is not.
+  // 3. No credential. An invitation is a human authorization decision, so it
+  // is honoured, but only when this instance is the one that made it.
   if (invitation) {
     const status = String(invitation.status || 'pending').toLowerCase();
     if (status === 'cancelled') return refuse(LINK_REFUSAL.INVITATION_CANCELLED, 'invitation cancelled');
+
+    // An invitation carried in from Base44 is history, not authorization.
+    //
+    // Base44 is a migration source. Its Invitation rows are years of records
+    // for people who may have left, whose invitations may have been superseded
+    // offline, and whose roles reflect another system's policy. Importing them
+    // and then treating a pending one as a live grant would mean any Google
+    // account whose verified address matches an old row could create a DashFlo
+    // account carrying whatever role that row named, up to and including owner.
+    // That is authorization arriving through a data import, which is exactly
+    // what the approved-user model exists to prevent.
+    //
+    // The record is still imported and still readable as history. It simply
+    // cannot authorize anything. Re-inviting somebody is a deliberate act an
+    // operator performs here, and the invitation it creates carries no marker.
+    if (invitation[MIGRATED_INVITATION_FIELD] === true) {
+      return refuse(LINK_REFUSAL.INVITATION_NOT_LOCAL, 'invitation was imported, not issued by this instance');
+    }
     return {
       action: LINK_ACTION.ACTIVATE_INVITATION,
       email,
@@ -192,4 +220,4 @@ export function decideGoogleLink({
   return refuse(LINK_REFUSAL.NOT_REGISTERED, 'no credential and no invitation');
 }
 
-export default { LINK_ACTION, LINK_REFUSAL, decideGoogleLink };
+export default { LINK_ACTION, LINK_REFUSAL, MIGRATED_INVITATION_FIELD, decideGoogleLink };

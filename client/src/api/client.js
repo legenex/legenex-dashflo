@@ -15,7 +15,7 @@ export function setToken(token) {
 // Core request helper. Throws an Error carrying { status, data } on non-2xx
 // responses (matching the previous client's behavior so existing try/catch and
 // `err.status` checks keep working).
-async function request(path, { method = 'GET', body, headers = {}, raw = false } = {}) {
+async function request(path, { method = 'GET', body, headers = {}, raw = false, timeoutMs = 0 } = {}) {
   const opts = { method, headers: { ...headers }, credentials: 'include' };
   const token = getToken();
   if (token) opts.headers.Authorization = `Bearer ${token}`;
@@ -26,7 +26,35 @@ async function request(path, { method = 'GET', body, headers = {}, raw = false }
     opts.body = body;
   }
 
-  const res = await fetch(`${API_BASE}${path}`, opts);
+  // Opt-in deadline. fetch has none of its own, so a request that never answers
+  // leaves the caller waiting forever with its spinner up and no way to tell the
+  // operator anything. Callers that want a bounded wait pass timeoutMs and get
+  // an error they can name instead of silence.
+  let timer = null;
+  if (timeoutMs > 0 && typeof AbortController !== 'undefined') {
+    const controller = new AbortController();
+    opts.signal = controller.signal;
+    timer = setTimeout(() => controller.abort(), timeoutMs);
+  }
+
+  let res;
+  try {
+    res = await fetch(`${API_BASE}${path}`, opts);
+  } catch (cause) {
+    // Distinguish "we gave up waiting" from "the network refused". Both arrive
+    // here as a rejected fetch, and they need different words in front of an
+    // operator.
+    const timedOut = cause?.name === 'AbortError';
+    const err = new Error(timedOut
+      ? `The request timed out after ${Math.round(timeoutMs / 1000)} seconds`
+      : 'Could not reach the server');
+    err.status = 0;
+    err.code = timedOut ? 'timeout' : 'network';
+    throw err;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+
   const text = await res.text();
   let data;
   try { data = text ? JSON.parse(text) : null; } catch { data = text; }
@@ -34,6 +62,7 @@ async function request(path, { method = 'GET', body, headers = {}, raw = false }
   if (!res.ok) {
     const err = new Error(data?.error || data?.message || `Request failed (${res.status})`);
     err.status = res.status;
+    err.code = data?.code || null;
     err.data = data;
     throw err;
   }

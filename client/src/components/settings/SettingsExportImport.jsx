@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { SECTIONS, BUNDLE_VERSION, entitiesForSections } from '@/lib/systemTransfer';
+import { describeMigrationFailure, describeMigrationSuccess } from '@/lib/migrationImportStatus';
 
 // Master admin only. Mirrors the Operations Buyers card / row / badge treatment.
 //
@@ -22,6 +23,15 @@ import { SECTIONS, BUNDLE_VERSION, entitiesForSections } from '@/lib/systemTrans
 // records ever reach this component.
 
 const CONFIG_ONLY = ['schemas', 'settings', 'fields', 'buyers', 'suppliers', 'distribution', 'connectors'];
+
+// Outcome band styling. Busy is deliberately as prominent as the others: an
+// operation that takes minutes has to look like it is running.
+const STATUS_TONES = {
+  busy: 'border-border bg-popover text-muted-foreground',
+  success: 'border-primary/40 bg-primary/5 text-primary',
+  warn: 'border-chart-3/40 bg-chart-3/5 text-chart-3',
+  error: 'border-destructive/40 bg-destructive/5 text-destructive',
+};
 const PAGE = 500;
 
 function Badge({ tone = 'muted', children }) {
@@ -74,6 +84,10 @@ export default function SettingsExportImport() {
   const [ownerPassphrase, setOwnerPassphrase] = useState('');
   const [importBusy, setImportBusy] = useState('');
   const [confirmed, setConfirmed] = useState(false);
+  // Every migration attempt ends here, success or failure. The panel is not
+  // allowed to return to idle with nothing on screen, which is what it did
+  // when the only report was a toast and no toaster was mounted.
+  const [importStatus, setImportStatus] = useState(null);
 
   const { data: counts, isLoading: countsLoading } = useQuery({
     queryKey: ['system-export-counts'],
@@ -186,25 +200,57 @@ export default function SettingsExportImport() {
     }
   };
 
+  // Refuse before anything is sent. These are states too, so they are shown in
+  // the panel rather than only announced.
+  const refuseImport = (title, detail) => {
+    setImportStatus({ tone: 'error', code: 'precondition', title, detail });
+    toast.error(title);
+  };
+
   const runImport = async (kind, mode) => {
     const file = kind === 'owner' ? ownerFile : ordinaryFile;
-    if (!file) return toast.error('Choose a migration file first');
-    if (kind === 'owner' && ownerPassphrase.length < 16) return toast.error('Enter the migration passphrase');
-    if (mode === 'apply' && !confirmed) return toast.error('Confirm the migration before applying it');
+    if (!file) return refuseImport('Choose a migration file first', 'No package has been selected.');
+    if (kind === 'owner' && ownerPassphrase.length < 16) {
+      return refuseImport('Enter the migration passphrase', 'The migration passphrase is at least 16 characters.');
+    }
+    if (mode === 'apply' && !confirmed) {
+      return refuseImport('Confirm the migration before applying it', 'Tick the confirmation above the Apply button.');
+    }
     if (mode === 'apply' && !window.confirm('Apply this validated migration to DashFlo? The operation is audited and runs in a database transaction.')) return;
 
     setImportBusy(`${kind}:${mode}`);
+    // A new attempt clears the previous outcome, so a stale preview from an
+    // earlier run can never be mistaken for the result of this one.
+    setImportStatus({
+      tone: 'busy',
+      code: null,
+      title: mode === 'apply' ? 'Applying migration' : 'Decrypting and validating on the server',
+      detail: kind === 'owner'
+        ? 'The package is decrypted in server memory. This can take a few minutes for a large export.'
+        : 'Validating the export against the DashFlo schema.',
+    });
+    if (mode === 'preview') setBundlePreview(null);
+
     try {
       const result = await systemImport({ file, kind, mode, passphrase: ownerPassphrase, confirmed: mode === 'apply' });
-      setBundlePreview(result);
+      const status = describeMigrationSuccess(result, { mode });
+      setImportStatus(status);
       setConfirmed(false);
-      if (mode === 'preview') toast.success('Migration package decrypted and validated server-side');
-      else {
-        setOwnerPassphrase('');
-        toast.success(`Migration applied: ${result.applied?.created || 0} created, ${result.applied?.updated || 0} updated`);
+      if (status.tone === 'error') {
+        // A 200 whose body was not usable. No preview is drawn from it.
+        toast.error(status.title);
+        return;
       }
+      setBundlePreview(result);
+      if (mode === 'apply') setOwnerPassphrase('');
+      if (status.tone === 'success') toast.success(status.title);
+      else toast.warning(status.title);
     } catch (err) {
-      toast.error(err.message || 'Migration import failed');
+      // Nothing from the thrown value reaches the screen except the server's own
+      // safe message, trimmed and bounded. See lib/migrationImportStatus.js.
+      const status = describeMigrationFailure(err, { mode });
+      setImportStatus(status);
+      toast.error(status.title);
     } finally {
       setImportBusy('');
     }
@@ -351,7 +397,7 @@ export default function SettingsExportImport() {
               <FileJson className="h-4 w-4 text-muted-foreground" />
               <span className="min-w-0 flex-1 truncate text-[13px] text-foreground">{ordinaryFile?.name || 'Choose ordinary .json export'}</span>
               <input type="file" accept="application/json,.json" className="hidden" onChange={(e) => {
-                setOrdinaryFile(e.target.files?.[0] || null); setBundlePreview(null); setConfirmed(false);
+                setOrdinaryFile(e.target.files?.[0] || null); setBundlePreview(null); setConfirmed(false); setImportStatus(null);
               }} />
             </label>
             <Button className="mt-3" variant="outline" disabled={!ordinaryFile || Boolean(importBusy)} onClick={() => runImport('ordinary', 'preview')}>
@@ -374,7 +420,7 @@ export default function SettingsExportImport() {
                   <FileJson className="h-4 w-4 text-muted-foreground" />
                   <span className="min-w-0 flex-1 truncate text-[13px] text-foreground">{ownerFile?.name || 'Choose encrypted .json.enc migration package'}</span>
                   <input type="file" accept="application/json,.json,.enc" className="hidden" onChange={(e) => {
-                    setOwnerFile(e.target.files?.[0] || null); setBundlePreview(null); setConfirmed(false);
+                    setOwnerFile(e.target.files?.[0] || null); setBundlePreview(null); setConfirmed(false); setImportStatus(null);
                   }} />
                 </label>
                 <div className="mt-3 max-w-md">
@@ -390,6 +436,28 @@ export default function SettingsExportImport() {
               <p className="mt-2 text-[12px] text-muted-foreground">Only the account owner can upload or apply a credential-bearing migration package.</p>
             )}
           </div>
+
+          {/* The outcome of the last attempt. Present for every ending: busy,
+              success, blocked, refused, timed out, unreachable. This is the
+              part that must never be absent. */}
+          {importStatus && (
+            <div
+              role={importStatus.tone === 'error' ? 'alert' : 'status'}
+              aria-live="polite"
+              className={`flex items-start gap-3 rounded-lg border p-3 ${STATUS_TONES[importStatus.tone] || STATUS_TONES.error}`}
+            >
+              {importStatus.tone === 'busy' && <Loader2 className="mt-0.5 h-4 w-4 shrink-0 animate-spin" />}
+              {importStatus.tone === 'success' && <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />}
+              {importStatus.tone === 'warn' && <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />}
+              {importStatus.tone === 'error' && <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" />}
+              <div className="min-w-0">
+                <p className="text-[13px] font-medium text-foreground">{importStatus.title}</p>
+                {importStatus.detail && (
+                  <p className="mt-0.5 text-[12px] text-muted-foreground">{importStatus.detail}</p>
+                )}
+              </div>
+            </div>
+          )}
 
           {bundlePreview && (
             <div className="rounded-lg border border-border bg-popover p-4">

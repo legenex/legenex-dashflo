@@ -5,6 +5,7 @@ import { entityExists, newId } from '../db/repo.js';
 import { ensureMigrationImportSchema } from '../db/migrationImportSchema.js';
 import { ensureBase44SyncSchema } from '../db/base44SyncSchema.js';
 import { hashApiKey, keyPrefixOf, translateCredentialNamespace, isLegacyNamespace } from './apiKeys.js';
+import { MIGRATED_INVITATION_FIELD } from './googleAccountLink.js';
 import { fingerprint } from './base44Sync.js';
 import {
   ALL_ENTITIES,
@@ -27,11 +28,29 @@ const IMPORT_LOCK_ID = 4471002;
 const META_FIELDS = new Set(['id', 'created_date', 'updated_date', 'created_by', 'created_by_id']);
 const SECRET_KEY_PATTERN = /(auth|key|secret|token|password|passwd|pwd|bearer|sig|signature|credential)/i;
 
+// Every refusal the importer can produce is one of these, and every one of them
+// carries a stable code as well as a message.
+//
+// The message is safe to show and is written for the operator. The code is what
+// the browser branches on and what the server log records, so the copy can be
+// reworded without changing either. Nothing here ever carries a passphrase, a
+// decrypted value, or a record field.
+export const MIGRATION_ERROR_CODE = Object.freeze({
+  DECRYPT_FAILED: 'decrypt_failed',
+  VALIDATION_FAILED: 'validation_failed',
+  BAD_UPLOAD: 'bad_upload',
+  UNAUTHORIZED: 'unauthorized',
+  NOT_CONFIRMED: 'not_confirmed',
+  TOO_LARGE: 'too_large',
+  INTERNAL: 'internal',
+});
+
 export class MigrationValidationError extends Error {
-  constructor(message, status = 400) {
+  constructor(message, status = 400, code = MIGRATION_ERROR_CODE.VALIDATION_FAILED) {
     super(message);
     this.name = 'MigrationValidationError';
     this.status = status;
+    this.code = code;
   }
 }
 
@@ -96,13 +115,21 @@ function decryptChunk(chunk, key) {
     return JSON.parse(plaintext.toString('utf8'));
   } catch (error) {
     if (error instanceof MigrationValidationError) throw error;
-    throw new MigrationValidationError('Could not decrypt migration package. Check the passphrase and file integrity.');
+    throw new MigrationValidationError(
+      'Could not decrypt migration package. Check the passphrase and file integrity.',
+      400,
+      MIGRATION_ERROR_CODE.DECRYPT_FAILED,
+    );
   }
 }
 
 function normalizeOwner(bundle, passphrase) {
   if (String(passphrase || '').length < 16) {
-    throw new MigrationValidationError('The migration passphrase must be at least 16 characters');
+    throw new MigrationValidationError(
+      'The migration passphrase must be at least 16 characters',
+      400,
+      MIGRATION_ERROR_CODE.DECRYPT_FAILED,
+    );
   }
   if (!Array.isArray(bundle?.chunks) || bundle.chunks.length > MAX_CHUNKS) {
     throw new MigrationValidationError('Migration package has an invalid chunk list');
@@ -143,7 +170,7 @@ function normalizeOwner(bundle, passphrase) {
     entities[envelopeEntity] ||= [];
     entities[envelopeEntity].push(...payload.records);
     total += payload.records.length;
-    if (total > MAX_RECORDS) throw new MigrationValidationError('Migration package record limit exceeded', 413);
+    if (total > MAX_RECORDS) throw new MigrationValidationError('Migration package record limit exceeded', 413, MIGRATION_ERROR_CODE.TOO_LARGE);
   }
 
   const countDiscrepancies = [];
@@ -185,7 +212,7 @@ function normalizeOrdinary(bundle) {
     if (!Array.isArray(records)) throw new MigrationValidationError(`${name} records are not an array`);
     entities[name] = records;
     total += records.length;
-    if (total > MAX_RECORDS) throw new MigrationValidationError('Import bundle record limit exceeded', 413);
+    if (total > MAX_RECORDS) throw new MigrationValidationError('Import bundle record limit exceeded', 413, MIGRATION_ERROR_CODE.TOO_LARGE);
   }
   return {
     kind: 'ordinary',
@@ -404,6 +431,21 @@ export function prepareMigrationRecord(kind, entity, source, existingData = {}) 
     namespaceMigrated = applyCredentialNamespace(kind, entity, data, existingData, meta);
   }
 
+  // An imported invitation is history, never authorization. See the note in
+  // lib/googleAccountLink.js: without this marker a pending Base44 invitation
+  // would let any Google account holding the matching verified address create
+  // a DashFlo account carrying whatever role that old row named.
+  //
+  // Stamped for both bundle kinds. IMPORT_FORCE would have been the obvious
+  // mechanism, but it only applies to ordinary exports, and the real
+  // production bundle is an owner export.
+  //
+  // The value is a constant, so a rerun writes the same thing and the record
+  // still compares equal.
+  if (entity === 'Invitation') {
+    data[MIGRATED_INVITATION_FIELD] = true;
+  }
+
   return { meta, data, preserved, namespaceMigrated };
 }
 
@@ -465,6 +507,39 @@ function valuesDiffer(a, b) {
   return fingerprint(a || {}) !== fingerprint(b || {});
 }
 
+// ── Natural key comparison ──────────────────────────────────────────────────
+//
+// Which natural keys are compared case-insensitively, and which are compared
+// exactly.
+//
+// An email address is the same person whatever its capitalisation, so
+// `Owner@Example.com` arriving from Base44 must be recognised as the account
+// already stored as `owner@example.com` rather than created alongside it.
+//
+// Codes are not folded. Supplier `sid` and `source_code` carry compatibility
+// sensitive longest-prefix matching against inbound lead traffic, and buyer
+// and campaign codes appear in external systems. Folding those would change
+// which records are considered the same and is not a change to make quietly
+// inside a collision check. Whitespace is trimmed on every key, because
+// leading or trailing space in an identifier is never meaningful.
+const CASE_INSENSITIVE_NATURAL_KEYS = new Set(['User.email']);
+
+function foldsCase(entity, naturalKey) {
+  return CASE_INSENSITIVE_NATURAL_KEYS.has(`${entity}.${naturalKey}`);
+}
+
+function naturalKeyFolder(entity, naturalKey) {
+  return foldsCase(entity, naturalKey)
+    ? (value) => value.trim().toLowerCase()
+    : (value) => value.trim();
+}
+
+// The SQL side of the same fold, so the stored value and the incoming value
+// are compared the same way.
+function foldSql(entity, naturalKey, expression) {
+  return foldsCase(entity, naturalKey) ? `lower(btrim(${expression}))` : `btrim(${expression})`;
+}
+
 export async function analyzeMigration(normalized, queryable = pool) {
   const expected = normalized.kind === 'owner' ? MIGRATION_ENTITY_ORDER : ALL_ENTITIES;
   const presentNames = Object.keys(normalized.entities);
@@ -506,18 +581,47 @@ export async function analyzeMigration(normalized, queryable = pool) {
 
     const naturalKey = NATURAL_KEYS[entity];
     if (naturalKey) {
-      const values = [...new Set(records.map((r) => r?.[naturalKey]).filter((v) => v != null && String(v) !== '').map(String))];
+      const fold = naturalKeyFolder(entity, naturalKey);
+      const values = [...new Set(
+        records.map((r) => r?.[naturalKey])
+          .filter((v) => v != null && String(v) !== '')
+          .map((v) => fold(String(v))),
+      )];
       if (values.length) {
+        // Both sides are folded before comparison. An address is the same
+        // person whatever its capitalisation, so comparing the raw strings let
+        // a capitalised Base44 address slip past this check and become a
+        // second account for somebody who already had one.
         const { rows } = await queryable.query(
-          `SELECT id, data->>$1 AS natural_value FROM ${tableName(entity)} WHERE data->>$1 = ANY($2::text[])`,
+          `SELECT id, ${foldSql(entity, naturalKey, 'data->>$1')} AS natural_value
+             FROM ${tableName(entity)}
+            WHERE ${foldSql(entity, naturalKey, 'data->>$1')} = ANY($2::text[])`,
           [naturalKey, values],
         );
-        const sourceByValue = new Map(records.map((r) => [String(r[naturalKey] || ''), String(r.id || '')]));
+        const sourceByValue = new Map(records.map((r) => [fold(String(r[naturalKey] || '')), String(r.id || '')]));
         for (const row of rows) {
           const sourceId = sourceByValue.get(String(row.natural_value));
           if (sourceId && sourceId !== String(row.id)) {
             idCollisions.push({ entity, field: naturalKey, source_id: sourceId, existing_id: String(row.id) });
           }
+        }
+      }
+
+      // Two records inside the same bundle that fold to one natural key are
+      // the same person or thing arriving twice. Creating both would produce
+      // the duplicate this check exists to prevent, and neither would collide
+      // with anything already stored, so the query above cannot see it.
+      const seen = new Map();
+      for (const record of records) {
+        const raw = record?.[naturalKey];
+        if (raw == null || String(raw) === '') continue;
+        const folded = fold(String(raw));
+        const id = String(record?.id || '');
+        const prior = seen.get(folded);
+        if (prior && prior !== id) {
+          idCollisions.push({ entity, field: naturalKey, source_id: id, existing_id: prior, within_bundle: true });
+        } else {
+          seen.set(folded, id);
         }
       }
     }
@@ -777,7 +881,7 @@ export async function runMigrationImport({ kind, mode, bundle, passphrase = '', 
       return { run_id: runId, mode, kind, ...report };
     }
     if (mode !== 'apply') throw new MigrationValidationError('Unknown migration mode');
-    if (!confirmed) throw new MigrationValidationError('Explicit migration confirmation is required');
+    if (!confirmed) throw new MigrationValidationError('Explicit migration confirmation is required', 400, MIGRATION_ERROR_CODE.NOT_CONFIRMED);
     const result = await applyNormalized(normalized, report);
     await finishRun(runId, 'success', report, result);
     return { run_id: runId, mode, kind, ...report, result: 'success', applied: result };
@@ -788,4 +892,6 @@ export async function runMigrationImport({ kind, mode, bundle, passphrase = '', 
   }
 }
 
-export default { normalizeMigrationBundle, analyzeMigration, runMigrationImport, mergeOrdinarySecrets, prepareMigrationRecord };
+export default {
+  MIGRATION_ERROR_CODE, normalizeMigrationBundle, analyzeMigration, runMigrationImport, mergeOrdinarySecrets, prepareMigrationRecord,
+};

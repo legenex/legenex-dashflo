@@ -1,5 +1,6 @@
 import { Suspense } from 'react';
 import { Toaster } from "@/components/ui/toaster"
+import { Toaster as SonnerToaster } from "@/components/ui/sonner"
 import { QueryClientProvider } from '@tanstack/react-query'
 import { queryClientInstance } from '@/lib/query-client'
 import { BrowserRouter as Router, Route, Routes, Navigate } from 'react-router-dom';
@@ -188,6 +189,13 @@ function App() {
           </Suspense>
         </Router>
         <Toaster />
+        {/* Sonner, mounted. 119 modules report their outcome through `toast`
+            from sonner and only four use the Radix store above, so without this
+            the application had no working toasts at all: every success and every
+            failure message was posted to an observer nobody had subscribed to.
+            That is what made the owner migration import look like it did
+            nothing, and it is why both toasters are mounted rather than one. */}
+        <SonnerToaster position="bottom-right" richColors closeButton />
       </QueryClientProvider>
     </AuthProvider>
   )

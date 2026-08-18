@@ -6,7 +6,7 @@ import {
 import { usePermissions, useAuth } from '@/lib/AuthContext';
 import { cropAndUpload } from '@/lib/progress/capture';
 import { ALL_VIEWPORTS } from '@/lib/progress/captureTargets';
-import { maskEnabled, setMaskEnabled } from '@/components/progress/CaptureController';
+import { maskEnabled, setMaskEnabled } from '@/lib/progress/captureMask';
 import { useProgressMutation } from '@/components/progress/useProgress';
 import {
   Card, CardHeader, CardBody, Badge, EmptyState, PrimaryButton, SecondaryButton,

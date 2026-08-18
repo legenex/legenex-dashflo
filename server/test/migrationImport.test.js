@@ -113,8 +113,11 @@ describe('Base44 owner migration package compatibility', () => {
       id: 'u1', email: 'owner@example.test', password: 'no', password_hash: 'no', session_token: 'no', refresh_token: 'no',
     });
     expect(user.data).toEqual({ email: 'owner@example.test' });
+    // The acceptance token is dropped, and what remains is explicitly marked
+    // as imported history so it cannot act as authorization. See
+    // lib/googleAccountLink.js.
     expect(prepareMigrationRecord('owner', 'Invitation', { id: 'i1', email: 'x@example.test', token: 'no' }).data)
-      .toEqual({ email: 'x@example.test' });
+      .toEqual({ email: 'x@example.test', migrated_history: true });
     expect(prepareMigrationRecord('owner', 'IntegrationConfig', { id: 's1', name: 'meta_oauth_state', config: 'no' })).toBeNull();
   });
 });

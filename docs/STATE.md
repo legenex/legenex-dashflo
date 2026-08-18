@@ -1659,3 +1659,124 @@ page included.
 - The Google Authorized JavaScript origin is a manual console change and is
   UNPROVEN until it is made. Until then Google sign-in on the progress host
   still returns `origin_mismatch`; the password form is unaffected.
+
+## Migration preview visibility and Capture for review removal, 18 August 2026
+
+Base: `7522b11c344238baf6166b8261e58b5630c20fc4`, on top of the deployed
+`a49003d`. Two production acceptance defects, fixed here. No other work.
+
+### The migration preview that did nothing
+
+The owner selected a valid encrypted package, entered the passphrase, pressed
+Decrypt and preview owner migration, watched a spinner, and then watched the
+button return to normal. No preview, no success, no error, no explanation.
+
+Cause: the panel reported every outcome through `toast` from sonner, and
+sonner's `<Toaster />` was never rendered anywhere in the application. Sonner's
+`toast()` posts to an observer; with nothing subscribed the message is dropped
+and the call returns normally. `App.jsx` mounted only the Radix toaster from
+`components/ui/toaster.jsx`, which is a different store with four users, while
+119 modules report through sonner. So `toast.error(...)` in the catch was a
+no-op, `setImportBusy('')` ran in the `finally`, the spinner stopped, and the
+panel had nothing else to show. The request had failed and the failure was
+discarded in the browser.
+
+The backend was not at fault. The route, the multipart handling, the field
+order the browser sends, PBKDF2, chunk decryption, digest verification and the
+analysis were all exercised over real HTTP against a disposable database and
+answer correctly: 200 with a full preview, 400 with a safe message for a wrong
+passphrase, and 400 for a malformed package.
+
+Fixed in four parts:
+
+- `App.jsx` mounts the sonner toaster. `components/ui/sonner.jsx` now reads the
+  theme from `lib/theme`, the application's own manager, rather than from
+  next-themes, which was never mounted either and always reported "system".
+- The panel keeps an explicit status of its own and no longer depends on a
+  toast being visible. Busy, success, blocked, refused, timed out and
+  unreachable all render a persistent band with `role="alert"` or
+  `role="status"`. A new attempt clears the previous outcome, so a stale preview
+  cannot be read as the result of the current run.
+- `lib/migrationImportStatus.js` maps any thrown value to a safe state. It reads
+  only the server's own safe message, keeps the first line, and bounds it to 300
+  characters, so a stack trace or an echoed payload cannot reach the screen. A
+  decryption failure gets fixed copy that names the passphrase and the file and
+  says which of the two was wrong for neither.
+- `api/client.js` takes an opt-in `timeoutMs` and `systemImport` passes 360
+  seconds, above the 300 second nginx read timeout. An aborted request is
+  reported as a timeout and an unreachable server as a network failure, rather
+  than as silence.
+
+Server side, the route now emits one structured line per attempt and per
+ending, and `MigrationValidationError` carries a stable code that the browser
+branches on: `decrypt_failed`, `validation_failed`, `bad_upload`,
+`unauthorized`, `not_confirmed`, `too_large`, `internal`. The log records mode,
+kind, byte count, duration, run id, outcome and code. It never records the
+passphrase, a decrypted value, a record field, a credential or a stack.
+
+The encrypted owner migration architecture is unchanged. Same package format,
+same PBKDF2 and AES-GCM parameters, same per-chunk digest, same owner-only
+route, same server-side decryption in memory. The passphrase is still
+request-only. Preview still writes zero business records, and apply still
+requires a fresh explicit confirmation.
+
+### Capture for review
+
+The floating pill at the bottom of every operator page is gone.
+`components/progress/CaptureController.jsx` is deleted, `AppLayout` no longer
+mounts it, and the sessionStorage capture queue and the `progress_capture`
+navigation protocol went with it. `capturePage` in `lib/progress/capture.js`
+had no other caller and is removed.
+
+What the Control Center depends on is kept: `capturePageElement` for the
+offscreen capturer, `cropAndUpload` for anchored comments, and the masking
+preference, which moved to `lib/progress/captureMask.js` because it is a stored
+user preference rather than something the removed control owned. It still
+defaults to masked when storage is unavailable.
+
+### Included from the working tree, not written for this task
+
+The tree already carried unreleased migration hardening that this commit could
+not separate from: `migrationImport.js` imports `MIGRATED_INVITATION_FIELD`
+from `googleAccountLink.js`, so committing the error codes without it would
+have left main with a broken import. It is included and called out rather than
+landed quietly:
+
+- An Invitation carried in from Base44 is stamped `migrated_history` and can no
+  longer authorize a Google sign-in. Without it, any Google account whose
+  verified address matched an old Base44 row could create a DashFlo account
+  carrying whatever role that row named, up to owner.
+- `User.email` natural keys are compared case-insensitively, and duplicates
+  inside one bundle are reported, so a capitalised address cannot become a
+  second account for somebody who already has one.
+- `authMigrationGate.test.js` and `authAuthorizationMatrix.test.js` cover both
+  against a real disposable database.
+
+### Evidence
+
+- Focused: `migrationPreviewRoute.test.js` 15 passed, `migrationImportStatus`
+  28 passed, `captureControlRemoval` and `toastSurface` 19 passed.
+- `npm run gate` PASS, seven steps, 88 test files, 1163 tests, none skipped.
+  Was 84 files and 1101 tests at `7522b11`.
+- The preview was exercised over real HTTP against a disposable local database:
+  valid package 200, wrong passphrase 400 `decrypt_failed`, malformed package
+  400 `bad_upload`, database failure 500 `internal` with a generic message and a
+  log line. Business record counts across every entity table were unchanged by
+  preview.
+- No Base44 source data was read or altered. No production record was imported.
+
+### Rollback
+
+`git revert` this commit and redeploy. It is client presentation, one client
+request option, migration error codes and route logging; no schema change, no
+migration behaviour change beyond the invitation marker noted above, and no
+data movement. Reverting restores the silent panel, so prefer forward fixes.
+
+### Not done
+
+- Not deployed. The VPS command block is handed to the operator; no SSH was
+  attempted from this session.
+- Which specific failure the production package hit on 18 August is still
+  UNPROVEN. The request failed and the browser discarded the reason. The next
+  attempt will name it on screen and leave a `[migration]` line in the
+  application log.
