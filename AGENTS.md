@@ -69,7 +69,49 @@ Do not bypass GitHub Actions merely because direct deployment would be faster.
 Ordinary work happens on `main`. Older documents that describe a long lived
 cutover branch as the required working branch are superseded by this file.
 
-## 4. Non-negotiable invariants
+## 4. Default autonomous release behavior
+
+For ordinary repository work the default is full execution through production.
+The operator describes the change they want, and the agent takes it all the way
+to a verified production release without asking for routine terminal or
+deployment steps.
+
+If the requested change is safe, is within the agent's available permissions,
+and does not require an explicit human gate, complete the entire release
+lifecycle.
+
+After the operator asks for a change, normally:
+
+- inspect git status
+- inspect the relevant existing code
+- preserve unrelated and concurrent work
+- implement the requested change
+- run focused validation
+- run `npm run gate`
+- inspect the final diff
+- run `git diff --check`
+- run the repository secret checks
+- commit the completed work
+- push `main`
+- identify the GitHub Actions run caused by that push
+- monitor that run through completion
+- inspect and fix failures caused by the change
+- verify the relevant production surface after a successful deployment
+- report the final result
+
+Do not stop after writing code. Do not stop after tests pass. Do not stop after
+creating a commit. Do not stop after pushing.
+
+Do not tell the operator to deploy by hand when GitHub Actions is available.
+
+The definition of done for a normal change includes a successful deployment and
+verification of the relevant production surface. See the Definition of done
+section.
+
+The human gates in the Human approval gates section still bind. Automatic
+release never overrides them.
+
+## 5. Non-negotiable invariants
 
 1. Every real lead path uses one canonical processing service. Simulations and
    dry runs are explicit and inert.
@@ -93,14 +135,14 @@ cutover branch as the required working branch are superseded by this file.
     use an opaque reference to server-side protected storage.
 11. Do not mint or substitute TrustedForm certificates.
 12. Deploying tested, gated application code by pushing `main` is the standing
-    default and needs no further approval. The operations listed in section 13
-    still require explicit human approval.
+    default and needs no further approval. The operations listed in the Human
+    approval gates section still require explicit human approval.
 13. Change generated code only through its source and generator. Commit source
     and output together.
 14. Human-facing copy, comments, and documents must not contain em dashes. This
     applies to chat responses as well as to files.
 
-## 5. Start from the current repository state
+## 6. Start from the current repository state
 
 Before making changes:
 
@@ -128,7 +170,7 @@ clean tree. If unrelated changes block the task, say so and ask.
 If another agent is actively changing the same files, stop and report the
 conflict rather than guessing.
 
-## 6. Inspect before editing
+## 7. Inspect before editing
 
 For every requested change:
 
@@ -142,7 +184,7 @@ Do not guess at root causes when they can be traced from code.
 
 Do not start broad repository audits unless explicitly requested.
 
-## 7. Complete implementations only
+## 8. Complete implementations only
 
 Do not leave the operator with fragments they must manually merge.
 
@@ -161,7 +203,7 @@ produce the complete integrated result.
 Do not give partial snippets or partial files when the agent can make the actual
 complete change directly.
 
-## 8. Testing
+## 9. Testing
 
 Run focused tests for the changed functionality first when that is useful:
 
@@ -186,15 +228,16 @@ reachable, and a run with them skipped is weaker evidence than a full run.
 GitHub Actions provides that database as a service container, so the CI gate and
 a local gate with PostgreSQL running are equivalent.
 
-If a gate failure is caused by the requested change, fix it. If a failure is
-demonstrably pre-existing or unrelated, report it clearly and do not silently
-ignore it. Never claim a test passed unless it actually ran.
+If a gate failure is caused by the requested change, diagnose it, fix it, and
+rerun the gate until it passes. If a failure is demonstrably pre-existing or
+unrelated, report it clearly and do not silently ignore it. Never claim a test
+passed unless it actually ran.
 
 Do not declare success based only on compilation. Exercise behavior against
 disposable data and local mock services. Tests never reach a live endpoint; the
 outbound network guard in `vitest.setup.js` enforces this.
 
-## 9. Git workflow
+## 10. Git workflow
 
 When the task is complete and the gate passes:
 
@@ -211,7 +254,40 @@ blocker.
 Do not ask whether routine completed work should be committed and pushed. That
 is the default DashFlo workflow.
 
-## 10. Automatic production deployment
+### Commit and push authorization
+
+Routine commits and pushes are pre-authorized. Do not ask "Should I commit
+this?", "Should I push this?", "Do you want me to deploy this?" or "Would you
+like the commands to push this?". If the task is complete and the gate passes,
+the normal action is to commit and push it.
+
+Stage only the files belonging to the completed task. Do not sweep unrelated
+concurrent changes into the commit. See the Parallel work and concurrency
+section.
+
+The GitHub authentication in use carries both `repo` and `workflow` scope, so a
+change that touches `.github/workflows/` can be pushed normally. An earlier
+token lacked `workflow` scope and that is resolved. Do not fall back to asking
+the operator to push because of that historical failure, and do not assume any
+past authentication failure is still present.
+
+If a push fails, inspect the actual current failure and resolve it with the
+available git and GitHub tooling. Report the exact blocker only when it cannot
+be repaired with credentials and tools that are already available.
+
+### Git transport
+
+The `origin` remote is `https://github.com/legenex/legenex-dashflo.git` and it
+authenticates through the GitHub CLI credential helper installed for
+`https://github.com`. The GitHub CLI additionally records `ssh` as a per-host
+protocol preference, so both HTTPS and SSH appear in tooling output. What
+matters is that pushes go through the configured `origin` and that they work.
+
+Use the configured `origin`. Never expose private key material. Never ask the
+operator to paste an SSH key, a token, a passphrase or any other GitHub
+credential into chat.
+
+## 11. Automatic production deployment
 
 A push to `main` triggers `.github/workflows/deploy-production.yml`. The gate job
 runs first and the deploy job runs only if the gate passes. The deploy job uses
@@ -238,7 +314,29 @@ then `nginx`, check `docker compose ps`, and check the five public hosts. It
 never writes `server/.env`, never recreates PostgreSQL, never removes a volume,
 and never issues a certificate.
 
-## 11. Production verification
+Identify the run programmatically rather than guessing at it. Do not print a
+placeholder such as `gh run watch RUN_ID` and leave the operator to substitute
+the identifier. When the harness has terminal access, retrieve the real run id
+and monitor that run.
+
+The deployment system stays responsible for deploying the exact commit, the
+Docker application deployment, preserving `server/.env`, restricted sudo helper
+usage, marketing deployment, nginx validation, nginx reload where required,
+health checks, and public surface checks. Do not reproduce any of that by hand
+and do not create an alternative manual deployment path.
+
+If GitHub Actions fails because of the current change, inspect the exact failing
+step, fix it, commit the fix, push, and monitor the replacement run. Do not hand
+an ordinary CI or deployment failure back to the operator when the agent can fix
+it. If the failure is unrelated, external, permission-blocked, or requires a
+human gate, report the exact reason.
+
+A documentation-only change still triggers this workflow under the current
+configuration. Follow the normal path rather than bypassing it. If skipping
+production deployment for documentation-only changes is ever wanted, change the
+workflow deliberately as its own task.
+
+## 12. Production verification
 
 After a successful deployment, verify the surface the task actually changed. For
 a normal release, verify at minimum:
@@ -248,30 +346,52 @@ a normal release, verify at minimum:
 - the relevant public URL responds successfully
 - the changed functionality is live, when that can be checked programmatically
 
+Verify the surface relevant to the change rather than every host on every small
+change. The workflow already checks container health and the five public
+surfaces on each deployment.
+
+- For API or server work, verify the appropriate endpoint.
+- For marketing work, verify the affected public page.
+- For application UI work, verify what can be checked programmatically and name
+  any genuinely browser-only visual check.
+- For Progress work, verify the Progress host and confirm that the owner-only
+  restrictions still hold.
+
 If verification requires a browser, say exactly what the operator needs to check
 by hand. Never claim browser-only behavior was verified when it was not.
 
-## 12. Human approval gates
+## 13. Human approval gates
 
 Deploying tested, gated application code by pushing `main` is pre-authorized and
 needs no further approval. There is no manual deployment gate for an ordinary
 application release.
 
-Explicit human approval is still required for:
+Routine code deployment is not itself a human gate. A normal safe change that
+passes the gate is committed, pushed, deployed, monitored and verified
+automatically.
 
-- production credential creation, rotation or change
-- production data mutation or import
+Automatic release does not override an explicit approval requirement. Stop
+before:
+
+- entering, creating, rotating or otherwise changing production credentials
+- revealing or handling secret values outside the approved secret mechanism
+- production data import, or destructive production data mutation
+- an owner migration apply
+- Base44 production mutation
 - money movement and money writes
-- live delivery or other live external business activation
-- destructive schema changes
-- irreversible cutover or rollback
-- unusual infrastructure operations
+- live delivery, live supplier or buyer activation, or any other live external
+  business activation
+- destructive schema or database operations
+- irreversible cutover, or destructive rollback
+- unusual infrastructure or root operations
+- anything this file or `docs/HUMAN-GATES.md` explicitly marks as requiring
+  approval
 
 See `docs/HUMAN-GATES.md` for the gate records. Where that document or `README.md`
 describes a cutover branch or a manual deployment gate for ordinary releases,
 this file governs.
 
-## 13. Production secrets
+## 14. Production secrets
 
 Production secrets remain on the VPS in `/opt/apps/dashflo/server/.env`.
 
@@ -293,7 +413,7 @@ Never print, expose, copy, or request:
 Do not move normal application secrets into GitHub Actions unless there is a
 specific architectural reason and the operator explicitly approves it.
 
-## 14. VPS access
+## 15. VPS access
 
 For normal application changes:
 
@@ -316,7 +436,7 @@ work the deployment system cannot do, such as:
 
 If manual VPS work is genuinely required, explain why before doing it.
 
-## 15. Database safety
+## 16. Database safety
 
 Never:
 
@@ -334,7 +454,7 @@ checks are complete.
 Treat production data operations as serious. Keep preview and read-only steps
 clearly separated from write and apply steps in both code and reporting.
 
-## 16. Base44 migration boundary
+## 17. Base44 migration boundary
 
 Base44 is a temporary upstream migration source. The only supported direction is
 Base44 to DashFlo.
@@ -349,7 +469,7 @@ Base44 to DashFlo.
 
 See `docs/BASE44-BOUNDARY.md`.
 
-## 17. Progress Control Center
+## 18. Progress Control Center
 
 Progress is separate owner-only internal tooling. Its canonical host is
 `https://progress.dashflo.io/`, and it stays absent from ordinary DashFlo
@@ -365,7 +485,7 @@ navigation.
   between the application host and the Progress host. The cookie stays host
   only.
 
-## 18. Authentication
+## 19. Authentication
 
 Preserve the current Google Identity Services architecture unless the operator
 explicitly asks for an auth redesign.
@@ -375,7 +495,7 @@ account-linking protections, and keep server-side authorization intact when
 changing sign-in. An Invitation carried in from Base44 is marked migrated
 history and cannot authorize a Google sign-in.
 
-## 19. Marketing and nginx
+## 20. Marketing and nginx
 
 - Respect the marketing source and deployment conventions. Authored source and
   overlay files come first; do not edit generated or minified assets blindly
@@ -387,7 +507,7 @@ history and cannot authorize a Google sign-in.
 - Never reload nginx unless `nginx -t` succeeded first. The helper does this.
 - Ordinary deployments never reissue TLS certificates.
 
-## 20. SMTP and contact
+## 21. SMTP and contact
 
 The production mailer uses server-side SMTP, in `server/src/lib/mailer.js` and
 `server/src/lib/contactMessage.js`.
@@ -397,7 +517,7 @@ The production mailer uses server-side SMTP, in `server/src/lib/mailer.js` and
 - The contact recipient stays controlled server-side. The browser must never be
   able to choose an arbitrary mail recipient.
 
-## 21. Security
+## 22. Security
 
 Never introduce:
 
@@ -414,13 +534,13 @@ Prefer narrow server-side authorization and least privilege. Review every diff
 for access control, PII, secrets, money paths, live URLs, idempotency, and
 generated parity before committing.
 
-## 22. Performance
+## 23. Performance
 
 Preserve the current code splitting, marketing cache behavior, gzip behavior,
 and bundle controls unless the task explicitly requires changing them. Do not
 regress initial bundle size casually.
 
-## 23. Verified repository facts
+## 24. Verified repository facts
 
 - `Repo.list()` returns an array for an empty result.
 - `Lead.buyer_id` is overloaded across legacy code and native routing. Do not
@@ -442,7 +562,7 @@ regress initial bundle size casually.
   project gate. Older documents that refer to `.claude/hooks/task-gate.sh`
   describe a pack layout that was never installed, and it is not the gate.
 
-## 24. Parallel work and concurrency
+## 25. Parallel work and concurrency
 
 Multiple coding agents may work in this repository at the same time.
 
@@ -465,6 +585,12 @@ When creating new files during concurrent work, keep the scope narrow.
 Do not commit another agent's unrelated changes unless explicitly instructed or
 unless the dependency is unavoidable and clearly reported.
 
+Before committing, confirm the commit contains only the intended work. When
+unrelated changes are present in the tree, stage only the files belonging to the
+completed task. If concurrent work creates a genuine collision in the same files
+or the same code path, stop and report the collision rather than overwriting
+it.
+
 For planned parallel work, use isolated worktrees and assign exact file
 ownership. No two agents edit the same file.
 
@@ -481,13 +607,13 @@ Integrator-only surfaces:
 Agents may build separate modules and tests in parallel, then the integrator
 applies the canonical pipeline change serially.
 
-## 25. Model and harness neutrality
+## 26. Model and harness neutrality
 
 These instructions apply regardless of model or coding harness.
 
 Examples include:
 
-- Claude
+- Claude Code
 - Codex
 - Kimi
 - Nemotron
@@ -510,10 +636,15 @@ Harness permissions are separate from these instructions. A permission that
 allows an action does not authorize an action this contract prohibits, and an
 instruction here does not grant a capability the harness withholds.
 
-If a required capability is unavailable, report the limitation rather than
-pretending the action succeeded.
+Assess the capabilities of the current harness. Do not ask the operator to
+perform a routine step merely because a different model, or an earlier session,
+lacked the permission to do it.
 
-## 26. Definition of done
+If the harness genuinely cannot commit, push, monitor GitHub Actions or verify
+production, report that limitation plainly. Never present an action as done when
+it was not.
+
+## 27. Definition of done
 
 A task is done only when:
 
@@ -533,23 +664,30 @@ A task is done only when:
 If a fact cannot be proven, label it `UNPROVEN` and either keep the task open or
 move it to the correct human gate.
 
-## 27. Final response format
+## 28. Final response format
 
 After completing a normal DashFlo development task, provide a concise completion
 report containing:
 
 - what changed
 - root cause if the task was a bug
+- changed files
 - commit hash
 - commit message
 - focused test result
-- npm run gate result
+- `npm run gate` result
 - push result
+- GitHub Actions run URL
 - GitHub Actions deployment result
 - production verification result
-- anything still requiring manual verification
+- anything genuinely still requiring manual verification
+- final git status
 
 Do not dump unnecessary internal reasoning.
+
+Do not give routine push or deployment instructions after a successful
+autonomous release. Do not tell the operator to run a command the agent was able
+and authorized to run itself.
 
 Do not give manual VPS deployment commands if the automatic deployment pipeline
 succeeded.
@@ -557,7 +695,7 @@ succeeded.
 If automatic deployment fails, report the failing GitHub Actions step and fix it
 when the cause is the committed change.
 
-## 28. Style
+## 29. Style
 
 Be direct and execution focused.
 

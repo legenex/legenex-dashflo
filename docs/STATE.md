@@ -12,6 +12,9 @@ Update this file after every completed or blocked task. It is the persistent han
   requirement.
 - Canonical agent contract: `AGENTS.md`. `CLAUDE.md` is a short Claude Code
   entrypoint that defers to it.
+- Release mode: autonomous. A safe change that passes the gate is committed,
+  pushed, deployed, monitored and verified by the agent without a manual step
+  from the operator. See "Authentication and autonomous release state" below.
 - Auto-sync status: PAUSED at source. Both launchd writers booted out and
   persistently disabled on the operator workstation, 15 August 2026. See
   "Gate A resolution" below for the verification evidence. Nothing is writing to
@@ -1976,3 +1979,69 @@ package or production configuration file was touched.
 ### Rollback
 
 `git revert` the commit. Nothing executable depends on either file.
+
+## Authentication and autonomous release state, 18 August 2026
+
+GitHub CLI authentication was refreshed successfully and the push path is
+working, so routine agent work no longer needs a manual push or a manual
+deployment.
+
+- The active GitHub account is `legenex`.
+- The token carries `repo` and `workflow` scope, so a commit that touches
+  `.github/workflows/` can be pushed normally.
+- The earlier blocker, where a workflow-file push was refused because the token
+  lacked `workflow` scope, is resolved.
+- `git push origin main` succeeds.
+- Routine agents commit and push their own completed work.
+- Routine pushes to `main` continue through GitHub Actions to production.
+- Manual pushes and manual VPS deployment are not part of the ordinary workflow.
+
+### Git transport, measured rather than assumed
+
+The transport is worth recording precisely, because the two tools describe it
+differently and an agent debugging a failed push will otherwise look in the
+wrong place.
+
+- `origin` is `https://github.com/legenex/legenex-dashflo.git`, an HTTPS remote.
+- Pushes authenticate through the GitHub CLI credential helper installed for
+  `https://github.com` in the global git configuration, alongside `osxkeychain`.
+- `gh auth status` reports "Git operations protocol: ssh" as a per-host
+  preference, while `gh config get git_protocol` reports `https`. Neither
+  changes the fact that the working push path is the HTTPS `origin` above.
+
+`AGENTS.md` records the HTTPS origin and the credential helper rather than
+describing the transport as SSH, so a future agent does not go hunting for an
+SSH key that is not what authenticates the push.
+
+No token value, key material, passphrase or one-time authentication code is
+recorded here, and none was printed into the repository.
+
+### Instruction files
+
+`AGENTS.md` gained a Default autonomous release behavior section placed with the
+workflow sections, and the remaining rules were integrated into the sections
+that already owned them: commit and push authorization and git transport under
+Git workflow, run monitoring and the failure loop and the documentation-only
+note under Automatic production deployment, per-surface guidance under
+Production verification, the expanded stop list under Human approval gates,
+commit hygiene under Parallel work and concurrency, current-harness capability
+assessment under Model and harness neutrality, and the extra fields under Final
+response format.
+
+An earlier draft of this change had appended the same rules as one disconnected
+block ahead of the numbered contract, which duplicated Production verification,
+Human approval gates, concurrency and harness neutrality. The duplicates are
+removed. Sections 4 through 28 shifted by one to 5 through 29, cross references
+now name sections instead of numbering them, and `CLAUDE.md` was updated to
+match.
+
+### Evidence
+
+Documentation only. `AGENTS.md`, `CLAUDE.md` and this file are the only changed
+paths. No application source, test, nginx, Docker, migration, auth, workflow,
+package or production configuration file was touched. The deployment workflow
+was read to confirm the trigger and the host sequence, and was not modified.
+
+### Rollback
+
+`git revert` the commit. Nothing executable depends on any of these files.

@@ -36,21 +36,36 @@ Use the `gh` CLI to identify and monitor the GitHub Actions run after pushing
 
 ## Subagents and parallel sessions
 
-Claude Code subagents and parallel sessions are permitted, and the concurrency
-and file ownership rules in `AGENTS.md` section 24 apply to them exactly as they
-apply to separate agents.
+Claude Code subagents and parallel sessions are permitted, and the Parallel
+work and concurrency rules in `AGENTS.md` apply to them exactly as they apply to
+separate agents.
 
 - Give each subagent explicit file ownership. No two subagents edit the same
   file.
-- Keep the integrator-only surfaces listed in `AGENTS.md` section 24 in a single
-  serial session. Do not let a subagent edit them.
+- Keep the integrator-only surfaces listed in `AGENTS.md` in a single serial
+  session. Do not let a subagent edit them.
 - A subagent reports evidence back. Only the main session runs `npm run gate`,
   commits, pushes and monitors the deployment.
 - Never let a subagent take a production action, and never let one bypass a
   human gate on the strength of its own reasoning.
 
+## Autonomous release execution
+
+Claude Code has the repository, git and GitHub access needed to execute the full
+normal lifecycle itself:
+
+implementation -> gate -> commit -> push -> monitor GitHub Actions -> verify
+production
+
+Do not stop and ask the operator to perform a routine push or deployment when
+you have that access. Follow the Default autonomous release behavior section in
+`AGENTS.md`, which is the canonical statement of this rule.
+
+Retrieve the real GitHub Actions run id with `gh` and monitor it yourself.
+Never hand back a placeholder command for the operator to fill in.
+
 ## Reporting
 
-Close a task with the completion report in `AGENTS.md` section 27, and keep to
-the style rules in `AGENTS.md` section 28, including no em dashes in chat
+Close a task with the completion report in the Final response format section of
+`AGENTS.md`, and keep to its Style section, including no em dashes in chat
 responses.
