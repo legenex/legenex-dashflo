@@ -32,3 +32,11 @@ Response.txt
 # Supplied deployment input. The reviewed extracted static build is tracked in
 # marketing/dist; the uploaded archive itself remains local.
 docs/DashFlo-site.zip
+
+# Local migration packages. An encrypted owner migration export is the most
+# credential-dense file this system handles and routinely runs to hundreds of
+# megabytes, so it stays on the operator's machine and out of git. Ignoring it
+# also keeps the em dash gate honest: that check intent-to-adds untracked files
+# before diffing, and a 124 MB package overflows the diff buffer and fails the
+# gate for reasons that have nothing to do with the change under test.
+docs/resources/

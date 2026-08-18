@@ -1,11 +1,14 @@
 import express from 'express';
 import multer from 'multer';
 import { runMigrationImport, MigrationValidationError, MIGRATION_ERROR_CODE } from '../lib/migrationImport.js';
+import {
+  finishProgress, isValidProgressId, progressSink, readProgress, startProgress,
+} from '../lib/migrationProgress.js';
 
 const router = express.Router();
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 250 * 1024 * 1024, files: 1, fields: 5 },
+  limits: { fileSize: 250 * 1024 * 1024, files: 1, fields: 6 },
 });
 
 function permissionsOf(user) {
@@ -106,10 +109,28 @@ async function handle(req, res) {
 
   logMigration({ mode, kind, outcome: 'started', bytes, user_id: req.user?.id || 'unknown' });
 
+  // Progress is optional. An older client, or a caller that does not send an id,
+  // gets exactly the previous behaviour.
+  const progressId = String(req.body?.progress_id || '');
+  const tracked = isValidProgressId(progressId)
+    && Boolean(startProgress({ id: progressId, userId: req.user.id, mode, kind, bytes }));
+  const progress = (tracked && progressSink(progressId)) || undefined;
+  const endProgress = (failed, code) => {
+    if (tracked) finishProgress(progressId, { failed, code });
+  };
+
   let bundle;
   try {
+    progress?.stage('parsing');
     bundle = JSON.parse(req.file.buffer.toString('utf8'));
+    // The upload buffer is dead the moment it has been parsed, and for a large
+    // owner package it is over a hundred megabytes of ciphertext held alongside
+    // the parsed object for the whole decrypt. Dropping the reference here lets
+    // it be collected during the expensive part rather than at the end of the
+    // request. `bytes` was captured before this point, so logging is unaffected.
+    req.file.buffer = null;
   } catch {
+    endProgress(true, MIGRATION_ERROR_CODE.BAD_UPLOAD);
     return refuse(
       400,
       'Migration file is not valid JSON',
@@ -126,7 +147,9 @@ async function handle(req, res) {
       passphrase: kind === 'owner' ? String(req.body?.passphrase || '') : '',
       confirmed: req.body?.confirmed === 'true',
       user: req.user,
+      ...(progress ? { progress } : {}),
     });
+    endProgress(false, null);
     logMigration({
       mode,
       kind,
@@ -143,6 +166,7 @@ async function handle(req, res) {
     const validation = error instanceof MigrationValidationError;
     const status = validation ? error.status : 500;
     const code = validation ? (error.code || MIGRATION_ERROR_CODE.VALIDATION_FAILED) : MIGRATION_ERROR_CODE.INTERNAL;
+    endProgress(true, code);
 
     // An unexpected failure is the case the old handler lost entirely: it
     // answered "Migration import failed" and wrote nothing anywhere. The
@@ -172,6 +196,26 @@ async function handle(req, res) {
     bundle = null;
   }
 }
+
+/* Poll one import's progress.
+ *
+ * Authorisation is the same gate the import itself passes, and the record is
+ * additionally scoped to the user that created it, so an authorised operator
+ * still cannot read another operator's run. An unknown or foreign id is a 404
+ * rather than a 403: this endpoint does not confirm that somebody else's
+ * migration exists.
+ */
+router.get('/progress/:id', (req, res) => {
+  if (!req.user) return res.status(401).json({ error: 'Forbidden', code: MIGRATION_ERROR_CODE.UNAUTHORIZED });
+  const id = String(req.params.id || '');
+  if (!isValidProgressId(id)) return res.status(400).json({ error: 'Invalid progress id', code: MIGRATION_ERROR_CODE.BAD_UPLOAD });
+  const state = readProgress(id, req.user.id);
+  if (!state) return res.status(404).json({ error: 'No migration progress for that id', code: MIGRATION_ERROR_CODE.BAD_UPLOAD });
+  if (!authorized(req.user, state.kind)) {
+    return res.status(403).json({ error: 'Forbidden', code: MIGRATION_ERROR_CODE.UNAUTHORIZED });
+  }
+  return res.json(state);
+});
 
 router.post('/preview', uploadOne, handle);
 router.post('/apply', uploadOne, handle);

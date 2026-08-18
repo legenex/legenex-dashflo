@@ -6,6 +6,7 @@ import { usePermissions, useAuth } from '@/lib/AuthContext';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Progress } from '@/components/ui/progress';
+import { MigrationProgress } from '@/components/settings/MigrationProgress';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
@@ -88,6 +89,11 @@ export default function SettingsExportImport() {
   // allowed to return to idle with nothing on screen, which is what it did
   // when the only report was a toast and no toaster was mounted.
   const [importStatus, setImportStatus] = useState(null);
+  // Where the running import actually is. Populated from the browser's own
+  // upload byte counter and from the server's chunk counts, never from a timer.
+  // It survives the end of the run so a failure keeps the stage it died at on
+  // screen next to the error.
+  const [importProgress, setImportProgress] = useState(null);
 
   const { data: counts, isLoading: countsLoading } = useQuery({
     queryKey: ['system-export-counts'],
@@ -230,9 +236,43 @@ export default function SettingsExportImport() {
         : 'Validating the export against the DashFlo schema.',
     });
     if (mode === 'preview') setBundlePreview(null);
+    setImportProgress({
+      phase: 'preparing',
+      stage: 'preparing',
+      uploadLoaded: 0,
+      uploadTotal: file.size || 0,
+      serverPercent: null,
+      processedChunks: 0,
+      totalChunks: 0,
+      mode,
+      done: false,
+      failed: false,
+    });
 
     try {
-      const result = await systemImport({ file, kind, mode, passphrase: ownerPassphrase, confirmed: mode === 'apply' });
+      const result = await systemImport({
+        file,
+        kind,
+        mode,
+        passphrase: ownerPassphrase,
+        confirmed: mode === 'apply',
+        onUploadProgress: ({ loaded, total, uploaded }) => setImportProgress((prev) => (prev ? {
+          ...prev,
+          phase: uploaded ? 'server' : 'uploading',
+          stage: uploaded ? 'uploaded' : 'uploading',
+          uploadLoaded: uploaded ? prev.uploadTotal : loaded,
+          uploadTotal: uploaded ? prev.uploadTotal : (total || prev.uploadTotal),
+        } : prev)),
+        onServerProgress: (state) => setImportProgress((prev) => (prev ? {
+          ...prev,
+          phase: 'server',
+          stage: state?.stage || prev.stage,
+          serverPercent: typeof state?.percent === 'number' ? state.percent : prev.serverPercent,
+          processedChunks: Number.isInteger(state?.processed_chunks) ? state.processed_chunks : prev.processedChunks,
+          totalChunks: Number.isInteger(state?.total_chunks) ? state.total_chunks : prev.totalChunks,
+        } : prev)),
+      });
+      setImportProgress((prev) => (prev ? { ...prev, phase: 'complete', stage: 'complete', done: true } : prev));
       const status = describeMigrationSuccess(result, { mode });
       setImportStatus(status);
       setConfirmed(false);
@@ -250,6 +290,9 @@ export default function SettingsExportImport() {
       // safe message, trimmed and bounded. See lib/migrationImportStatus.js.
       const status = describeMigrationFailure(err, { mode });
       setImportStatus(status);
+      // The bar stops where it stopped. Which stage failed is diagnostic, so it
+      // stays on screen beside the error rather than being cleared.
+      setImportProgress((prev) => (prev ? { ...prev, done: true, failed: true } : prev));
       toast.error(status.title);
     } finally {
       setImportBusy('');
@@ -397,7 +440,7 @@ export default function SettingsExportImport() {
               <FileJson className="h-4 w-4 text-muted-foreground" />
               <span className="min-w-0 flex-1 truncate text-[13px] text-foreground">{ordinaryFile?.name || 'Choose ordinary .json export'}</span>
               <input type="file" accept="application/json,.json" className="hidden" onChange={(e) => {
-                setOrdinaryFile(e.target.files?.[0] || null); setBundlePreview(null); setConfirmed(false); setImportStatus(null);
+                setOrdinaryFile(e.target.files?.[0] || null); setBundlePreview(null); setConfirmed(false); setImportStatus(null); setImportProgress(null);
               }} />
             </label>
             <Button className="mt-3" variant="outline" disabled={!ordinaryFile || Boolean(importBusy)} onClick={() => runImport('ordinary', 'preview')}>
@@ -420,7 +463,7 @@ export default function SettingsExportImport() {
                   <FileJson className="h-4 w-4 text-muted-foreground" />
                   <span className="min-w-0 flex-1 truncate text-[13px] text-foreground">{ownerFile?.name || 'Choose encrypted .json.enc migration package'}</span>
                   <input type="file" accept="application/json,.json,.enc" className="hidden" onChange={(e) => {
-                    setOwnerFile(e.target.files?.[0] || null); setBundlePreview(null); setConfirmed(false); setImportStatus(null);
+                    setOwnerFile(e.target.files?.[0] || null); setBundlePreview(null); setConfirmed(false); setImportStatus(null); setImportProgress(null);
                   }} />
                 </label>
                 <div className="mt-3 max-w-md">
@@ -458,6 +501,8 @@ export default function SettingsExportImport() {
               </div>
             </div>
           )}
+
+          {importProgress && <MigrationProgress state={importProgress} />}
 
           {bundlePreview && (
             <div className="rounded-lg border border-border bg-popover p-4">

@@ -397,3 +397,47 @@ export const MIGRATION_CRYPTO = {
   salt_bytes: 16,
   iv_bytes: 12,
 };
+
+// The canonical migration envelope contract.
+//
+// MIGRATION_CRYPTO above is what a DashFlo-written export would emit. It is not
+// the same question as what the importer must accept, and conflating the two is
+// what broke owner migration import: the importer demanded exact equality with
+// every value above, including iterations, while the only thing that actually
+// produces these packages is the legacy Legenex dashboard exporter, which seals
+// them at 100000 iterations. No package in circulation has ever carried 600000,
+// so the importer could not accept any real export.
+//
+// So the two questions are separated here. Structure and algorithm are matched
+// exactly, because accepting a different cipher or a shorter key would be a
+// downgrade. The PBKDF2 work factor is matched against a policy range instead,
+// because it is a cost parameter the exporter records in the package and the
+// importer must reproduce to derive the same key. Reading it from the package
+// is what makes an older legitimate export importable; bounding it is what
+// keeps that from becoming a downgrade or a denial of service.
+//
+// iterations.min is the floor a package must meet to be considered safe. It is
+// deliberately set at the supported exporter's value rather than below it, so
+// the range admits real packages and nothing weaker. iterations.max bounds the
+// work a single upload can ask the server to perform.
+export const MIGRATION_FORMAT = {
+  // Envelope versions this importer understands. Add a version here rather than
+  // loosening a rule when the format genuinely changes.
+  formats: ['legenex-migration-v1'],
+
+  // Matched exactly. A package disagreeing on any of these is refused.
+  kdf: 'PBKDF2-SHA256',
+  cipher: 'AES-GCM',
+  key_bits: 256,
+  salt_bytes: 16,
+  iv_bytes: 12,
+
+  // Matched against a range, and the package's own value is what derives the key.
+  iterations: { min: 100000, max: 10000000, preferred: 600000 },
+
+  // Every key the crypto block may carry. An unrecognised key is refused rather
+  // than ignored, so a package cannot smuggle an unreviewed crypto directive
+  // past a validator that only checks the fields it happens to know about.
+  crypto_keys_required: ['format', 'kdf', 'iterations', 'cipher', 'key_bits', 'salt_bytes', 'iv_bytes', 'salt'],
+  crypto_keys_optional: [],
+};

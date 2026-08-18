@@ -69,6 +69,55 @@ async function request(path, { method = 'GET', body, headers = {}, raw = false, 
   return raw ? { data, status: res.status } : data;
 }
 
+/* Multipart upload with real upload progress.
+ *
+ * fetch cannot report how much of a request body has gone out, and for a 100 MB
+ * migration package that is most of the wait. XMLHttpRequest still can, so the
+ * one call that needs it uses it rather than the whole client changing shape.
+ * Errors are raised in exactly the form request() raises them, so callers
+ * already written against { status, code, data } keep working.
+ */
+function upload(path, { body, timeoutMs = 0, onUploadProgress } = {}) {
+  return new Promise((resolve, reject) => {
+    const fail = (message, status, code) => {
+      const err = new Error(message);
+      err.status = status;
+      err.code = code;
+      reject(err);
+    };
+
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', `${API_BASE}${path}`, true);
+    xhr.withCredentials = true;
+    const token = getToken();
+    if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+    if (timeoutMs > 0) xhr.timeout = timeoutMs;
+
+    if (typeof onUploadProgress === 'function' && xhr.upload) {
+      xhr.upload.onprogress = (event) => {
+        if (event.lengthComputable) onUploadProgress({ loaded: event.loaded, total: event.total });
+      };
+      // The bytes are gone; everything after this is the server working.
+      xhr.upload.onload = () => onUploadProgress({ loaded: 1, total: 1, uploaded: true });
+    }
+
+    xhr.ontimeout = () => fail(`The request timed out after ${Math.round(timeoutMs / 1000)} seconds`, 0, 'timeout');
+    xhr.onerror = () => fail('Could not reach the server', 0, 'network');
+    xhr.onload = () => {
+      let data;
+      try { data = xhr.responseText ? JSON.parse(xhr.responseText) : null; } catch { data = xhr.responseText; }
+      if (xhr.status >= 200 && xhr.status < 300) return resolve(data);
+      const err = new Error(data?.error || data?.message || `Request failed (${xhr.status})`);
+      err.status = xhr.status;
+      err.code = data?.code || null;
+      err.data = data;
+      return reject(err);
+    };
+
+    xhr.send(body);
+  });
+}
+
 const qs = (params) => {
   const s = new URLSearchParams();
   for (const [k, v] of Object.entries(params)) if (v !== undefined && v !== null) s.set(k, v);
@@ -202,5 +251,5 @@ export const integrations = {
   },
 };
 
-export const api = { entities, asServiceRole, auth, users, functions, integrations, request, getToken, setToken };
+export const api = { entities, asServiceRole, auth, users, functions, integrations, request, upload, getToken, setToken };
 export default api;

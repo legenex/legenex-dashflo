@@ -12,6 +12,7 @@ import {
   ENTITY_ORDER,
   IMPORT_FORCE,
   MIGRATION_CRYPTO,
+  MIGRATION_FORMAT,
   MIGRATION_DROP_FIELDS,
   MIGRATION_DROP_RECORD,
   MIGRATION_ENTITY_ORDER,
@@ -27,6 +28,18 @@ const SAMPLE_LIMIT = 50;
 const IMPORT_LOCK_ID = 4471002;
 const META_FIELDS = new Set(['id', 'created_date', 'updated_date', 'created_by', 'created_by_id']);
 const SECRET_KEY_PATTERN = /(auth|key|secret|token|password|passwd|pwd|bearer|sig|signature|credential)/i;
+
+/* Progress reporting sink.
+ *
+ * The importer reports where it is, never what it is reading. Every value that
+ * leaves through here is a stage name or a count: no record, no field, no
+ * passphrase, no decrypted byte. Callers that do not care pass nothing and get
+ * NULL_PROGRESS, so the import path behaves identically with progress off.
+ */
+export const NULL_PROGRESS = Object.freeze({
+  stage() {},
+  chunk() {},
+});
 
 // Every refusal the importer can produce is one of these, and every one of them
 // carries a stable code as well as a message.
@@ -70,35 +83,78 @@ function decodeBase64(value, label) {
   return out;
 }
 
-function assertOwnerCrypto(bundle) {
+// Validate the crypto envelope against the canonical contract and return the
+// parameters the package asked to be decrypted with.
+//
+// Structure and algorithm are matched exactly. The PBKDF2 work factor is the one
+// parameter read back from the package, because it is a cost the exporter chose
+// and recorded, and the same value has to go into pbkdf2 to arrive at the same
+// key. Pinning it to a single constant here is what made every real export
+// undecryptable. Bounding it by MIGRATION_FORMAT.iterations is what stops that
+// from becoming either a downgrade or an unbounded amount of server work.
+export function assertOwnerCrypto(bundle) {
   const spec = bundle?.crypto || {};
-  const exact = [
-    ['format', MIGRATION_CRYPTO.format],
-    ['kdf', MIGRATION_CRYPTO.kdf],
-    ['iterations', MIGRATION_CRYPTO.iterations],
-    ['cipher', MIGRATION_CRYPTO.cipher],
-    ['key_bits', MIGRATION_CRYPTO.key_bits],
-    ['salt_bytes', MIGRATION_CRYPTO.salt_bytes],
-    ['iv_bytes', MIGRATION_CRYPTO.iv_bytes],
-  ];
-  if (bundle?.format !== MIGRATION_CRYPTO.format) {
+
+  if (!MIGRATION_FORMAT.formats.includes(bundle?.format)) {
     throw new MigrationValidationError(`Unsupported migration package format: ${String(bundle?.format || 'missing')}`);
   }
-  for (const [field, expected] of exact) {
+  if (!MIGRATION_FORMAT.formats.includes(spec.format)) {
+    throw new MigrationValidationError('Unsupported migration crypto parameter: format');
+  }
+  if (spec.format !== bundle.format) {
+    throw new MigrationValidationError('Migration package format does not match its crypto format');
+  }
+
+  // Fail closed on anything unrecognised rather than validating only the fields
+  // this function happens to name.
+  const allowed = new Set([...MIGRATION_FORMAT.crypto_keys_required, ...MIGRATION_FORMAT.crypto_keys_optional]);
+  for (const key of Object.keys(spec)) {
+    if (!allowed.has(key)) throw new MigrationValidationError(`Unsupported migration crypto parameter: ${key}`);
+  }
+  for (const key of MIGRATION_FORMAT.crypto_keys_required) {
+    if (spec[key] === undefined || spec[key] === null) {
+      throw new MigrationValidationError(`Missing migration crypto parameter: ${key}`);
+    }
+  }
+
+  for (const [field, expected] of [
+    ['kdf', MIGRATION_FORMAT.kdf],
+    ['cipher', MIGRATION_FORMAT.cipher],
+    ['key_bits', MIGRATION_FORMAT.key_bits],
+    ['salt_bytes', MIGRATION_FORMAT.salt_bytes],
+    ['iv_bytes', MIGRATION_FORMAT.iv_bytes],
+  ]) {
     if (spec[field] !== expected) {
       throw new MigrationValidationError(`Unsupported migration crypto parameter: ${field}`);
     }
   }
+
+  const { min, max } = MIGRATION_FORMAT.iterations;
+  const iterations = spec.iterations;
+  if (typeof iterations !== 'number' || !Number.isInteger(iterations)) {
+    throw new MigrationValidationError('Unsupported migration crypto parameter: iterations');
+  }
+  if (iterations < min) {
+    throw new MigrationValidationError(
+      `Migration package uses a weaker key derivation than DashFlo accepts: ${iterations} iterations, minimum ${min}`,
+    );
+  }
+  if (iterations > max) {
+    throw new MigrationValidationError(
+      `Migration package requests more key derivation work than DashFlo allows: ${iterations} iterations, maximum ${max}`,
+    );
+  }
+
   const salt = decodeBase64(spec.salt, 'Migration salt');
-  if (salt.length !== MIGRATION_CRYPTO.salt_bytes) {
+  if (salt.length !== MIGRATION_FORMAT.salt_bytes) {
     throw new MigrationValidationError('Migration salt has the wrong length');
   }
-  return salt;
+  return { salt, iterations };
 }
 
 function decryptChunk(chunk, key) {
   const iv = decodeBase64(chunk?.iv, 'Chunk IV');
-  if (iv.length !== MIGRATION_CRYPTO.iv_bytes) throw new MigrationValidationError('Chunk IV has the wrong length');
+  if (iv.length !== MIGRATION_FORMAT.iv_bytes) throw new MigrationValidationError('Chunk IV has the wrong length');
   const sealed = decodeBase64(chunk?.ciphertext, 'Chunk ciphertext');
   if (sealed.length <= 16) throw new MigrationValidationError('Chunk ciphertext is truncated');
 
@@ -123,7 +179,7 @@ function decryptChunk(chunk, key) {
   }
 }
 
-function normalizeOwner(bundle, passphrase) {
+function normalizeOwner(bundle, passphrase, progress = NULL_PROGRESS) {
   if (String(passphrase || '').length < 16) {
     throw new MigrationValidationError(
       'The migration passphrase must be at least 16 characters',
@@ -138,19 +194,24 @@ function normalizeOwner(bundle, passphrase) {
     throw new MigrationValidationError('Migration package source or target is not DashFlo-compatible');
   }
   if (!safeDate(bundle.exported_at)) throw new MigrationValidationError('Migration package export timestamp is invalid');
-  const salt = assertOwnerCrypto(bundle);
+  progress.stage('validating_envelope');
+  const { salt, iterations } = assertOwnerCrypto(bundle);
+
+  progress.stage('deriving_key');
   const key = crypto.pbkdf2Sync(
     Buffer.from(String(passphrase), 'utf8'),
     salt,
-    MIGRATION_CRYPTO.iterations,
-    MIGRATION_CRYPTO.key_bits / 8,
+    iterations,
+    MIGRATION_FORMAT.key_bits / 8,
     'sha256',
   );
 
   const entities = {};
   for (const name of Object.keys(bundle.counts || {})) entities[name] = [];
   let total = 0;
+  let decrypted = 0;
   const positions = new Set();
+  progress.stage('decrypting', { total_chunks: bundle.chunks.length, processed_chunks: 0 });
   for (const chunk of bundle.chunks) {
     const envelopeEntity = String(chunk?.entity || '');
     if (!MIGRATION_ENTITY_ORDER.includes(envelopeEntity)) {
@@ -170,6 +231,8 @@ function normalizeOwner(bundle, passphrase) {
     entities[envelopeEntity] ||= [];
     entities[envelopeEntity].push(...payload.records);
     total += payload.records.length;
+    decrypted += 1;
+    progress.chunk(decrypted);
     if (total > MAX_RECORDS) throw new MigrationValidationError('Migration package record limit exceeded', 413, MIGRATION_ERROR_CODE.TOO_LARGE);
   }
 
@@ -225,11 +288,11 @@ function normalizeOrdinary(bundle) {
   };
 }
 
-export function normalizeMigrationBundle({ kind, bundle, passphrase = '' }) {
+export function normalizeMigrationBundle({ kind, bundle, passphrase = '', progress = NULL_PROGRESS }) {
   if (!bundle || typeof bundle !== 'object' || Array.isArray(bundle)) {
     throw new MigrationValidationError('Migration file is not a JSON object');
   }
-  if (kind === 'owner') return normalizeOwner(bundle, passphrase);
+  if (kind === 'owner') return normalizeOwner(bundle, passphrase, progress);
   if (kind === 'ordinary') return normalizeOrdinary(bundle);
   throw new MigrationValidationError('Unknown migration package type');
 }
@@ -869,21 +932,26 @@ async function finishRun(id, status, report, result = null, errors = []) {
   );
 }
 
-export async function runMigrationImport({ kind, mode, bundle, passphrase = '', user, confirmed = false }) {
+export async function runMigrationImport({ kind, mode, bundle, passphrase = '', user, confirmed = false, progress = NULL_PROGRESS }) {
   await ensureMigrationImportSchema();
   const runId = newId();
   await insertRun({ id: runId, kind, mode, user, bundle });
   try {
-    const normalized = normalizeMigrationBundle({ kind, bundle, passphrase });
+    const normalized = normalizeMigrationBundle({ kind, bundle, passphrase, progress });
+    progress.stage('validating');
     const report = await analyzeMigration(normalized);
     if (mode === 'preview') {
+      progress.stage('building_preview');
       await finishRun(runId, 'validated', report);
+      progress.stage('complete');
       return { run_id: runId, mode, kind, ...report };
     }
     if (mode !== 'apply') throw new MigrationValidationError('Unknown migration mode');
     if (!confirmed) throw new MigrationValidationError('Explicit migration confirmation is required', 400, MIGRATION_ERROR_CODE.NOT_CONFIRMED);
+    progress.stage('applying');
     const result = await applyNormalized(normalized, report);
     await finishRun(runId, 'success', report, result);
+    progress.stage('complete');
     return { run_id: runId, mode, kind, ...report, result: 'success', applied: result };
   } catch (error) {
     await finishRun(runId, 'failed', null, null, [auditError(error)]).catch(() => {});
