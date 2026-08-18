@@ -5,17 +5,26 @@ Update this file after every completed or blocked task. It is the persistent han
 ## Current control state
 
 - Audited base: `a63144cb0e1a2c000e873e94e5091565f6bbb1c6`
-- Current base: `84ab0303f93e8704ac01d3c173c155f6452a3a97`
-- Working branch: `claude/dashflo-production-cutover-e1tgel`
+- Current base: `117a3f1fa6e274e5fdd830d458641b1de0f76a1c`
+- Working branch: `main`. Ordinary work happens on `main` and reaches production
+  automatically through GitHub Actions. The earlier
+  `claude/dashflo-production-cutover-e1tgel` branch is history, not a
+  requirement.
+- Canonical agent contract: `AGENTS.md`. `CLAUDE.md` is a short Claude Code
+  entrypoint that defers to it.
 - Auto-sync status: PAUSED at source. Both launchd writers booted out and
   persistently disabled on the operator workstation, 15 August 2026. See
-  "Gate A resolution" below for the verification evidence.
+  "Gate A resolution" below for the verification evidence. Nothing is writing to
+  `main` on a schedule.
 - Current phase: Phase 1 complete, Phase 2 in progress
 - Active human gate: Gate A approved and closed. Gate B pending. LIVE URL GATE
-  open, see `docs/LIVE-URL-GATE.md`.
-- Last green commit: `c04e2fc`
-- Last full gate: PASS at `c04e2fc` on 15 August 2026, seven steps, 776 tests
-  passing with none skipped
+  open, see `docs/LIVE-URL-GATE.md`. Ordinary application releases no longer sit
+  behind a manual deployment gate.
+- Production commit: `117a3f1`, placed there by GitHub Actions run 32141125172
+  on 18 August 2026
+- Last green commit: `117a3f1`
+- Last full gate: PASS at `117a3f1` in GitHub Actions run 32141125172, seven
+  steps
 
 ## Delta audit, audited base to current base
 
@@ -1865,3 +1874,105 @@ always was, by returning the host to the previous commit and rebuilding.
 - The workflow assumes git, docker, curl and sha256sum exist on the host. It
   checks for them and stops before mutating anything, but the check has not
   been observed against the real VPS.
+
+## First successful automatic production deployment, 18 August 2026
+
+Production is now deployed by GitHub Actions from `main`. This is the first time
+a push to `main` reached the VPS without a manual SSH session.
+
+Run: https://github.com/legenex/legenex-dashflo/actions/runs/32141125172
+
+- Event: push of `117a3f1fa6e274e5fdd830d458641b1de0f76a1c`
+- Gate job: success
+- Deploy to production job: success
+- Production reached commit `117a3f1`
+
+### What the deployment covered
+
+The preceding run for `c78dcc1` failed, so nothing had ever been shipped by the
+pipeline. The successful run was therefore a catch-up that carried the whole
+backlog to production in one release, including `7522b11`, which serves the
+Progress Control Center at the root of its own host, and `cdcf5d5`, which makes
+every migration import outcome visible and removes Capture for review. Both had
+been recorded as built and gated but not deployed.
+
+### The earlier failure and its resolution
+
+Run 32134961972, at `c78dcc1`, passed its gate and failed in the deploy job. The
+first failing step was "Write the deployment key and the host key", and the rest
+of the job failed behind it.
+
+The cause was the key material held in the `production` environment secret
+`DEPLOY_SSH_KEY`. It was replaced with a dedicated unencrypted GitHub Actions
+deploy key for the deployment user, which is what the workflow expects: it
+refuses a passphrase protected key rather than hanging on a prompt. No key
+material, passphrase or credential value is recorded here, and none was printed
+by the workflow.
+
+### Restricted helper
+
+The VPS restricted sudo deployment helper `/usr/local/sbin/dashflo-deploy-root`
+is working. The successful "Deploy on the VPS" step runs it for `marketing` and
+then for `nginx`, and that step completed successfully. Nginx is validated by
+the helper before any reload, and no certificate was reissued.
+
+### Standing position
+
+Ordinary releases now deploy automatically from `main` after a green gate, and
+that path is pre-authorized. Money writes, live delivery activation, production
+data mutation, credential changes, destructive schema changes, and cutover or
+rollback still require explicit human approval. Do not SSH into the VPS for an
+ordinary release.
+
+### Evidence
+
+- GitHub Actions run 32141125172: both jobs success, head SHA
+  `117a3f1fa6e274e5fdd830d458641b1de0f76a1c`, completed 18 August 2026.
+- Gate job step "Run the repository gate" succeeded, so the seven step gate
+  passed in CI against the PostgreSQL service container.
+- Deploy job steps all succeeded, including "Deploy on the VPS" and "Verify the
+  public surfaces from GitHub".
+- The five public hosts were checked again from this session after the
+  deployment: `https://dashflo.io`, `https://app.dashflo.io`,
+  `https://api.dashflo.io/api/health`, `https://docs.dashflo.io` and
+  `https://progress.dashflo.io` all returned 200, and the health body was
+  `{"status":"ok"}`.
+- No SSH session was opened and no manual deployment command was run.
+
+### Rollback
+
+Deployment rollback is unchanged: return `main` to the previous commit and let
+the pipeline redeploy, or disable the workflow in the Actions tab and fall back
+to the manual VPS command block.
+
+## AGENTS.md becomes the canonical agent contract, 18 August 2026
+
+`AGENTS.md` is now the canonical model-neutral DashFlo operating contract for
+every coding agent, model and harness, including Claude Code, Codex, Kimi,
+Nemotron, GLM, DeepSeek and other VS Code agents.
+
+`CLAUDE.md` was reduced from a full duplicate of the operating contract to a
+short Claude Code entrypoint. It requires `AGENTS.md` to be read first, keeps
+only Claude specific guidance, and states that `AGENTS.md` wins if duplicated
+guidance ever conflicts. This is what stops the two files from drifting into two
+independent versions of the same rules.
+
+The project-specific material that used to live only in `CLAUDE.md` moved into
+`AGENTS.md` intact: the product and stack description, the repository and
+environment facts, the fourteen non-negotiable invariants, the gate and database
+test detail, what the deployment workflow does on the host, the verified
+repository facts, parallel work and integrator-only surfaces, and the definition
+of done. Three stale instructions were corrected rather than carried forward:
+`.claude/hooks/task-gate.sh` is not the gate and `.claude/` does not exist,
+ordinary work is no longer required to sit on a cutover branch, and ordinary
+application releases no longer sit behind a manual deployment gate.
+
+### Evidence
+
+Documentation only. `AGENTS.md`, `CLAUDE.md` and this file are the only changed
+paths. No application source, test, nginx, Docker, migration, auth, workflow,
+package or production configuration file was touched.
+
+### Rollback
+
+`git revert` the commit. Nothing executable depends on either file.
