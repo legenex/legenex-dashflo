@@ -2045,3 +2045,122 @@ was read to confirm the trigger and the host sequence, and was not modified.
 ### Rollback
 
 `git revert` the commit. Nothing executable depends on any of these files.
+
+## Owner migration import fixed, and real import progress, 18 August 2026
+
+The encrypted owner migration preview refused every real package with
+"Unsupported migration crypto parameter: iterations". It is fixed, and the
+import now reports measured progress instead of a single spinner.
+
+### Root cause
+
+`MIGRATION_CRYPTO` in `client/src/lib/systemTransfer.js`, mirrored into
+`server/src/functions/systemTransfer.generated.js`, declares
+`iterations: 600000`. `assertOwnerCrypto` in `server/src/lib/migrationImport.js`
+required exact equality with every field of that object.
+
+Nothing in this repository writes migration packages. There is no
+`createCipheriv` anywhere in the tree and `pbkdf2Sync` appears only in the
+importer. The packages are produced by the legacy Legenex dashboard exporter,
+which seals them at 100000 iterations. `100000` has never appeared anywhere in
+this repository's history, and `600000` has been there since the migration
+feature landed in `88742a6`. The importer's contract had therefore never matched
+a real export, and no owner package could ever have been imported.
+
+A second failure sat underneath. `normalizeOwner` derived the key with
+`MIGRATION_CRYPTO.iterations` rather than with the value the package declares,
+so relaxing validation alone would have derived a 600000 iteration key against a
+100000 iteration package and failed one step later as `decrypt_failed`. Both
+halves had to change together, which is why the fix is not a loosened check.
+
+### What changed
+
+`MIGRATION_CRYPTO` keeps its meaning as what a DashFlo written export would
+emit. A new `MIGRATION_FORMAT` contract says what the importer accepts, defined
+once in the client catalog and mirrored into the generated server copy:
+
+- exact match on format, kdf, cipher, key_bits, salt_bytes, iv_bytes
+- `iterations` validated against a policy of 100000 to 10000000, and the
+  package's own declared value is what derives the key
+- unknown crypto keys refused rather than ignored, required keys enforced
+
+The floor is set at the supported exporter's value rather than below it, so the
+range admits real packages and nothing weaker. The ceiling bounds the work one
+upload can ask the server to perform.
+
+`scripts/generate-transfer-catalog.mjs`, named in the generated file's header,
+does not exist in this repository, so the client catalog and its server copy are
+kept in step by hand. A parity test now compares the two rather than trusting
+them, because that hand maintenance is exactly how a contract drifts.
+
+### The 18-18 package
+
+`docs/resources/legenex-dashflo-migration-2026-08-18-18-18.json.enc` was used as
+a real compatibility fixture, read only and never decrypted. It is structurally
+valid: `legenex-migration-v1`, PBKDF2-SHA256 at 100000, AES-GCM, 256 bit key, 16
+byte salt, 12 byte IV, 80 encrypted chunks, 130739398 bytes. Its envelope now
+passes validation and derives at its own 100000. The file stays untracked and
+`docs/resources/` is now gitignored: it is the most credential dense artifact
+this system handles, and it also broke the em dash gate, which intent-to-adds
+untracked files before diffing and overflows its buffer on 124 MB.
+
+### Progress
+
+Upload progress is the browser's own byte counter, which required an XHR upload
+path in `client/src/api/client.js` because fetch cannot report request progress.
+Server progress is real chunk counts, written by the importer into an in memory,
+owner scoped, TTL and size bounded record in `server/src/lib/migrationProgress.js`
+and polled from `GET /api/migrations/progress/:id`. Every stage shown corresponds
+to a real phase of the importer. Nothing is on a timer and no percentage is
+invented: where nothing has been measured the bar is explicitly indeterminate.
+
+Progress records carry stage names and integers only. No passphrase, filename,
+decrypted value, record field or error message, only a stable code. A record
+answers only to the user that created it, and an unknown or foreign id is a 404
+so the endpoint does not confirm another operator's run exists.
+
+### Timeouts and memory
+
+The browser deadline was 360s while nginx cut at 300s, so the proxy could kill a
+legitimate long preview first. `deploy/nginx/app.dashflo.io.conf` now gives
+`/api/migrations/` 840s read and send timeouts and a 300s client body timeout,
+and the browser deadline moves to 900s so nginx still decides first and the
+operator gets a status code rather than silence. The upload buffer is released
+once parsed rather than held beside the parsed object for the whole decrypt.
+
+### Evidence
+
+- The real package envelope was validated against the fixed validator: PASS,
+  deriving at 100000 with a 16 byte salt. No ciphertext was decoded or printed.
+- Focused: 83 migration tests pass, including a synthetic package sealed at
+  100000 that decrypts and previews, one at 600000 that still does, wrong
+  passphrase and tampered ciphertext both failing as `decrypt_failed`, downgraded
+  and unbounded iteration counts refused, wrong kdf, cipher, key size and
+  malformed salt or IV refused, unknown crypto keys refused, preview writing zero
+  business rows, and owner authorization holding against admin and against an
+  account carrying `set_export_import`.
+- `npm run gate` PASS, seven steps, 94 files, 1238 tests, none skipped, up from
+  88 files and 1163 tests.
+- Production: run 32176604981 succeeded at `6b7602f`. `GET /api/migrations/progress/<id>`
+  answers 401 unauthenticated on both app and api hosts, the preview endpoint
+  still answers 401 unauthenticated, and the deployed Settings chunk
+  `Settings-DikmN2PF.js` carries the new progress code.
+- No migration was applied, no production data was read or written, and no
+  passphrase was requested, entered, logged or stored.
+
+### Rollback
+
+`git revert` the commit and redeploy. The change is validation policy, a progress
+store, a read only endpoint, client presentation and two nginx timeouts. There is
+no schema change and no data movement. Reverting restores the state in which no
+owner migration package can be imported at all, so prefer a forward fix.
+
+### Not done
+
+- The real 18-18 package has not been decrypted end to end. That needs the
+  operator's passphrase, which was deliberately never requested. Everything up to
+  and including the envelope validation that used to fail is proven; the decrypt
+  of that specific package is UNPROVEN until the operator runs the preview.
+- The migration panel was not driven in a browser. It sits behind Google sign in
+  as owner, and no browser automation here can authenticate without the
+  operator's credentials.
