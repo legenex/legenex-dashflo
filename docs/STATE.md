@@ -2433,3 +2433,101 @@ either), only less complete.
 - The identity of the real package's 8 hard blockers remains UNPROVEN. The next
   owner preview will show whether they resolved, and if any remain, the exact
   entity, field and referenced value each one needs.
+
+## Buyer identity: leadbyte_bid as a proven second alias field, 19 August 2026
+
+The real package's third preview, after the generic natural-key alias fix,
+still carried the same 8 hard blockers, concentrated on `BuyerStateCpl.buyer_id`
+per the owner's screenshot, and `Resolved relationship aliases: 0` in that same
+preview. That last number is the proof this entry is built on: if any of the 94
+`BuyerStateCpl` rows, passing or failing, had held a Buyer natural key
+(`buyer_code`) instead of a record id, the generic alias fix would have counted
+it. Zero means none did. The 86 that resolve are Buyer record ids. The 8 that do
+not are not `buyer_code` either, so the previous fix was aimed correctly and
+still had nothing to work with for these eight.
+
+### Root cause
+
+The `Buyer` schema documents a second, separate legacy identity field:
+`leadbyte_bid`, "LeadByte buyer id. Nullable. Defaults to the buyer_code value
+when a code is allocated." It usually equals `buyer_code` and is not guaranteed
+to. `lib/buyerIdentity.js` already resolves `Lead.buyer_id` through exactly this
+field, in exactly this position (record id, then `buyer_code`, then
+`leadbyte_bid`, first match wins, ambiguity fails closed), because Lead
+attribution hits the identical problem. Whether the real package's 8 blockers
+are actually old `leadbyte_bid` values is still unproven without the owner's
+passphrase; what is proven is that the mechanism that would catch them did not
+exist until now, and does now.
+
+### What changed
+
+`LEGACY_IDENTITY_ALIASES` is new in the catalog, `{ Buyer: ['leadbyte_bid'] }`,
+tried only inside relationship resolution, strictly after the primary
+`NATURAL_KEYS` field, never for record identity or collision detection: a
+Buyer collision is still decided by `buyer_code` alone, unchanged.
+`identityAliasFields(entity)` returns the ordered list an entity supports (for
+`Buyer`: `['buyer_code', 'leadbyte_bid']`; for everything else, still just the
+one primary field or none). `migrationPlan.js`'s identity and relationship
+passes generalised from one field per entity to this ordered list: a field is
+tried to exhaustion, in the package and then in DashFlo, before the next field
+is tried at all, matching `lib/buyerIdentity.js`'s own priority exactly.
+`leadbyte_bid` is not folded for case, matching this migration's established
+"codes are not folded" policy rather than `buyerIdentity.js`'s looser one,
+since `BuyerStateCpl` is pricing configuration and the stricter policy already
+governs every other code in this module.
+
+Every attempt is now recorded on the issue itself:
+`identity_attempts: [{ field, checked_in: 'package'|'dashflo', result:
+'no_match'|'ambiguous', candidate_count? }]`, surfaced on both
+`relationship_issues` and `hard_blockers`, and rendered in the preview UI as an
+"Identity strategy attempted" column reading, for example, `buyer_code: no
+match (package); leadbyte_bid: no match (DashFlo)`. An unresolved reference is
+now a provable negative, not a resolver that merely gave up: the next owner
+preview, if any blocker remains, will name exactly which fields were tried and
+where.
+
+A real duplicate-counting bug was found and fixed while proving the multi-field
+version: `unresolvedByTarget`'s per-target list held the *same* entry object
+once per source-record occurrence rather than once per distinct issue, because
+`record()` returns the same entry on repeat calls for the same key. Two
+`BuyerStateCpl` rows sharing one unresolved `buyer_id` therefore had their
+already-correct `record_count` summed twice by the DashFlo/alias resolution
+passes: two records reported as four resolved. Real packages will routinely
+have several children sharing one parent reference, so this would have
+misreported the diagnostics on the very rows this task exists to fix. Fixed
+with a `Set` keyed by object identity so repeat occurrences of the same entry
+collapse to one, while two genuinely distinct entries (different fields
+sharing one value) still both get resolved.
+
+### Evidence
+
+- Focused: `migrationBuyerIdentity.test.js`, 21 new tests: every supported
+  identity form, priority ordering with ambiguity stopping the fall-through,
+  the write path storing the resolved id including through a remap, case
+  sensitivity, missing and ambiguous cases as hard blockers with the full
+  attempt trail, no company-name or credential-field involvement, a realistic
+  94-record mixed-form set (60 by id, 34 by code split across code/bid,
+  8 genuine orphans) reconciling exactly, and read-only/owner-only/explicit
+  confirmation preserved.
+- Existing 114 migration tests unaffected, run alongside the new ones.
+- Scale: a synthetic package shaped like the real one (137,767 `MetaSyncRun`,
+  1,942 `Lead`, 13 `Buyer` with mixed identity forms, 94 `BuyerStateCpl` split
+  across id/code/bid) planned in 0.36s, balanced, zero relationship issues.
+- `npm run gate` PASS, seven steps, 98 files, 1323 tests, none skipped, up from
+  97 files and 1299 tests.
+- The 19 August 20:20 real package was not decrypted. Its passphrase was not
+  requested.
+- No production data was read or written.
+
+### Rollback
+
+`git revert` the commit. No schema change, no data movement: everything here is
+computed in memory per request. Reverting restores single-field alias
+resolution, which is safe (still never applies), only narrower.
+
+### Not done
+
+- The identity of the real package's 8 hard blockers is still UNPROVEN. If they
+  are `leadbyte_bid` values, they now resolve. If they are something else, the
+  next preview's "Identity strategy attempted" column will say so directly
+  rather than leaving another round of inference.

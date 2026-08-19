@@ -5,6 +5,7 @@ import { entityExists } from '../db/repo.js';
 import {
   ALL_ENTITIES,
   ENTITY_ORDER,
+  LEGACY_IDENTITY_ALIASES,
   MIGRATION_ENTITY_ORDER,
   MIGRATION_EXCLUSION_RULES,
   NATURAL_KEYS,
@@ -182,6 +183,27 @@ function naturalKeyValue(entity, record) {
   return naturalKeyFolder(entity, field)(String(raw));
 }
 
+// The identity fields relationship resolution may try for this entity, in
+// priority order: the primary NATURAL_KEYS field first, then any declared
+// LEGACY_IDENTITY_ALIASES. Record identity and collision detection never
+// consult this: they use NATURAL_KEYS[entity] alone, always. This list exists
+// only for the reference-value fallback in planRelationships.
+export function identityAliasFields(entity) {
+  const fields = [];
+  const primary = NATURAL_KEYS[entity];
+  if (primary) fields.push(primary);
+  for (const field of LEGACY_IDENTITY_ALIASES[entity] || []) {
+    if (!fields.includes(field)) fields.push(field);
+  }
+  return fields;
+}
+
+function aliasFieldValue(entity, field, record) {
+  const raw = record?.[field];
+  if (raw == null || String(raw) === '') return null;
+  return naturalKeyFolder(entity, field)(String(raw));
+}
+
 // Reference ids held in a field, for the two reference kinds that carry record
 // ids. 'code' fields are natural keys or external identifiers and are never
 // touched.
@@ -241,15 +263,15 @@ async function loadRowsByIds(queryable, entity, ids) {
   return out;
 }
 
-// Existing rows keyed by their folded natural key value. A key answered by more
-// than one row is recorded as a list so identity can fail closed rather than
-// pick the first one the database happened to return. Exported: the
-// relationship resolver reuses this exact query to try a reference value as a
-// natural key of the target entity, rather than inventing a second way to ask
-// the same question.
-export async function loadRowsByNaturalKey(queryable, entity, values) {
+// Existing rows keyed by their folded value in the given field. A key answered
+// by more than one row is recorded as a list so identity can fail closed
+// rather than pick the first one the database happened to return. Exported:
+// the relationship resolver reuses this exact query to try a reference value
+// against a target entity's identity field, whether that field is the
+// entity's primary NATURAL_KEYS or a declared legacy alias, rather than
+// inventing a second way to ask the same question.
+export async function loadRowsByNaturalKey(queryable, entity, field, values) {
   const out = new Map();
-  const field = NATURAL_KEYS[entity];
   if (!field || !values.length) return out;
   const table = tableName(entity);
   const folded = foldSql(entity, field, 'data->>$1');
@@ -447,14 +469,21 @@ export function rewriteReferences(entity, data, remap, aliasTargets = null) {
   // ordinary remap. Leaving it as the alias value would apply cleanly and then
   // fail at runtime the first time application code reads that field expecting
   // a record id: it would look correct in the preview and be wrong in the
-  // database. `entity -> foldedValue -> targetId`, produced by
-  // planRelationships from both the package's own natural keys and DashFlo's.
+  // database. `entity -> identity field -> foldedValue -> targetId`, produced
+  // by planRelationships from both the package's own identity fields and
+  // DashFlo's. Fields are tried in the same priority order identity
+  // resolution used, so the id this writes is the same id the preview
+  // promised.
   const aliasFor = (target, rawValue) => {
-    const naturalKeyField = NATURAL_KEYS[target];
-    if (!naturalKeyField) return null;
-    const index = aliasTargets?.get(target);
-    if (!index || !index.size) return null;
-    return index.get(naturalKeyFolder(target, naturalKeyField)(String(rawValue))) || null;
+    const perEntity = aliasTargets?.get(target);
+    if (!perEntity || !perEntity.size) return null;
+    for (const field of identityAliasFields(target)) {
+      const index = perEntity.get(field);
+      if (!index || !index.size) continue;
+      const hit = index.get(naturalKeyFolder(target, field)(String(rawValue)));
+      if (hit) return hit;
+    }
+    return null;
   };
 
   for (const [field, ref] of Object.entries(refs)) {
@@ -522,12 +551,13 @@ export async function planIdentity(normalized, queryable = pool) {
   const identity = new Map();
   const excludedIds = new Map();
   const existingRows = new Map();
-  // Entity -> folded natural key value -> { targetId, ambiguous }. A byproduct
-  // of identity resolution, not a second pass over the data: every value here
-  // is the natural key this entity's own records already carry, pointed at
-  // whatever target those records actually resolved to. Consulted by
-  // planRelationships as a fallback when a reference field's raw value is not
-  // a record id anyone recognises. See "Legacy identity alias" there.
+  // Entity -> identity field -> folded value -> { targetId, ambiguous }. A
+  // byproduct of identity resolution, not a second pass over the data: every
+  // value here is a value this entity's own records already carry in one of
+  // its identityAliasFields, pointed at wherever that record actually
+  // resolved. Consulted by planRelationships as a fallback when a reference
+  // field's raw value is not a record id anyone recognises. See "Legacy
+  // identity alias" there.
   const naturalKeyAlias = new Map();
 
   const collisions = [];
@@ -641,7 +671,7 @@ export async function planIdentity(normalized, queryable = pool) {
     let byNaturalKey = new Map();
     if (naturalKeyField) {
       const values = [...new Set(importable.map((item) => naturalKeyValue(entity, item.record)).filter((v) => v != null))];
-      byNaturalKey = await loadRowsByNaturalKey(queryable, entity, values);
+      byNaturalKey = await loadRowsByNaturalKey(queryable, entity, naturalKeyField, values);
     }
 
     // Every DashFlo id this entity could end up writing to: the source ids
@@ -662,7 +692,13 @@ export async function planIdentity(normalized, queryable = pool) {
     // Two source records folding to one natural key, where neither matched a
     // DashFlo record, are created side by side. Reported, never dropped.
     const naturalKeySeen = new Map();
-    const entityAlias = new Map();
+    // field -> folded value -> { targetId, ambiguous }, one map per identity
+    // field this entity supports (the primary NATURAL_KEYS field, plus any
+    // LEGACY_IDENTITY_ALIASES). Built for every field regardless of whether
+    // that field participates in collision detection, which uses the primary
+    // field alone.
+    const entityAliasByField = new Map();
+    const aliasFields = identityAliasFields(entity);
 
     for (const { sourceId, record } of importable) {
       const naturalValue = naturalKeyValue(entity, record);
@@ -766,24 +802,28 @@ export async function planIdentity(normalized, queryable = pool) {
       });
       if (decision.existing) entityExisting.set(sourceId, decision.existing);
 
-      // The alias index is keyed by this record's OWN natural key value,
+      // Each alias index is keyed by this record's OWN value in that field,
       // pointed at wherever it actually resolved. A value shared by two
       // records that resolved to different targets cannot alias either one,
       // for exactly the reason DUPLICATE_IN_PACKAGE_CLAIMS_TARGET fails closed
       // above: picking one would be a guess.
-      if (naturalValue != null) {
-        const priorAlias = entityAlias.get(naturalValue);
-        if (!priorAlias) entityAlias.set(naturalValue, { targetId: decision.targetId, ambiguous: false });
+      for (const field of aliasFields) {
+        const value = aliasFieldValue(entity, field, record);
+        if (value == null) continue;
+        const fieldIndex = entityAliasByField.get(field) || new Map();
+        const priorAlias = fieldIndex.get(value);
+        if (!priorAlias) fieldIndex.set(value, { targetId: decision.targetId, ambiguous: false });
         else if (!priorAlias.ambiguous && priorAlias.targetId !== decision.targetId) {
-          entityAlias.set(naturalValue, { targetId: null, ambiguous: true });
+          fieldIndex.set(value, { targetId: null, ambiguous: true });
         }
+        entityAliasByField.set(field, fieldIndex);
       }
     }
 
     if (entityRemap.size) remap.set(entity, entityRemap);
     identity.set(entity, entityIdentity);
     existingRows.set(entity, entityExisting);
-    if (entityAlias.size) naturalKeyAlias.set(entity, entityAlias);
+    if (entityAliasByField.size) naturalKeyAlias.set(entity, entityAliasByField);
   }
 
   return {
@@ -824,33 +864,43 @@ export async function planIdentity(normalized, queryable = pool) {
  * in the field is not that record's id. `Lead.buyer_id` is the proven case:
  * across legacy imports and LeadByte feedback matching it carries a buyer
  * CODE, not the Buyer record id its schema description claims, and
- * `lib/buyerIdentity.js` exists specifically to resolve that. REFS marks
+ * `lib/buyerIdentity.js` exists specifically to resolve that, trying a
+ * record id, then `buyer_code`, then `leadbyte_bid`, in that order, failing
+ * closed the moment more than one candidate answers. REFS marks
  * `Lead.buyer_id` `kind: 'code'` for exactly this reason and it is never
- * touched here. But several other reference fields are literally named after
- * the target's own natural key rather than after "id"
- * (`RouteGroup.campaign_id`, `ContractVersion.campaign_id`,
- * `BuyerCplRule.campaign_id`, `LeadSource.campaign_id` all share a name with
- * `NATURAL_KEYS.Campaign`), which is exactly the shape of naming that produced
- * the proven Lead case. Whether that pattern repeats in a specific field is
- * not something to guess per field; the resolver instead tries the one
- * question that answers it for every field at once: does this unresolved
- * value match the target entity's declared natural key, exactly once.
+ * touched here.
  *
- * This is a fallback, tried only after `resolveAliasCandidate` and the two
- * id-based passes below have already failed, so it can never override or
- * compete with an id match. It reuses the exact same natural key already
- * trusted for record identity, so it invents nothing: `NATURAL_KEYS`, the same
- * case folding rules, and the same "more than one candidate fails closed"
- * policy that governs an ordinary collision. An entity with no declared
- * natural key (`RouteGroup`, `Delivery`) gets no alias fallback, because there
- * is no safe field to try, and none is invented here: a genuinely unresolvable
- * reference to one of those stays an honest blocker for the owner.
+ * `identityAliasFields(entity)` is the same idea generalised to every
+ * reference, not reinvented per field: the primary NATURAL_KEYS field first,
+ * then whatever `LEGACY_IDENTITY_ALIASES` declares for that entity, tried in
+ * order, each one checked fully (package, then DashFlo) before the next is
+ * tried at all. A hit at any field resolves it. An ambiguous hit at any field
+ * stops there: a lower-priority field is never consulted to break a tie a
+ * higher-priority one could not.
+ *
+ * This is a fallback, tried only after the two id-based passes below have
+ * already failed, so it can never override or compete with an id match. An
+ * entity with no declared identity field at all (`RouteGroup`, `Delivery`)
+ * gets no alias fallback, because there is no safe field to try, and none is
+ * invented here: a genuinely unresolvable reference to one of those stays an
+ * honest blocker for the owner.
  */
-function resolveAliasCandidate(aliasIndex, foldedValue) {
-  const hit = aliasIndex?.get(foldedValue);
-  if (!hit) return { found: false };
-  if (hit.ambiguous) return { found: true, ambiguous: true };
-  return { found: true, ambiguous: false, targetId: hit.targetId };
+
+// One field's verdict for one value, checked against a single index (either
+// the in-memory package alias index, or a DashFlo batch result already keyed
+// by folded value). 'none' means try the next field; the caller must not
+// retry this field.
+function aliasVerdict(index, foldedValue) {
+  const hit = index?.get(foldedValue);
+  if (hit == null) return { verdict: 'none' };
+  if (Array.isArray(hit)) {
+    // A DashFlo batch result: an array of matching rows.
+    if (hit.length === 1) return { verdict: 'resolved', targetId: hit[0].id };
+    if (hit.length > 1) return { verdict: 'ambiguous', count: hit.length };
+    return { verdict: 'none' };
+  }
+  if (hit.ambiguous) return { verdict: 'ambiguous' };
+  return { verdict: 'resolved', targetId: hit.targetId };
 }
 
 /* Phase 7. Resolve every declared reference against the finished remap.
@@ -871,17 +921,22 @@ export async function planRelationships(normalized, plan, queryable = pool) {
   const unresolvedByTarget = new Map();
   const issues = new Map();
   const aliasResolutions = new Map();
-  // entity -> folded natural key value -> target id, for every value that
-  // resolved through the alias fallback rather than as a record id, package or
-  // DashFlo. Consulted by rewriteReferences so the write path stores the
-  // resolved id, not the raw legacy value the record arrived with. Seeded from
-  // the package-side index planIdentity already built, since every
-  // non-ambiguous entry there is by construction a resolved alias target.
+  // entity -> identity field -> folded value -> target id, for every value
+  // that resolved through the alias fallback rather than as a record id,
+  // package or DashFlo. Consulted by rewriteReferences so the write path
+  // stores the resolved id, not the raw legacy value the record arrived
+  // with. Seeded from the package-side index planIdentity already built,
+  // since every non-ambiguous entry there is by construction a resolved
+  // alias target.
   const aliasTargets = new Map();
-  for (const [entity, index] of plan.naturalKeyAlias) {
-    const resolved = new Map();
-    for (const [value, hit] of index) if (!hit.ambiguous) resolved.set(value, hit.targetId);
-    if (resolved.size) aliasTargets.set(entity, resolved);
+  for (const [entity, byField] of plan.naturalKeyAlias) {
+    const perField = new Map();
+    for (const [field, index] of byField) {
+      const resolved = new Map();
+      for (const [value, hit] of index) if (!hit.ambiguous) resolved.set(value, hit.targetId);
+      if (resolved.size) perField.set(field, resolved);
+    }
+    if (perField.size) aliasTargets.set(entity, perField);
   }
   const resolvedCounts = {
     [RELATIONSHIP_STATUS.RESOLVED_IN_PACKAGE]: 0,
@@ -907,12 +962,18 @@ export async function planRelationships(normalized, plan, queryable = pool) {
       record_count: 1,
       sample_source_ids: [sourceId],
       required: requiredFields(entity).has(field),
+      // Every identity field this unresolved reference's target entity
+      // supports, and what happened when each was tried: 'no_match' or
+      // 'ambiguous', and where it was checked. Populated as fields are tried
+      // below; stays empty for an entity with no identity field at all,
+      // which is itself the answer for why nothing could be attempted.
+      identity_attempts: [],
     };
     issues.set(key, entry);
     return entry;
   };
 
-  const recordAlias = (entity, sourceId, field, ref, referencedId, targetId, via) => {
+  const recordAlias = (entity, sourceId, field, ref, referencedId, targetId, aliasField, via) => {
     const key = `${entity}|${field}|${ref.target}|${referencedId}`;
     const found = aliasResolutions.get(key);
     if (found) {
@@ -926,21 +987,22 @@ export async function planRelationships(normalized, plan, queryable = pool) {
       referenced_entity: ref.target,
       referenced_value: referencedId,
       resolved_target_id: targetId,
-      natural_key_field: NATURAL_KEYS[ref.target],
+      natural_key_field: aliasField,
       via,
       record_count: 1,
       sample_source_ids: [sourceId],
     });
   };
 
-  // Values that need a DashFlo-side natural key lookup: the package alias
-  // index had no answer, so the last question left is whether DashFlo already
-  // holds a record whose natural key equals this value.
-  const aliasCandidatesByTarget = new Map();
+  // Every reference whose target entity has at least one identity field, but
+  // whose value did not resolve against the package under any of them. Kept
+  // as { entity: entry } pairs so pass three can retry field by field without
+  // re-deriving which references are even eligible.
+  const aliasCandidates = [];
 
   // Pass one: resolve against the package and the remap; failing that, against
-  // this package's own natural key alias index; and collect whatever is left
-  // for a single batched lookup against DashFlo.
+  // this package's own identity alias fields, in priority order; and collect
+  // whatever is left for a single batched lookup against DashFlo.
   for (const entity of plan.orderedNames) {
     const refs = REFS[entity];
     if (!refs || !entityExists(entity)) continue;
@@ -971,42 +1033,46 @@ export async function planRelationships(normalized, plan, queryable = pool) {
             continue;
           }
 
-          const naturalKeyField = NATURAL_KEYS[ref.target];
-          if (naturalKeyField) {
-            const folded = naturalKeyFolder(ref.target, naturalKeyField)(String(referencedId));
-            const candidate = resolveAliasCandidate(plan.naturalKeyAlias.get(ref.target), folded);
-            if (candidate.found && !candidate.ambiguous) {
-              resolvedCounts[RELATIONSHIP_STATUS.RESOLVED_BY_NATURAL_KEY_ALIAS] += 1;
-              recordAlias(entity, sourceId, field, ref, referencedId, candidate.targetId, 'package');
-              continue;
-            }
-            if (candidate.found && candidate.ambiguous) {
-              // The package itself cannot decide this one; DashFlo cannot
-              // either, since the ambiguity is among source records, not
-              // against a single DashFlo answer. Fail closed here rather than
-              // querying for a tiebreaker that does not exist.
-              record(entity, sourceId, field, ref, referencedId, RELATIONSHIP_STATUS.REFERENCED_RECORD_AMBIGUOUS_ALIAS);
-              continue;
-            }
-          }
-
+          const fields = identityAliasFields(ref.target);
+          let decided = false;
           const entry = record(entity, sourceId, field, ref, referencedId, RELATIONSHIP_STATUS.REFERENCED_RECORD_ABSENT);
-          const set = unresolvedByTarget.get(ref.target) || new Map();
-          const list = set.get(referencedId) || [];
-          list.push(entry);
-          set.set(referencedId, list);
-          unresolvedByTarget.set(ref.target, set);
-
-          // One issue key can only ever fold to one natural key value (it is
-          // the same referencedId every time), so a plain overwrite here is
-          // exactly the right dedup: this runs once per distinct issue key
-          // regardless of how many source records share it.
-          if (naturalKeyField) {
-            const byValue = aliasCandidatesByTarget.get(ref.target) || new Map();
-            const folded = naturalKeyFolder(ref.target, naturalKeyField)(String(referencedId));
-            byValue.set(folded, entry);
-            aliasCandidatesByTarget.set(ref.target, byValue);
+          for (const aliasField of fields) {
+            const folded = naturalKeyFolder(ref.target, aliasField)(String(referencedId));
+            const verdict = aliasVerdict(plan.naturalKeyAlias.get(ref.target)?.get(aliasField), folded);
+            if (verdict.verdict === 'resolved') {
+              resolvedCounts[RELATIONSHIP_STATUS.RESOLVED_BY_NATURAL_KEY_ALIAS] += 1;
+              recordAlias(entity, sourceId, field, ref, referencedId, verdict.targetId, aliasField, 'package');
+              issues.delete(`${entity}|${field}|${ref.target}|${referencedId}`);
+              decided = true;
+              break;
+            }
+            if (verdict.verdict === 'ambiguous') {
+              entry.identity_attempts.push({ field: aliasField, checked_in: 'package', result: 'ambiguous' });
+              entry.status = RELATIONSHIP_STATUS.REFERENCED_RECORD_AMBIGUOUS_ALIAS;
+              decided = true;
+              break;
+            }
+            entry.identity_attempts.push({ field: aliasField, checked_in: 'package', result: 'no_match' });
           }
+          if (decided) continue;
+
+          // record() dedups by (entity, field, target, referencedId), so
+          // repeat source records sharing that exact key return the same
+          // entry object every time and must queue it for the fallback
+          // passes only once, or its already-accumulated record_count is
+          // processed more than once and the resolved counts below inflate.
+          // A different (entity, field) pair CAN legitimately share the same
+          // referencedId (two distinct fields both pointing at "C1", say),
+          // and that is a second, separate entry that still needs its own
+          // resolution, so the set below is keyed by object identity rather
+          // than collapsed to one entry per value.
+          const set = unresolvedByTarget.get(ref.target) || new Map();
+          const entries = set.get(referencedId) || new Set();
+          const firstOccurrence = !entries.has(entry);
+          entries.add(entry);
+          set.set(referencedId, entries);
+          unresolvedByTarget.set(ref.target, set);
+          if (firstOccurrence && fields.length) aliasCandidates.push({ target: ref.target, entry });
         }
       }
     }
@@ -1026,44 +1092,57 @@ export async function planRelationships(normalized, plan, queryable = pool) {
     }
   }
 
-  // Pass three: whatever is still unresolved and points at a natural-keyed
-  // entity gets one batched try against DashFlo's own natural key index. Only
-  // reached for values pass one could not already answer from the package, so
-  // this never second-guesses a package-level resolution or ambiguity, and
-  // never runs for an entry pass two already closed.
-  for (const [target, byValue] of aliasCandidatesByTarget) {
-    const stillOpen = [...byValue.entries()].filter(([, entry]) => (
-      issues.get(`${entry.entity}|${entry.field}|${target}|${entry.referenced_source_id}`) === entry
-    ));
-    if (!stillOpen.length) continue;
+  // Pass three: whatever is still unresolved and points at an entity with an
+  // identity field gets one batched DashFlo try per field, in the same
+  // priority order pass one already tried against the package. A field is
+  // fully exhausted, for every value that still needs it, before the next
+  // field is tried at all: this is what keeps the priority the same on both
+  // sides rather than only inside the package.
+  const byTarget = new Map();
+  for (const { target, entry } of aliasCandidates) {
+    const list = byTarget.get(target) || [];
+    list.push(entry);
+    byTarget.set(target, list);
+  }
+  for (const [target, entries] of byTarget) {
+    for (const aliasField of identityAliasFields(target)) {
+      const stillOpen = entries.filter((entry) => (
+        issues.get(`${entry.entity}|${entry.field}|${target}|${entry.referenced_source_id}`) === entry
+      ));
+      if (!stillOpen.length) continue;
 
-    const matches = await loadRowsByNaturalKey(queryable, target, stillOpen.map(([value]) => value));
-    for (const [foldedValue, entry] of stillOpen) {
-      const candidates = matches.get(foldedValue) || [];
-      const key = `${entry.entity}|${entry.field}|${target}|${entry.referenced_source_id}`;
-      if (candidates.length === 1) {
-        issues.delete(key);
-        resolvedCounts[RELATIONSHIP_STATUS.RESOLVED_BY_NATURAL_KEY_ALIAS] += entry.record_count;
-        // Set directly with the entry's own true count and samples rather than
-        // replaying recordAlias once per sample: the count pass one already
-        // measured is the real one, and re-deriving it from a bounded sample
-        // list would under-report it.
-        aliasResolutions.set(key, {
-          entity: entry.entity,
-          field: entry.field,
-          referenced_entity: target,
-          referenced_value: entry.referenced_source_id,
-          resolved_target_id: candidates[0].id,
-          natural_key_field: NATURAL_KEYS[target],
-          via: 'dashflo',
-          record_count: entry.record_count,
-          sample_source_ids: entry.sample_source_ids,
-        });
-        const targetAliasIndex = aliasTargets.get(target) || new Map();
-        targetAliasIndex.set(foldedValue, candidates[0].id);
-        aliasTargets.set(target, targetAliasIndex);
-      } else if (candidates.length > 1) {
-        entry.status = RELATIONSHIP_STATUS.REFERENCED_RECORD_AMBIGUOUS_ALIAS;
+      const foldedValues = [...new Set(stillOpen.map((entry) => naturalKeyFolder(target, aliasField)(String(entry.referenced_source_id))))];
+      const matches = await loadRowsByNaturalKey(queryable, target, aliasField, foldedValues);
+
+      for (const entry of stillOpen) {
+        const key = `${entry.entity}|${entry.field}|${target}|${entry.referenced_source_id}`;
+        const foldedValue = naturalKeyFolder(target, aliasField)(String(entry.referenced_source_id));
+        const verdict = aliasVerdict(matches, foldedValue);
+        if (verdict.verdict === 'resolved') {
+          issues.delete(key);
+          resolvedCounts[RELATIONSHIP_STATUS.RESOLVED_BY_NATURAL_KEY_ALIAS] += entry.record_count;
+          aliasResolutions.set(key, {
+            entity: entry.entity,
+            field: entry.field,
+            referenced_entity: target,
+            referenced_value: entry.referenced_source_id,
+            resolved_target_id: verdict.targetId,
+            natural_key_field: aliasField,
+            via: 'dashflo',
+            record_count: entry.record_count,
+            sample_source_ids: entry.sample_source_ids,
+          });
+          const perEntity = aliasTargets.get(target) || new Map();
+          const perField = perEntity.get(aliasField) || new Map();
+          perField.set(foldedValue, verdict.targetId);
+          perEntity.set(aliasField, perField);
+          aliasTargets.set(target, perEntity);
+        } else if (verdict.verdict === 'ambiguous') {
+          entry.identity_attempts.push({ field: aliasField, checked_in: 'dashflo', result: 'ambiguous', candidate_count: verdict.count });
+          entry.status = RELATIONSHIP_STATUS.REFERENCED_RECORD_AMBIGUOUS_ALIAS;
+        } else {
+          entry.identity_attempts.push({ field: aliasField, checked_in: 'dashflo', result: 'no_match' });
+        }
       }
     }
   }
@@ -1098,11 +1177,23 @@ function describeRelationship(entry) {
   if (entry.status === RELATIONSHIP_STATUS.REFERENCED_RECORD_EXCLUDED) {
     return `the referenced ${entry.referenced_entity} record is excluded from the migration by an explicit rule`;
   }
+  const attempts = entry.identity_attempts || [];
   if (entry.status === RELATIONSHIP_STATUS.REFERENCED_RECORD_AMBIGUOUS_ALIAS) {
-    const field = NATURAL_KEYS[entry.referenced_entity];
-    return `this value is not a ${entry.referenced_entity} id, and more than one ${entry.referenced_entity} record shares it as ${entry.referenced_entity}.${field}`;
+    const ambiguous = attempts.find((a) => a.result === 'ambiguous');
+    const field = ambiguous?.field || NATURAL_KEYS[entry.referenced_entity];
+    const where = ambiguous?.checked_in === 'dashflo' ? 'in DashFlo' : 'in this package';
+    const count = ambiguous?.candidate_count ? `${ambiguous.candidate_count} ${entry.referenced_entity} records` : `more than one ${entry.referenced_entity} record`;
+    return `this value is not a ${entry.referenced_entity} id, and ${count} ${where} share it as ${entry.referenced_entity}.${field}`;
   }
-  return `the referenced ${entry.referenced_entity} record is in neither the package nor DashFlo`;
+  if (attempts.length) {
+    // Every declared identity field was tried, in the package and in
+    // DashFlo, and none of them named this value. This is what makes an
+    // "absent" verdict provable rather than merely "the resolver gave up":
+    // the fields tried are named, not just counted.
+    const fieldList = [...new Set(attempts.map((a) => a.field))];
+    return `the referenced ${entry.referenced_entity} record is in neither the package nor DashFlo, and this value did not match any ${entry.referenced_entity} record by ${fieldList.map((f) => `${entry.referenced_entity}.${f}`).join(' or ')} either`;
+  }
+  return `the referenced ${entry.referenced_entity} record is in neither the package nor DashFlo, and ${entry.referenced_entity} declares no natural key or legacy identity field to try instead`;
 }
 
 export default {
@@ -1111,6 +1202,7 @@ export default {
   RELATIONSHIP_STATUS,
   ISSUE_SEVERITY,
   derivedTargetId,
+  identityAliasFields,
   planIdentity,
   planRelationships,
   resolveIdentity,

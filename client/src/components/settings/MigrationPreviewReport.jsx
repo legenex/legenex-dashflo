@@ -56,6 +56,21 @@ const RELATIONSHIP_LABEL = {
 
 const number = (value) => Number(value || 0).toLocaleString();
 
+// "buyer_code: no match (package); leadbyte_bid: no match (DashFlo)" -- every
+// identity field the referenced entity supports, and what happened when the
+// planner tried it, so "unresolved" reads as a proven negative rather than as
+// a resolver that simply gave up.
+function formatAttempts(attempts) {
+  if (!attempts || !attempts.length) return 'No identity field to try';
+  return attempts.map((a) => {
+    const where = a.checked_in === 'dashflo' ? 'DashFlo' : 'package';
+    const outcome = a.result === 'ambiguous'
+      ? `ambiguous${a.candidate_count ? ` (${a.candidate_count})` : ''}`
+      : 'no match';
+    return `${a.field}: ${outcome} (${where})`;
+  }).join('; ');
+}
+
 function SeverityBadge({ severity }) {
   const tone = SEVERITY[severity] || SEVERITY.warning;
   return (
@@ -202,13 +217,14 @@ export function MigrationPreviewReport({ report }) {
         tone="error"
         empty="No hard blockers. Nothing is preventing the apply."
       >
-        <Table headers={['Kind', 'Entity', 'Field', 'Source ID', 'Detail']}>
+        <Table headers={['Kind', 'Entity', 'Field', 'Source ID', 'Identity strategy attempted', 'Detail']}>
           {blockers.map((row, index) => (
             <tr key={`${row.kind}-${row.entity}-${row.source_id}-${index}`}>
               <Cell>{row.kind}</Cell>
               <Cell>{row.entity || '-'}</Cell>
               <Cell>{row.field || '-'}</Cell>
               <Cell><span className="font-mono">{row.source_id || '-'}</span></Cell>
+              <Cell>{row.kind === 'relationship' ? formatAttempts(row.identity_attempts) : '-'}</Cell>
               <Cell>{row.detail}</Cell>
             </tr>
           ))}
@@ -241,7 +257,7 @@ export function MigrationPreviewReport({ report }) {
         tone="warn"
         empty="Every declared reference resolved to a final DashFlo id."
       >
-        <Table headers={['Entity', 'Field', 'Referenced entity', 'Referenced source ID', 'Records', 'Reason', 'Status']}>
+        <Table headers={['Entity', 'Field', 'Referenced entity', 'Referenced source ID', 'Records', 'Identity strategy attempted', 'Reason', 'Status']}>
           {relationships.map((row, index) => (
             <tr key={`${row.entity}-${row.field}-${row.referenced_source_id}-${index}`}>
               <Cell>{row.entity}</Cell>
@@ -249,6 +265,7 @@ export function MigrationPreviewReport({ report }) {
               <Cell>{row.referenced_entity}</Cell>
               <Cell><span className="font-mono">{row.referenced_source_id}</span></Cell>
               <Cell>{number(row.record_count)}</Cell>
+              <Cell>{formatAttempts(row.identity_attempts)}</Cell>
               <Cell>{RELATIONSHIP_LABEL[row.status] || row.reason}</Cell>
               <Cell><SeverityBadge severity={row.severity} /></Cell>
             </tr>

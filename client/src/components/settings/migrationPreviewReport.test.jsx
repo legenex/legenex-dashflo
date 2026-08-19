@@ -81,6 +81,7 @@ const baseReport = (overrides = {}) => ({
     severity: 'warning',
     reason: 'the referenced RouteConfigVersion record is in neither the package nor DashFlo',
     resolution: 'Carried across unchanged.',
+    identity_attempts: [],
   }],
   relationship_issue_count: 1,
   relationship_resolved: { resolved_in_package: 30, resolved_by_remap: 4, resolved_in_target: 0, resolved_by_natural_key_alias: 0 },
@@ -135,6 +136,13 @@ describe('migration preview report', () => {
     expect(html).toContain('Referenced record is in neither the package nor DashFlo');
   });
 
+  it('shows there was no identity field to try for a target entity with none declared', () => {
+    // RouteConfigVersion has no natural key or legacy alias, so the base
+    // report's identity_attempts is empty rather than fabricated.
+    const html = render(baseReport());
+    expect(html).toContain('No identity field to try');
+  });
+
   it('renders collision detail with its type, target and proposed disposition', () => {
     const html = render(baseReport());
     expect(html).toContain('src-supplier-1');
@@ -176,6 +184,48 @@ describe('migration preview report', () => {
       relationship_issue_count: 1,
     }));
     expect(html).toContain('Value matches more than one record by natural key');
+  });
+
+  it('shows exactly which identity fields were tried and where, for a relationship issue', () => {
+    const html = render(baseReport({
+      can_apply: false,
+      relationship_issues: [{
+        entity: 'BuyerStateCpl', field: 'buyer_id', referenced_entity: 'Buyer', referenced_source_id: 'no-such-buyer',
+        status: 'referenced_record_absent', record_count: 1, sample_source_ids: ['src-cpl'], required: true,
+        severity: 'blocker',
+        reason: 'the referenced Buyer record is in neither the package nor DashFlo, and this value did not match any Buyer record by Buyer.buyer_code or Buyer.leadbyte_bid either',
+        resolution: 'Owner decision required.',
+        identity_attempts: [
+          { field: 'buyer_code', checked_in: 'package', result: 'no_match' },
+          { field: 'leadbyte_bid', checked_in: 'package', result: 'no_match' },
+          { field: 'buyer_code', checked_in: 'dashflo', result: 'no_match' },
+          { field: 'leadbyte_bid', checked_in: 'dashflo', result: 'no_match' },
+        ],
+      }],
+      relationship_issue_count: 1,
+      hard_blocker_count: 1,
+      hard_blockers: [{
+        kind: 'relationship', entity: 'BuyerStateCpl', field: 'buyer_id', source_id: 'src-cpl',
+        detail: 'the referenced Buyer record is in neither the package nor DashFlo',
+        identity_attempts: [
+          { field: 'buyer_code', checked_in: 'package', result: 'no_match' },
+          { field: 'leadbyte_bid', checked_in: 'dashflo', result: 'ambiguous', candidate_count: 2 },
+        ],
+      }],
+    }));
+    expect(html).toContain('buyer_code: no match (package)');
+    expect(html).toContain('leadbyte_bid: no match (package)');
+    expect(html).toContain('buyer_code: no match (DashFlo)');
+    expect(html).toContain('leadbyte_bid: ambiguous (2) (DashFlo)');
+  });
+
+  it('shows a schema/collision hard blocker without a fabricated identity strategy', () => {
+    const html = render(baseReport({
+      can_apply: false,
+      hard_blocker_count: 1,
+      hard_blockers: [{ kind: 'id_collision', entity: 'Buyer', source_id: 'src-buyer', detail: 'ambiguous target match' }],
+    }));
+    expect(html).toContain('id_collision');
   });
 
   it('shows the blocked banner only when a hard blocker exists', () => {

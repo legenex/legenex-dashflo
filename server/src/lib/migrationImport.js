@@ -762,6 +762,11 @@ export async function buildMigrationPlan(normalized, queryable = pool) {
       field: issue.field,
       source_id: issue.sample_source_ids[0] || null,
       detail: `${issue.reason}, and the DashFlo schema requires ${issue.entity}.${issue.field}`,
+      // Every identity field the referenced entity supports, and what
+      // happened when each was tried against the package and against
+      // DashFlo. Empty when the entity has no natural key or legacy identity
+      // field, which is itself the reason nothing could be attempted.
+      identity_attempts: issue.identity_attempts || [],
     });
   }
   if (!reconciliation.balanced) {

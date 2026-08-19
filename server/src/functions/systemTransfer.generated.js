@@ -357,6 +357,27 @@ export const NATURAL_KEYS = {
   Vertical: 'name',
 };
 
+// Additional deterministic identity fields for a relationship reference only,
+// tried strictly after the primary NATURAL_KEYS field above and never for
+// record identity or collision detection. In priority order per entity, and
+// a value is accepted only when it names exactly one candidate: a value
+// matching more than one record fails closed exactly like a NATURAL_KEYS
+// collision does, at whichever field found the ambiguity.
+//
+// Buyer.leadbyte_bid is the one entry, and it is not a guess: the Buyer
+// schema itself documents the exact ambiguity this exists for -- "LeadByte
+// buyer id. Nullable. Defaults to the buyer_code value when a code is
+// allocated" -- meaning it usually equals buyer_code and sometimes does not,
+// which is precisely the shape of drift a relationship reference can be
+// written against. It is the same field lib/buyerIdentity.js already
+// resolves through for Lead.buyer_id, in the same priority position (after
+// the record id, after the primary code): reused here, not reinvented. It is
+// not secret: SECRET_FIELDS and MIGRATION_SECRETS_EXPECTED name only
+// Buyer.buyer_api_key.
+export const LEGACY_IDENTITY_ALIASES = {
+  Buyer: ['leadbyte_bid'],
+};
+
 // Import order. Parents before children so every reference resolves.
 export const ENTITY_ORDER = [
   'AppSettings', 'Brand', 'Vertical', 'Disposition', 'ReferenceKey', 'EmailValidationSettings', 'HlrSettings',
