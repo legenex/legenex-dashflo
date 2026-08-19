@@ -2531,3 +2531,159 @@ resolution, which is safe (still never applies), only narrower.
   are `leadbyte_bid` values, they now resolve. If they are something else, the
   next preview's "Identity strategy attempted" column will say so directly
   rather than leaving another round of inference.
+
+## Reconciliation double-count fixed, downloadable diagnostic added, frozen-package workflow, 19 August 2026
+
+The 21-20 package's preview reported 147032 creates + 12 preserves + 14
+unresolved = 147058 against 147044 exported records, and the UI showed
+"-14 exported record(s) have no disposition". This entry fixes the real bug
+behind that number, adds a downloadable diagnostic so a production preview
+never again has to be debugged from a screenshot, and freezes one package as
+the standing acceptance fixture so further compatibility work does not require
+another export.
+
+### Root cause, proven by reproduction before it was fixed
+
+`planIdentity` gives at most one identity entry per source id: a repeated id
+(the same value on two raw records) is flagged unresolved and the second
+occurrence never receives one. But the disposition loops in
+`buildMigrationPlan` and `applyNormalized` walk the raw records, duplicates
+included, and ask `identity.get(sourceId)` truthy. A Map cannot distinguish
+two array elements sharing a key, so that question answers the same entry for
+both the valid first occurrence and the flagged duplicate, and the duplicate
+was disposed a second time as if it were the valid record: counted again
+toward `planned_creates`, which is exactly the extra 14. A synthetic
+reproduction (2000 MetaSyncRun-shaped records plus 14 exact duplicates, no
+natural key, mirroring the production shape) reproduced the identical
+pathology before the fix: 2014 exported, 2014 "created", 14 unresolved,
+`unaccounted_records: -14`. After the fix: 2000 created, 14 unresolved, 2014
+accounted, balanced.
+
+`can_apply` was never actually reachable with the double-counted data: a
+duplicate source id is its own hard blocker (`duplicate_source_id`),
+independent of the reconciliation check, so Apply was already refused whenever
+this bug could fire. The fix still matters for two reasons: the reconciliation
+numbers are what the owner and the next debugging session read, and it closes
+what would otherwise have been the only thing standing between Apply and an
+actual double write, had some other path ever let `can_apply` stay true
+alongside it.
+
+Fixed with a `seen` guard, per entity, in both disposition loops: `identity.get`
+answers the same entry for a repeat occurrence, but `seen` has already recorded
+that source id, so only the occurrence that produced the identity entry is
+ever disposed or, in `applyNormalized`, written.
+
+### The reconciliation invariant is now enforced, not displayed
+
+`assertReconciliationBalanced` throws a `MigrationValidationError` if
+`accounted_records !== exported_records`, refusing the whole preview rather
+than rendering an inconsistent number as one more hard blocker among many. A
+violation is this code's defect, not the package's, and a defect that only
+shows up as a negative number buried in a blocker list is one nobody would
+ever think to report the right way.
+
+### Downloadable diagnostic report
+
+`client/src/lib/migrationDiagnosticReport.js`: a pure `buildDiagnosticReport`
+function and a "Download migration diagnostic report" button next to the
+preview, mirroring the export panel's existing blob-download pattern exactly.
+No new server endpoint: the preview response already carries everything
+needed, in full, since a real package's blocker count is far below the
+per-category 200-row sample cap. Built as an explicit field-by-field allowlist
+rather than "download the whole preview object", so a future field added to
+the preview response without the same scrutiny is simply absent from the
+download rather than silently included. Server-side retention (this task's
+optional fifth item) was not built: the downloadable report already solves
+the debugging loop this was meant to solve, and the task's own instruction was
+not to build persistence unless the download alone falls short.
+
+### Entity classification, and proof rather than assertion
+
+`entityClass(entity)` in `migrationPlan.js` answers `master`, `historical` or
+`transactional`, computed from what the catalog already declares (whether an
+entity has an identity field beyond its own record id, and whether it is in
+the `SECTIONS` `logs` group) rather than a new hand-maintained table. Present
+in `entity_reconciliation` rows so the diagnostic explains, next to the
+numbers, why MetaSyncRun and Buyer are held to different collision policies.
+Nothing about entity behavior changed: MetaSyncRun has never had a declared
+natural key, so it was already pure id matching, which is the correct policy
+for append-only history; the addition proves that with a test rather than
+asserting it.
+
+### Identity model: one declaration, and why a second still exists
+
+`NATURAL_KEYS`, `LEGACY_IDENTITY_ALIASES` and `CASE_INSENSITIVE_NATURAL_KEYS`
+remain the single declaration migration identity reads, consumed through one
+function, `identityAliasFields`. `lib/buyerIdentity.js` stays a deliberately
+separate second implementation: it resolves live Lead-to-Buyer attribution for
+billing, where an unresolved lead becomes a reviewable exception row and a
+name-based last resort is an acceptable, disclosed fallback. A migration
+relationship is written once, silently, inside an owner-authorised Apply, so
+this module supports strictly less (record id, `buyer_code`, `leadbyte_bid`,
+never a name) rather than reusing `resolveBuyer` outright. Documented at length
+in `migrationPlan.js` so this question does not get re-asked and re-answered
+differently in a future session.
+
+### Frozen-package workflow
+
+`docs/resources/legenex-dashflo-migration-2026-08-19-21-20.json.enc` is the
+frozen development acceptance fixture per the operator's explicit instruction.
+It was not modified, not regenerated, and its plaintext envelope was not
+re-read beyond what the operator already independently verified. No further
+compatibility work in this area should require a new export until this
+package's own preview reconciles with zero hard blockers or every remaining
+one is a proven, named, genuine owner decision.
+
+### Evidence
+
+- Focused: `migrationReconciliationInvariant.test.js`, 15 new tests: the exact
+  double-count reproduction and its fix, the assertion as a pure unit,
+  remap/collision/relationship-warning proven not to be dispositions, every
+  record proven to receive exactly one disposition across a mixed
+  collision/duplicate/exclusion scenario, entity classification correctness,
+  historical and transactional data proven never natural-key-deduplicated,
+  duplicate source id vs duplicate natural key classified as distinct named
+  categories, and `planning_ms` present as a plain number.
+  `migrationDiagnosticReport.test.js`, 8 new tests: every safe field present,
+  and, critically, a fabricated secret placed on fields the allowlist DOES
+  read (a hard blocker's stray `token`, a collision row's stray `key`, a
+  relationship issue's stray `secret`) proven absent from the serialized
+  output, plus a fabricated passphrase on a field the function does not name
+  proven dropped entirely.
+- Existing 153 migration tests (from the prior two sessions) plus the UI
+  suite unaffected, run alongside the new ones.
+- Scale: a synthetic package at 145,440 records, matching the real package's
+  declared shape as closely as possible without decrypting it (142,915-scale
+  MetaSyncRun with 14 planted duplicates, 13 mixed-identity Buyer, 1946 Lead,
+  237 AdSpend), planned in 0.31s, response 13.6 KB, reconciliation exact:
+  145426 created + 14 unresolved = 145440.
+- `npm run gate` PASS, seven steps, 100 files, 1346 tests, none skipped, up
+  from 98 files and 1323 tests.
+- The frozen 21-20 package was not decrypted and its passphrase was not
+  requested. No production data was read or written.
+
+### Rollback
+
+`git revert` the commit. No schema change, no data movement: the fix and the
+new assertion are pure planning logic, the diagnostic report is a client-side
+function with no server counterpart, and `entityClass` is a read-only
+derivation. Reverting restores the double-counting bug, which is safe to be
+without a fix for exactly as long as duplicate-id packages are also refused
+outright by the separate `duplicate_source_id` hard blocker, which they always
+have been.
+
+### Not done, and why
+
+- The real 21-20 package's exact 14 unresolved records and remaining hard
+  blockers are still UNPROVEN without decrypting it. What changed is that the
+  mechanism most consistent with the evidence (the "-14" arithmetic, and the
+  screenshot's "the same source id appears more than once in this package"
+  wording) is now fixed and reproduced synthetically at the exact reported
+  count, and the next preview's numbers will be trustworthy either way.
+- Server-side diagnostic retention (task five) was intentionally not built;
+  see above.
+- A from-scratch entity-by-entity master/transactional/historical
+  reclassification of all 93 entities was not attempted; `entityClass` answers
+  it generically from existing catalog structure instead, which is provably
+  consistent with current behavior rather than a new hand-authored table that
+  could itself drift from it.

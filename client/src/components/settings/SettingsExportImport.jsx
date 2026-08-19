@@ -16,6 +16,7 @@ import {
 import { toast } from 'sonner';
 import { SECTIONS, BUNDLE_VERSION, entitiesForSections } from '@/lib/systemTransfer';
 import { describeMigrationFailure, describeMigrationSuccess } from '@/lib/migrationImportStatus';
+import { buildDiagnosticReport, diagnosticFileName } from '@/lib/migrationDiagnosticReport';
 
 // Master admin only. Mirrors the Operations Buyers card / row / badge treatment.
 //
@@ -223,6 +224,25 @@ export default function SettingsExportImport() {
   const refuseImport = (title, detail) => {
     setImportStatus({ tone: 'error', code: 'precondition', title, detail });
     toast.error(title);
+  };
+
+  // The preview response already IS the full diagnostic: real packages carry
+  // far fewer blockers than the per-category sample cap, so nothing here is
+  // truncated relative to what the panel already shows. This turns that
+  // in-memory object into a file, the same way Export already does, so
+  // debugging the planner never again requires a screenshot of this page.
+  const downloadDiagnostic = () => {
+    const diagnostic = buildDiagnosticReport(bundlePreview);
+    if (!diagnostic) return;
+    const blob = new Blob([JSON.stringify(diagnostic, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = diagnosticFileName(bundlePreview);
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   };
 
   const runImport = async (kind, mode) => {
@@ -522,10 +542,16 @@ export default function SettingsExportImport() {
 
           {bundlePreview && (
             <div className="rounded-lg border border-border bg-popover p-4">
-              <div className="mb-3 flex items-center gap-2">
-                {bundlePreview.can_apply ? <CheckCircle2 className="h-4 w-4 text-primary" /> : <AlertTriangle className="h-4 w-4 text-chart-3" />}
-                <span className="text-[13px] font-semibold text-foreground">Migration preview</span>
-                <Badge>{bundlePreview.kind}</Badge>
+              <div className="mb-3 flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  {bundlePreview.can_apply ? <CheckCircle2 className="h-4 w-4 text-primary" /> : <AlertTriangle className="h-4 w-4 text-chart-3" />}
+                  <span className="text-[13px] font-semibold text-foreground">Migration preview</span>
+                  <Badge>{bundlePreview.kind}</Badge>
+                </div>
+                <Button variant="outline" size="sm" onClick={downloadDiagnostic}>
+                  <Download className="h-4 w-4 mr-2" />
+                  Download migration diagnostic report
+                </Button>
               </div>
               <MigrationPreviewReport report={bundlePreview} />
               {bundlePreview.mode === 'preview' && bundlePreview.can_apply && (

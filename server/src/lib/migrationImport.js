@@ -22,6 +22,7 @@ import {
   DIAGNOSTIC_SAMPLE_LIMIT,
   ISSUE_SEVERITY,
   RECORD_DISPOSITION,
+  entityClass,
   planIdentity,
   planRelationships,
   rewriteReferences,
@@ -640,6 +641,31 @@ export function disposeRecord({ kind, entity, source, existing, shaped }) {
   return { disposition: RECORD_DISPOSITION.UPDATE, conflict: false, data: merged };
 }
 
+/* The reconciliation invariant, enforced rather than merely displayed.
+ *
+ *   creates + updates + preserves + explicit exclusions + unresolved
+ *     == exported records
+ *
+ * exactly, for every entity and overall. Remaps, collisions and relationship
+ * issues are never part of this sum: a remap is an attribute of whichever of
+ * the five dispositions above a record actually received, and a collision or
+ * a relationship issue is planning state about how a disposition was reached,
+ * not a disposition of its own. A violation means the planner double-counted
+ * or lost a record, which is this code's defect, not the package's, so it is
+ * refused outright rather than shown as a hard blocker the owner has no way
+ * to act on.
+ */
+export function assertReconciliationBalanced(reconciliation) {
+  if (reconciliation.balanced) return;
+  throw new MigrationValidationError(
+    `Migration planner produced an inconsistent reconciliation: ${reconciliation.accounted_records} accounted `
+    + `against ${reconciliation.exported_records} exported records. This is a planner defect, not a package `
+    + 'problem, and the preview has been refused rather than shown with an incorrect count.',
+    500,
+    MIGRATION_ERROR_CODE.INTERNAL,
+  );
+}
+
 /* Build the complete plan and the preview report for a normalized package.
  *
  * The order is the point. Identity for every record in the package is settled
@@ -650,6 +676,7 @@ export function disposeRecord({ kind, entity, source, existing, shaped }) {
  * colliding parent had no way to fix its children.
  */
 export async function buildMigrationPlan(normalized, queryable = pool) {
+  const startedAt = process.hrtime.bigint();
   const plan = await planIdentity(normalized, queryable);
   // Relationships are planned before any record is shaped. Nothing in
   // planRelationships reads a shaped record: it works from plan.identity and
@@ -675,11 +702,24 @@ export async function buildMigrationPlan(normalized, queryable = pool) {
 
     const identity = plan.identity.get(entity) || new Map();
     const existingRows = plan.existingRows.get(entity) || new Map();
+    // planIdentity gives at most one identity entry per source id: a second
+    // raw record sharing that id was flagged unresolved (duplicateIds) and
+    // never given one of its own. But this loop walks the raw records, and
+    // identity.get(sourceId) answers the same truthy entry for both the valid
+    // first occurrence and the flagged duplicate, since a Map cannot tell two
+    // array elements with equal keys apart. Without this guard the duplicate
+    // was disposed a second time as if it were the valid record: counted
+    // again toward create, and, in applyNormalized, actually written a second
+    // time. Seen tracks which ids this entity has already disposed, so only
+    // the record that produced the identity entry is ever processed.
+    const seen = new Set();
 
     for (const source of records) {
       const sourceId = String(source?.id || '').trim();
+      if (seen.has(sourceId)) continue;
       const resolved = identity.get(sourceId);
       if (!resolved) continue; // excluded by rule, or unresolved: already accounted for.
+      seen.add(sourceId);
 
       const existing = existingRows.get(sourceId) || null;
       const shaped = prepareMigrationRecord(normalized.kind, entity, source, existing?.data || {}, {
@@ -727,10 +767,29 @@ export async function buildMigrationPlan(normalized, queryable = pool) {
     target_protected_records: targetProtectedCount,
   };
 
+  // The reconciliation invariant is not a data problem the owner can act on;
+  // if it is ever false, the planner double-counted or lost a record, which
+  // is a defect in this code. A defect that only shows up as a confusing
+  // negative number buried in the hard blocker list is a defect nobody would
+  // ever ask about the right way; refusing the whole preview forces it to be
+  // investigated as what it is. This actually held true, and was caught here,
+  // for a duplicate source id: identity.get(sourceId) cannot distinguish the
+  // valid first occurrence of a repeated id from the flagged duplicate, so
+  // both used to be disposed. See the seen guards in the disposition loops
+  // below and in applyNormalized.
+  assertReconciliationBalanced(reconciliation);
+
   const entityReconciliation = plan.orderedNames.map((entity) => {
     const e = plan.entityPlans.get(entity);
     return {
       entity,
+      // master, transactional or historical. Not a value this run computed:
+      // the same answer entityClass would give for any package, from the
+      // catalog alone. Present here so the diagnostic explains, next to the
+      // numbers, why (for example) MetaSyncRun and Buyer are held to
+      // different collision policies without the reader having to already
+      // know that.
+      class: entityClass(entity),
       supported: e.supported,
       declared: e.declared,
       exported: e.decrypted,
@@ -767,13 +826,6 @@ export async function buildMigrationPlan(normalized, queryable = pool) {
       // DashFlo. Empty when the entity has no natural key or legacy identity
       // field, which is itself the reason nothing could be attempted.
       identity_attempts: issue.identity_attempts || [],
-    });
-  }
-  if (!reconciliation.balanced) {
-    hardBlockers.push({
-      kind: 'reconciliation',
-      entity: null,
-      detail: `${reconciliation.unaccounted_records} exported record(s) have no disposition`,
     });
   }
 
@@ -866,6 +918,12 @@ export async function buildMigrationPlan(normalized, queryable = pool) {
     declared_count_discrepancies: normalized.countDiscrepancies || [],
 
     can_apply: hardBlockers.length === 0,
+    // How long planning itself took, not decryption or the request round
+    // trip: identity resolution, relationship resolution and reconciliation
+    // together. A large package's planning cost is a legitimate operational
+    // question, not a diagnostic value, so it is a plain number and nothing
+    // about the package shapes it beyond record and entity counts.
+    planning_ms: Number(process.hrtime.bigint() - startedAt) / 1e6,
   };
 
   return { report, plan };
@@ -939,12 +997,23 @@ async function applyNormalized(normalized, report, plan) {
         remapped: 0, credentials_namespaced: 0,
       };
 
+      // See the matching guard in buildMigrationPlan: a duplicate source id
+      // shares its one identity entry with the valid first occurrence, and
+      // without this a duplicate would be written a second time here, as an
+      // UPDATE onto whatever the first occurrence just inserted. can_apply
+      // already refuses a package carrying a duplicate, via
+      // duplicate_source_id in hardBlockers, so this is defense in depth
+      // rather than the only thing standing between Apply and a double write.
+      const seen = new Set();
+
       for (const source of normalized.entities[entity] || []) {
         const sourceId = String(source?.id || '').trim();
+        if (seen.has(sourceId)) { stats.skipped += 1; result.skipped += 1; continue; }
         const resolved = identity.get(sourceId);
         // Excluded by an explicit rule, or left unresolved. can_apply already
         // refused the second case, so what reaches here is an exclusion.
         if (!resolved) { stats.skipped += 1; result.skipped += 1; continue; }
+        seen.add(sourceId);
         const targetId = resolved.targetId;
 
         const { rows } = await client.query(
@@ -1074,6 +1143,7 @@ export default {
   MIGRATION_ERROR_CODE,
   normalizeMigrationBundle,
   analyzeMigration,
+  assertReconciliationBalanced,
   buildMigrationPlan,
   disposeRecord,
   runMigrationImport,

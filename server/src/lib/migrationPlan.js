@@ -10,6 +10,7 @@ import {
   MIGRATION_EXCLUSION_RULES,
   NATURAL_KEYS,
   REFS,
+  SECTIONS,
 } from '../functions/systemTransfer.generated.js';
 
 /* The owner migration planner.
@@ -181,6 +182,41 @@ function naturalKeyValue(entity, record) {
   const raw = record?.[field];
   if (raw == null || String(raw) === '') return null;
   return naturalKeyFolder(entity, field)(String(raw));
+}
+
+/* Entity behavior class, for the diagnostic report only.
+ *
+ * Not a hand-maintained table: this reads two things the catalog already
+ * declares for other reasons, so it cannot drift from the identity policy it
+ * describes. Whether an entity has a declared identity field beyond its own
+ * record id is exactly the answer to "does this entity get natural-key
+ * matching or pure id matching", which is the one distinction that actually
+ * changes migration behavior. 'historical' further separates the SECTIONS
+ * 'logs' group: the append-only, high-volume audit and sync history that a
+ * duplicate identity check must never fold into a "same logical record" the
+ * way it correctly would for a Buyer or a Supplier. All three classes already
+ * get the collision policy this describes; nothing here changes behavior,
+ * only names it, so the reconciliation-by-entity report can say why.
+ *
+ *   master        has NATURAL_KEYS or LEGACY_IDENTITY_ALIASES: an exact
+ *                 duplicate id is a hard blocker, but a same-natural-key
+ *                 record under a different id resolves to one logical
+ *                 record, matched and never silently merged with a
+ *                 same-key package sibling.
+ *   historical     the SECTIONS 'logs' group, no identity field at all: an
+ *                 exact duplicate id is still a hard blocker (two records
+ *                 cannot both be one row), but nothing else about the
+ *                 record's content is ever compared, since repeated field
+ *                 values across separate events are expected, not a
+ *                 collision.
+ *   transactional  everything else: pure id matching, same guarantee as
+ *                 historical, grouped separately only for readability.
+ */
+export function entityClass(entity) {
+  if (NATURAL_KEYS[entity] || (LEGACY_IDENTITY_ALIASES[entity] || []).length) return 'master';
+  const section = SECTIONS.find((s) => s.entities.includes(entity));
+  if (section?.key === 'logs') return 'historical';
+  return 'transactional';
 }
 
 // The identity fields relationship resolution may try for this entity, in
@@ -870,6 +906,36 @@ export async function planIdentity(normalized, queryable = pool) {
  * `Lead.buyer_id` `kind: 'code'` for exactly this reason and it is never
  * touched here.
  *
+ * There is one canonical declaration of what identifies a migratable entity,
+ * and it lives in the catalog, not scattered across this file, the schema
+ * files, or the UI: `NATURAL_KEYS` names the one field record identity and
+ * collision detection trust, `LEGACY_IDENTITY_ALIASES` names what
+ * relationship resolution may additionally try, in order, once an id match
+ * has already failed, and `CASE_INSENSITIVE_NATURAL_KEYS` above says which of
+ * those fold case. Every function below reads these three, never a fourth
+ * per-field rule invented locally: `identityAliasFields` is the single place
+ * that turns the first two into the ordered list every caller actually uses,
+ * so adding a new legacy field for a new entity is one catalog line, not a
+ * new conditional here.
+ *
+ * `lib/buyerIdentity.js` stays a second, deliberately separate
+ * implementation rather than the thing this module calls, and that is a
+ * decision, not an oversight. It resolves live Lead-to-Buyer attribution for
+ * billing and reporting, where an unresolved lead becomes a reviewable
+ * exception row and a name-based last resort is an acceptable, disclosed
+ * fallback. A migration relationship is written into the database once,
+ * silently, as part of an owner-authorised Apply; a wrong resolution there is
+ * not a flagged exception; it can mean pricing configuration attached to the
+ * wrong buyer. So this module deliberately supports less than
+ * `buyerIdentity.js` does (record id and `buyer_code` and `leadbyte_bid`,
+ * never a name) rather than reusing its `resolveBuyer` outright. Passing a
+ * migration record through `resolveBuyer` would in fact never reach its name
+ * branch on its own, since that branch only triggers when the id field is
+ * itself empty; the two are kept apart anyway; both are subject to the same
+ * standard, but the fact that they arrive at it independently is what makes
+ * this module safe to reason about without also having to hold Lead
+ * attribution's looser tolerances in mind.
+ *
  * `identityAliasFields(entity)` is the same idea generalised to every
  * reference, not reinvented per field: the primary NATURAL_KEYS field first,
  * then whatever `LEGACY_IDENTITY_ALIASES` declares for that entity, tried in
@@ -1202,6 +1268,7 @@ export default {
   RELATIONSHIP_STATUS,
   ISSUE_SEVERITY,
   derivedTargetId,
+  entityClass,
   identityAliasFields,
   planIdentity,
   planRelationships,
