@@ -89,6 +89,10 @@ describe.skipIf(!reachable)('Base44 import against the live authentication syste
   beforeEach(async () => {
     await pool.query('TRUNCATE auth_credentials');
     await pool.query('TRUNCATE e_user, e_invitation, e_supplier, e_buyer');
+    // Provenance decides whether a DashFlo record was created here or carried
+    // in, and whether a target already has a source origin. Leaving it behind
+    // between tests would make each one depend on the last.
+    await pool.query('TRUNCATE base44_record_provenance').catch(() => {});
     await pool.query(
       `INSERT INTO auth_credentials (user_id, email, password_hash, google_sub, google_email, google_linked_at, disabled)
        VALUES ($1, $2, $3, $4, $2, now(), false)`,
@@ -176,20 +180,161 @@ describe.skipIf(!reachable)('Base44 import against the live authentication syste
   });
 
   // ── Identity collisions ──────────────────────────────────────────────────
+  //
+  // A source user whose email matches an account DashFlo already has is the
+  // same person, and the only safe outcomes are "become that account" or
+  // "stop". Creating a second account is what must never happen.
+  //
+  // This used to stop, permanently: the email match was reported as an
+  // unresolvable collision and the whole package was refused, which meant no
+  // real package could ever be applied. It now resolves onto the existing
+  // account, and the properties below are what make that safe rather than
+  // merely convenient.
 
-  it('refuses the whole import when a Base44 user collides with an existing account by email', async () => {
+  it('matches a source user onto the existing DashFlo account instead of creating a second one', async () => {
     const report = await previewBundle({
       User: [
-        { id: 'base44-owner-different-id', email: OWNER_EMAIL, full_name: 'Owner', role: 'admin', base_role: 'owner', updated_date: '2026-08-17T12:00:00.000Z' },
+        { id: 'base44-owner-different-id', email: OWNER_EMAIL, full_name: 'Owner From Base44', role: 'admin', base_role: 'owner', updated_date: '2026-08-17T12:00:00.000Z' },
       ],
     });
 
-    expect(report.can_apply, 'an email collision must block the apply').toBe(false);
+    expect(report.can_apply, 'a natural key match is a resolution, not a blocker').toBe(true);
     expect(report.id_collisions.length).toBeGreaterThan(0);
-    expect(report.id_collisions[0]).toMatchObject({ entity: 'User', field: 'email', existing_id: OWNER_USER_ID });
+    expect(report.id_collisions[0]).toMatchObject({
+      entity: 'User',
+      source_id: 'base44-owner-different-id',
+      natural_key_field: 'email',
+      resolved_target_id: OWNER_USER_ID,
+      severity: 'resolved',
+    });
+    expect(report.resolved_id_remaps).toContainEqual(expect.objectContaining({
+      entity: 'User', source_id: 'base44-owner-different-id', target_id: OWNER_USER_ID, matched_by: 'natural_key',
+    }));
+    expect(report.reconciliation.id_remaps).toBe(1);
+    expect(report.reconciliation.planned_creates).toBe(0);
   });
 
-  it('refuses to apply a colliding bundle even when confirmed', async () => {
+  it('applies that match onto the existing row and leaves the credential and the role alone', async () => {
+    // Age the DashFlo row so the source record is the newer of the two. The
+    // locally-newer path is covered separately; what is under test here is what
+    // an ordinary in-order import does to an account it matched.
+    await pool.query('UPDATE e_user SET updated_date = $2 WHERE id = $1', [OWNER_USER_ID, '2026-08-01T00:00:00.000Z']);
+
+    const applied = await importBundle({
+      User: [
+        { id: 'base44-owner-different-id', email: OWNER_EMAIL, full_name: 'Owner From Base44', role: 'user', base_role: 'manager', timezone: 'America/Regina', updated_date: '2026-08-17T12:00:00.000Z' },
+      ],
+    });
+    expect(applied.result).toBe('success');
+    expect(applied.applied.created).toBe(0);
+    expect(applied.applied.remapped).toBe(1);
+
+    // Exactly one account, and it is the one that was already there.
+    const { rows } = await pool.query('SELECT id, data FROM e_user');
+    expect(rows).toHaveLength(1);
+    expect(rows[0].id).toBe(OWNER_USER_ID);
+
+    // middleware/auth.js reads the caller straight off this row, so these three
+    // fields are the live authorization. The source record asked for manager
+    // and it did not get it.
+    expect(rows[0].data.base_role).toBe('owner');
+    expect(rows[0].data.role).toBe('admin');
+    // Everything that is not authorization still migrates.
+    expect(rows[0].data.timezone).toBe('America/Regina');
+    expect(rows[0].data.full_name).toBe('Owner From Base44');
+
+    const cred = await credential();
+    expect(cred.google_sub).toBe(OWNER_GOOGLE_SUB);
+    expect(cred.password_hash).toBe(OWNER_PASSWORD_HASH);
+    expect(cred.disabled).toBe(false);
+
+    // The move from source id to DashFlo id is durable, so a later run resolves
+    // the same way and an audit can follow the record back.
+    const { rows: provenance } = await pool.query(
+      "SELECT base44_id, dashflo_id FROM base44_record_provenance WHERE entity = 'User'",
+    );
+    expect(provenance).toEqual([{ base44_id: 'base44-owner-different-id', dashflo_id: OWNER_USER_ID }]);
+  });
+
+  it('matches regardless of how the address is capitalised', async () => {
+    // The natural key comparison must not be case sensitive. If it is, a
+    // capitalised source address becomes a second account for the same person.
+    const report = await previewBundle({
+      User: [
+        { id: 'base44-owner-cased', email: OWNER_EMAIL.toUpperCase(), full_name: 'Owner', role: 'admin', base_role: 'owner', updated_date: '2026-08-17T12:00:00.000Z' },
+      ],
+    });
+
+    expect(report.can_apply).toBe(true);
+    expect(report.reconciliation.planned_creates).toBe(0);
+    expect(report.id_collisions[0]).toMatchObject({ resolved_target_id: OWNER_USER_ID, severity: 'resolved' });
+  });
+
+  it('matches when the source address carries stray whitespace', async () => {
+    const report = await previewBundle({
+      User: [
+        { id: 'base44-owner-spaced', email: `  ${OWNER_EMAIL} `, role: 'admin', base_role: 'owner', updated_date: '2026-08-17T12:00:00.000Z' },
+      ],
+    });
+    expect(report.can_apply).toBe(true);
+    expect(report.reconciliation.planned_creates).toBe(0);
+    expect(report.id_collisions[0]).toMatchObject({ resolved_target_id: OWNER_USER_ID });
+  });
+
+  it('fails closed when two source users claim the same DashFlo account', async () => {
+    // Two records folding to one email cannot both become the same account, and
+    // picking one arbitrarily hands somebody another person's account.
+    const report = await previewBundle({
+      User: [
+        { id: 'base44-owner-a', email: OWNER_EMAIL, role: 'admin', base_role: 'owner', updated_date: '2026-08-17T12:00:00.000Z' },
+        { id: 'base44-owner-b', email: OWNER_EMAIL.toUpperCase(), role: 'admin', base_role: 'owner', updated_date: '2026-08-17T12:00:00.000Z' },
+      ],
+    });
+
+    expect(report.can_apply).toBe(false);
+    expect(report.unresolved_count).toBe(1);
+    expect(report.hard_blockers.some((b) => b.kind === 'id_collision' && b.source_id === 'base44-owner-b')).toBe(true);
+  });
+
+  it('fails closed when two DashFlo accounts already answer to one address', async () => {
+    await pool.query(
+      'INSERT INTO e_user (id, data) VALUES ($1, $2::jsonb)',
+      ['dashflo-owner-duplicate', JSON.stringify({ email: OWNER_EMAIL.toUpperCase(), role: 'user', base_role: 'manager' })],
+    );
+
+    const report = await previewBundle({
+      User: [
+        { id: 'base44-owner-different-id', email: OWNER_EMAIL, role: 'admin', base_role: 'owner', updated_date: '2026-08-17T12:00:00.000Z' },
+      ],
+    });
+
+    expect(report.can_apply, 'two candidate targets is not a choice the importer may make').toBe(false);
+    expect(report.id_collisions[0]).toMatchObject({ collision_type: 'ambiguous_target_match', severity: 'blocker' });
+  });
+
+  it('fails closed when the DashFlo account was already migrated from a different source record', async () => {
+    await importBundle({
+      User: [
+        { id: 'base44-owner-first', email: OWNER_EMAIL, role: 'admin', base_role: 'owner', updated_date: '2026-08-17T12:00:00.000Z' },
+      ],
+    });
+
+    const report = await previewBundle({
+      User: [
+        { id: 'base44-owner-second', email: OWNER_EMAIL, role: 'admin', base_role: 'owner', updated_date: '2026-08-18T12:00:00.000Z' },
+      ],
+    });
+
+    expect(report.can_apply).toBe(false);
+    expect(report.id_collisions[0]).toMatchObject({ collision_type: 'target_already_migrated', severity: 'blocker' });
+  });
+
+  it('refuses to apply a bundle that still has an unresolved blocker, even when confirmed', async () => {
+    await pool.query(
+      'INSERT INTO e_user (id, data) VALUES ($1, $2::jsonb)',
+      ['dashflo-owner-duplicate', JSON.stringify({ email: OWNER_EMAIL.toUpperCase(), role: 'user', base_role: 'manager' })],
+    );
+
     await expect(importBundle({
       User: [
         { id: 'base44-owner-different-id', email: OWNER_EMAIL, role: 'admin', base_role: 'owner', updated_date: '2026-08-17T12:00:00.000Z' },
@@ -197,30 +342,7 @@ describe.skipIf(!reachable)('Base44 import against the live authentication syste
     })).rejects.toThrow(/cannot be applied/i);
 
     const { rows } = await pool.query('SELECT count(*)::int AS n FROM e_user');
-    expect(rows[0].n).toBe(1);
-  });
-
-  it('detects the collision regardless of how the address is capitalised', async () => {
-    // The natural key comparison must not be case sensitive. If it is, a
-    // capitalised Base44 address slips past the collision check and the same
-    // person ends up as two accounts.
-    const report = await previewBundle({
-      User: [
-        { id: 'base44-owner-cased', email: OWNER_EMAIL.toUpperCase(), full_name: 'Owner', role: 'admin', base_role: 'owner', updated_date: '2026-08-17T12:00:00.000Z' },
-      ],
-    });
-
-    expect(report.can_apply, 'a case variant of an existing address is the same person').toBe(false);
-    expect(report.id_collisions.length).toBeGreaterThan(0);
-  });
-
-  it('detects a collision when the Base44 address carries stray whitespace', async () => {
-    const report = await previewBundle({
-      User: [
-        { id: 'base44-owner-spaced', email: `  ${OWNER_EMAIL} `, role: 'admin', base_role: 'owner', updated_date: '2026-08-17T12:00:00.000Z' },
-      ],
-    });
-    expect(report.can_apply).toBe(false);
+    expect(rows[0].n).toBe(2);
   });
 
   // ── Imported historical records must not become live authorization ───────

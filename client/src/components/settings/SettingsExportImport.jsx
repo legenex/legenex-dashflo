@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { systemExport } from '@/functions/systemExport';
 import { systemImport } from '@/functions/systemImport';
@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Progress } from '@/components/ui/progress';
 import { MigrationProgress } from '@/components/settings/MigrationProgress';
+import { MigrationPreviewReport } from '@/components/settings/MigrationPreviewReport';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
@@ -94,6 +95,17 @@ export default function SettingsExportImport() {
   // It survives the end of the run so a failure keeps the stage it died at on
   // screen next to the error.
   const [importProgress, setImportProgress] = useState(null);
+  // The progress panel already worked. What did not work is that on a long
+  // page the operator started an import that runs for minutes and saw nothing,
+  // because the panel sits below the fold. Bringing it into view once, when the
+  // run starts, is the whole fix: no second indicator competing with the first,
+  // and no change to the layout for anyone who could already see it.
+  const progressRef = useRef(null);
+  const revealProgress = () => {
+    const node = progressRef.current;
+    if (!node || typeof node.scrollIntoView !== 'function') return;
+    node.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  };
 
   const { data: counts, isLoading: countsLoading } = useQuery({
     queryKey: ['system-export-counts'],
@@ -248,6 +260,8 @@ export default function SettingsExportImport() {
       done: false,
       failed: false,
     });
+    // After the panel has been committed, not before it exists.
+    if (typeof window !== 'undefined') window.requestAnimationFrame?.(revealProgress);
 
     try {
       const result = await systemImport({
@@ -502,34 +516,18 @@ export default function SettingsExportImport() {
             </div>
           )}
 
-          {importProgress && <MigrationProgress state={importProgress} />}
+          <div ref={progressRef} className="scroll-mt-4">
+            {importProgress && <MigrationProgress state={importProgress} />}
+          </div>
 
           {bundlePreview && (
             <div className="rounded-lg border border-border bg-popover p-4">
-              <div className="flex items-center gap-2">
+              <div className="mb-3 flex items-center gap-2">
                 {bundlePreview.can_apply ? <CheckCircle2 className="h-4 w-4 text-primary" /> : <AlertTriangle className="h-4 w-4 text-chart-3" />}
                 <span className="text-[13px] font-semibold text-foreground">Migration preview</span>
                 <Badge>{bundlePreview.kind}</Badge>
               </div>
-              <div className="mt-3 grid grid-cols-2 gap-x-6 gap-y-1 text-[12px] text-muted-foreground sm:grid-cols-4">
-                <div>Version <span className="text-foreground">{bundlePreview.package_version}</span></div>
-                <div>Entities <span className="text-foreground">{bundlePreview.entities_present?.length || 0}</span></div>
-                <div>Records <span className="text-foreground">{bundlePreview.records_present || 0}</span></div>
-                <div>Create <span className="text-foreground">{bundlePreview.records_to_create || 0}</span></div>
-                <div>Update <span className="text-foreground">{bundlePreview.records_to_update || 0}</span></div>
-                <div>Preserve <span className="text-foreground">{bundlePreview.records_to_preserve || 0}</span></div>
-                <div>Conflicts <span className="text-foreground">{bundlePreview.conflict_count || 0}</span></div>
-                <div>Missing entities <span className="text-foreground">{bundlePreview.entities_missing?.length || 0}</span></div>
-              </div>
-              <div className="mt-2 text-[12px] text-muted-foreground">
-                Credential-bearing entities found: {Object.keys(bundlePreview.credential_bearing_entities || {}).join(', ') || 'none'}.
-                No credential values are shown.
-              </div>
-              {!bundlePreview.can_apply && (
-                <div className="mt-3 text-[12px] text-destructive">
-                  Apply is blocked: {(bundlePreview.schema_incompatibilities?.length || 0)} schema issue(s), {(bundlePreview.relationship_problems?.length || 0)} relationship issue(s), and {(bundlePreview.id_collisions?.length || 0)} ID collision(s).
-                </div>
-              )}
+              <MigrationPreviewReport report={bundlePreview} />
               {bundlePreview.mode === 'preview' && bundlePreview.can_apply && (
                 <div className="mt-4 space-y-3 border-t border-border pt-3">
                   <label className="flex items-start gap-2 text-[12px] text-muted-foreground">

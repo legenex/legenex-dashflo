@@ -176,9 +176,20 @@ describe.skipIf(!reachable)('owner migration preview over HTTP', () => {
     expect(body.entities_present).toContain('Supplier');
     expect(body.records_present).toBe(1);
     // Everything the panel reads has to be present, or it draws an empty card.
-    for (const field of ['records_to_create', 'records_to_update', 'records_to_preserve', 'conflict_count', 'can_apply']) {
+    for (const field of [
+      'records_to_create', 'records_to_update', 'records_to_preserve', 'conflict_count', 'can_apply',
+      'reconciliation', 'entity_reconciliation', 'explicit_exclusions', 'resolved_id_remaps',
+      'id_collisions', 'id_collision_count', 'relationship_issues', 'relationship_issue_count',
+      'unresolved_records', 'unresolved_count', 'hard_blockers', 'hard_blocker_count',
+    ]) {
       expect(body, field).toHaveProperty(field);
     }
+    // The reconciliation reaches the browser already balanced, so the panel
+    // reports arithmetic rather than performing it.
+    const r = body.reconciliation;
+    expect(r.planned_creates + r.planned_updates + r.planned_preserves + r.explicit_exclusions + r.unresolved)
+      .toBe(r.exported_records);
+    expect(r.balanced).toBe(true);
   });
 
   it('never returns a decrypted credential value in the preview body', async () => {

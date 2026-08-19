@@ -143,8 +143,56 @@ describe('migration format contract parity', () => {
   // drift, so the two copies are compared here rather than trusted.
   it('client source and generated server catalog declare the same contract', async () => {
     const client = await import('../../client/src/lib/systemTransfer.js');
+    const server = await import('../src/functions/systemTransfer.generated.js');
     expect(client.MIGRATION_FORMAT).toEqual(MIGRATION_FORMAT);
     expect(client.MIGRATION_CRYPTO).toEqual(MIGRATION_CRYPTO);
+    // The identity and exclusion catalog decides which DashFlo record a source
+    // record becomes and what is deliberately left behind. A copy of it that
+    // drifts would give the two halves of the system different answers.
+    for (const name of [
+      'REFS', 'NATURAL_KEYS', 'MIGRATION_ENTITY_ORDER', 'ENTITY_ORDER',
+      'MIGRATION_DROP_FIELDS', 'MIGRATION_TARGET_PROTECTED_FIELDS', 'MIGRATION_EXCLUSION_RULES',
+      'MIGRATION_SECRETS_EXPECTED', 'IMPORT_FORCE',
+    ]) {
+      expect(client[name], name).toEqual(server[name]);
+    }
+  });
+
+  it('never names a credential field as a natural key', async () => {
+    const server = await import('../src/functions/systemTransfer.generated.js');
+    const secretish = /(auth|key|secret|token|password|passwd|pwd|bearer|sig|signature|credential)/i;
+    for (const [entity, field] of Object.entries(server.NATURAL_KEYS)) {
+      expect(secretish.test(field), `${entity}.${field}`).toBe(false);
+    }
+  });
+
+  it('declares every reference that can move, so a remap stays transitive', async () => {
+    // A record id only changes when a natural key match moves it, so the
+    // entities that can move are exactly NATURAL_KEYS. Any field pointing at one
+    // of them that is not declared here would be left pointing at an id that no
+    // longer exists after the remap.
+    const server = await import('../src/functions/systemTransfer.generated.js');
+    const remappable = new Set(Object.keys(server.NATURAL_KEYS));
+    const declared = new Set();
+    for (const [entity, refs] of Object.entries(server.REFS)) {
+      for (const [field, ref] of Object.entries(refs)) {
+        if (ref.kind === 'id' || ref.kind === 'idsJson') declared.add(`${entity}.${field}`);
+      }
+    }
+    for (const name of [
+      'AdSpend.supplier_id', 'BuyerApiKey.buyer_id', 'ChatConversation.user_id', 'ChatMemory.user_id',
+      'Lead.buyer_record_id', 'MetaSyncRun.supplier_id', 'SystemKey.owner_user_id',
+      'StateChangeEvent.triggered_by_buyer_id', 'StateChangeEvent.triggered_by_user_id',
+      'StateChangeEvent.notified_supplier_ids',
+    ]) {
+      expect(declared.has(name), `${name} must be declared`).toBe(true);
+      const [entity, field] = name.split('.');
+      expect(remappable.has(server.REFS[entity][field].target), name).toBe(true);
+    }
+    // Lead.buyer_id stays a code. It holds buyer codes in live data despite its
+    // name, and remapping it would destroy attribution.
+    expect(server.REFS.Lead.buyer_id.kind).toBe('code');
+    expect(server.REFS.Lead.campaign_id.kind).toBe('code');
   });
 
   it('the emitted spec stays inside the accepted policy', () => {

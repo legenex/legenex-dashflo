@@ -251,6 +251,9 @@ export const REFS = {
   Invoice: { buyer_id: { kind: 'id', target: 'Buyer' } },
   Lead: {
     buyer_id: { kind: 'code' },
+    // Task R1. Added additively beside the overloaded legacy buyer_id, and
+    // unlike it this one is always a Buyer record id, so it is remapped.
+    buyer_record_id: { kind: 'id', target: 'Buyer' },
     campaign_id: { kind: 'code' },
     supplier_key_id: { kind: 'id', target: 'ApiKey' },
     lead_id: { kind: 'code' },
@@ -304,6 +307,34 @@ export const REFS = {
     linked_supplier_id: { kind: 'id', target: 'Supplier' },
   },
   WalletTransaction: { buyer_id: { kind: 'id', target: 'Buyer' } },
+
+  // ── References that exist so remapping stays transitive ───────────────────
+  //
+  // A record id only ever changes when the importer matches a source record to
+  // an existing DashFlo record through a natural key, so the entities whose ids
+  // can move are exactly the ones in NATURAL_KEYS. Every field anywhere in the
+  // catalog that points at one of those entities has to be declared here, or
+  // remapping the parent leaves the child pointing at an id that no longer
+  // exists. The block above was written for parent/child structure; this one is
+  // written for that specific transitive property.
+  //
+  // Deliberately NOT declared: polymorphic id fields whose target depends on a
+  // sibling column (KeyAuditEvent.subject_id with subject_type,
+  // DistributionAudit.entity_id, CapCounter.scope_id), and external system
+  // identifiers that merely end in _id (Meta ad_account_id, Stripe and Xero
+  // customer ids, Meta campaign ids). Neither is a DashFlo record id and
+  // rewriting either would corrupt attribution.
+  AdSpend: { supplier_id: { kind: 'id', target: 'Supplier' } },
+  BuyerApiKey: { buyer_id: { kind: 'id', target: 'Buyer' } },
+  ChatConversation: { user_id: { kind: 'id', target: 'User' } },
+  ChatMemory: { user_id: { kind: 'id', target: 'User' } },
+  MetaSyncRun: { supplier_id: { kind: 'id', target: 'Supplier' } },
+  SystemKey: { owner_user_id: { kind: 'id', target: 'User' } },
+  StateChangeEvent: {
+    triggered_by_buyer_id: { kind: 'id', target: 'Buyer' },
+    triggered_by_user_id: { kind: 'id', target: 'User' },
+    notified_supplier_ids: { kind: 'idsJson', target: 'Supplier' },
+  },
 };
 
 // Natural keys give idempotent re-import: match on these before creating, so a
@@ -369,9 +400,85 @@ export const MIGRATION_DROP_RECORD = {
 };
 
 export const MIGRATION_DROP_FIELDS = {
+  // Distribution mode is set by distributionSetMode and by nothing else. It was
+  // already stripped from an outgoing export by FIELD_STRIP, but that is the
+  // wrong end: it is the incoming direction that could flip a live DashFlo
+  // instance into another system's distribution state. Dropped here so neither
+  // bundle kind can carry it, on a create or on an update.
+  AppSettings: ['distribution_mode'],
   Invitation: ['token', 'invite_token', 'accept_token'],
   User: ['password', 'password_hash', 'session_token', 'refresh_token'],
 };
+
+// ── Target state the migration is never allowed to overwrite ────────────────
+//
+// These fields belong to the DashFlo record, not to the source record. When the
+// importer matches a source record onto an existing DashFlo row, the DashFlo
+// value wins for every field named here and the source value is discarded.
+//
+// User is the case that matters. middleware/auth.js resolves the caller with
+// repo('User').get(sub), so base_role, role and permissions on the User entity
+// row ARE the live authorization, and linked_buyer_id / linked_supplier_id are
+// what scope a portal account to one party. A source row carrying a different
+// base_role would silently demote or promote a real account the moment identity
+// matching found it, which is precisely what lib/googleAccountLink.js refuses to
+// let a Google login do. The migration gets the same rule.
+//
+// Everything else about the user still migrates: name, timezone, and any
+// profile field the source carries. Only the authorization surface is pinned.
+// email is here for a different reason than the rest. It is mirrored in the
+// auth_credentials table, which the importer cannot touch, so letting a source
+// record rewrite the entity row would leave one half of a two-place identity
+// pointing at a different address from the other. lib/googleAccountLink.js
+// refuses to let a Google login rewrite it for the same reason. A user the
+// package creates still gets the address the package carries.
+export const MIGRATION_TARGET_PROTECTED_FIELDS = {
+  User: ['email', 'role', 'base_role', 'permissions', 'linked_buyer_id', 'linked_supplier_id'],
+};
+
+// ── Explicit exclusions ─────────────────────────────────────────────────────
+//
+// Every record or field the migration deliberately leaves behind, with the rule
+// that authorises it. The preview reports from this table, so an exclusion
+// cannot be silent: if something is dropped it is named here with a count and a
+// reason, and if it is not named here it is not dropped.
+//
+// scope 'record' removes whole records and therefore changes the reconciliation
+// totals. scope 'field' removes named fields and leaves the record itself fully
+// accounted for.
+export const MIGRATION_EXCLUSION_RULES = [
+  {
+    key: 'integration_config.meta_oauth_state',
+    entity: 'IntegrationConfig',
+    scope: 'record',
+    reason: 'Transient Meta OAuth handshake state. It expires in minutes and describes a browser round trip that has already finished.',
+    rule: 'docs/BASE44-BOUNDARY.md: the encrypted migration export drops meta_oauth_state records.',
+  },
+  {
+    key: 'user.authentication',
+    entity: 'User',
+    scope: 'field',
+    fields: ['password', 'password_hash', 'session_token', 'refresh_token'],
+    reason: 'Authentication material is DashFlo owned. Sessions and password hashes from the source system are not portable and must never be reinstated by an import.',
+    rule: 'docs/BASE44-BOUNDARY.md: user password, hash, session and refresh fields are dropped. AGENTS.md section 19.',
+  },
+  {
+    key: 'invitation.tokens',
+    entity: 'Invitation',
+    scope: 'field',
+    fields: ['token', 'invite_token', 'accept_token'],
+    reason: 'An acceptance token is a live authorization grant. Imported invitations are history and are additionally marked as such so they cannot authorize a sign in.',
+    rule: 'docs/BASE44-BOUNDARY.md: invitation tokens are dropped. AGENTS.md section 19.',
+  },
+  {
+    key: 'app_settings.distribution_mode',
+    entity: 'AppSettings',
+    scope: 'field',
+    fields: ['distribution_mode'],
+    reason: 'Distribution mode is live operational control of this instance and is set only by distributionSetMode.',
+    rule: 'AGENTS.md section 25: distribution mode control is an integrator-only surface.',
+  },
+];
 
 export const MIGRATION_SECRETS_EXPECTED = {
   ApiKey: ['key'],

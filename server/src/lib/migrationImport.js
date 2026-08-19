@@ -8,8 +8,6 @@ import { hashApiKey, keyPrefixOf, translateCredentialNamespace, isLegacyNamespac
 import { MIGRATED_INVITATION_FIELD } from './googleAccountLink.js';
 import { fingerprint } from './base44Sync.js';
 import {
-  ALL_ENTITIES,
-  ENTITY_ORDER,
   IMPORT_FORCE,
   MIGRATION_CRYPTO,
   MIGRATION_FORMAT,
@@ -17,10 +15,17 @@ import {
   MIGRATION_DROP_RECORD,
   MIGRATION_ENTITY_ORDER,
   MIGRATION_SECRETS_EXPECTED,
-  NATURAL_KEYS,
-  REFS,
+  MIGRATION_TARGET_PROTECTED_FIELDS,
   REDACTED,
 } from '../functions/systemTransfer.generated.js';
+import {
+  DIAGNOSTIC_SAMPLE_LIMIT,
+  ISSUE_SEVERITY,
+  RECORD_DISPOSITION,
+  planIdentity,
+  planRelationships,
+  rewriteReferences,
+} from './migrationPlan.js';
 
 const MAX_RECORDS = 1_000_000;
 const MAX_CHUNKS = 20_000;
@@ -478,7 +483,24 @@ function applyCredentialNamespace(kind, entity, data, existingData = {}, meta = 
   return wasLegacy;
 }
 
-export function prepareMigrationRecord(kind, entity, source, existingData = {}) {
+/* Shape one source record into the DashFlo row that will be written for it.
+ *
+ * `remap` is the completed source id -> target id map for the whole package.
+ * Passing it in rather than resolving references here is what makes the rewrite
+ * independent of the order entities are processed in: by the time any record is
+ * shaped, every id in the package already has its final target.
+ *
+ * `existingData` is the matched DashFlo row's data, empty for a create. It does
+ * three separate jobs, which is why it is one argument: it restores redacted
+ * credentials on an ordinary import, it keeps a credential namespace stable
+ * across reruns, and it pins the fields DashFlo owns.
+ */
+export function prepareMigrationRecord(kind, entity, source, existingData = {}, options = {}) {
+  const remap = options.remap || null;
+  // Whether this record resolved onto a DashFlo record that already exists.
+  // Defaulted from existingData so the three and four argument callers behave
+  // exactly as they did, and passed explicitly by the planner and the apply.
+  const matched = options.matched ?? Object.keys(existingData || {}).length > 0;
   const stripped = stripTransient(entity, source);
   if (!stripped) return null;
   let { meta, data } = splitRecord(stripped);
@@ -509,19 +531,35 @@ export function prepareMigrationRecord(kind, entity, source, existingData = {}) 
     data[MIGRATED_INVITATION_FIELD] = true;
   }
 
-  return { meta, data, preserved, namespaceMigrated };
-}
-
-function recordIds(value, kind) {
-  if (value == null || value === '') return [];
-  if (kind === 'id') return [String(value)];
-  if (kind !== 'idsJson') return [];
-  try {
-    const parsed = typeof value === 'string' ? JSON.parse(value) : value;
-    return Array.isArray(parsed) ? parsed.filter(Boolean).map(String) : [];
-  } catch {
-    return [];
+  // Every declared record reference is moved onto its final target id. Without
+  // this, matching a colliding parent through its natural key would relink the
+  // parent and leave every child still pointing at the source id.
+  if (remap && remap.size) {
+    ({ data } = rewriteReferences(entity, data, remap));
   }
+
+  // Fields DashFlo owns on a record it already holds. See
+  // MIGRATION_TARGET_PROTECTED_FIELDS: for User these are the live authorization
+  // fields that middleware/auth.js reads straight off the entity row, so a
+  // source value here would silently change what a real account may do.
+  const protectedFields = matched ? (MIGRATION_TARGET_PROTECTED_FIELDS[entity] || []) : [];
+  let targetProtected = false;
+  for (const field of protectedFields) {
+    // DashFlo owns the field including its absence. A source record that
+    // carries linked_buyer_id for an account DashFlo has never scoped to a
+    // buyer portal must not be able to introduce one.
+    if (field in existingData) {
+      if (data[field] === existingData[field]) continue;
+      data[field] = existingData[field];
+    } else if (field in data) {
+      delete data[field];
+    } else {
+      continue;
+    }
+    targetProtected = true;
+  }
+
+  return { meta, data, preserved, namespaceMigrated, targetProtected };
 }
 
 function publicCredentialCounts(normalized) {
@@ -557,228 +595,278 @@ function rowToExisting(row) {
   };
 }
 
-async function loadExisting(queryable, entity, ids) {
-  if (!ids.length) return new Map();
-  const { rows } = await queryable.query(
-    `SELECT id, data, created_by, created_date, updated_date FROM ${tableName(entity)} WHERE id = ANY($1::text[])`,
-    [ids],
-  );
-  return new Map(rows.map((row) => [String(row.id), rowToExisting(row)]));
-}
-
 function valuesDiffer(a, b) {
   return fingerprint(a || {}) !== fingerprint(b || {});
 }
 
-// ── Natural key comparison ──────────────────────────────────────────────────
-//
-// Which natural keys are compared case-insensitively, and which are compared
-// exactly.
-//
-// An email address is the same person whatever its capitalisation, so
-// `Owner@Example.com` arriving from Base44 must be recognised as the account
-// already stored as `owner@example.com` rather than created alongside it.
-//
-// Codes are not folded. Supplier `sid` and `source_code` carry compatibility
-// sensitive longest-prefix matching against inbound lead traffic, and buyer
-// and campaign codes appear in external systems. Folding those would change
-// which records are considered the same and is not a change to make quietly
-// inside a collision check. Whitespace is trimmed on every key, because
-// leading or trailing space in an identifier is never meaningful.
-const CASE_INSENSITIVE_NATURAL_KEYS = new Set(['User.email']);
+/* Disposition of one already-identified record.
+ *
+ * Shared by the preview and by the apply so the numbers on screen are the
+ * numbers the apply produces. Every matched record lands on exactly one of
+ * update or preserve, and an unmatched one on create. There is no fourth
+ * outcome: what used to be counted as "skipped" here was a record the importer
+ * deliberately left alone because DashFlo held something newer, which is a
+ * preserve, and calling it a skip is what made the totals impossible to
+ * reconcile.
+ */
+export function disposeRecord({ kind, entity, source, existing, shaped }) {
+  if (!existing) return { disposition: RECORD_DISPOSITION.CREATE, conflict: false, data: shaped.data };
 
-function foldsCase(entity, naturalKey) {
-  return CASE_INSENSITIVE_NATURAL_KEYS.has(`${entity}.${naturalKey}`);
+  const sourceDate = safeDate(source.updated_date);
+  const currentDate = safeDate(existing.updated_date);
+  const targetIsNewer = !sourceDate || (currentDate && currentDate > sourceDate);
+
+  if (targetIsNewer && valuesDiffer(shaped.data, existing.data)) {
+    // DashFlo moved after the export. Owner packages still carry the durable
+    // credentials across, because that is the one thing only they can supply,
+    // and nothing else about the record is touched.
+    const secrets = kind === 'owner' ? ownerSecretPatch(entity, shaped.data) : {};
+    if (Object.keys(secrets).length) {
+      return {
+        disposition: RECORD_DISPOSITION.UPDATE,
+        conflict: true,
+        data: { ...existing.data, ...secrets },
+        keepTargetTimestamp: true,
+      };
+    }
+    return { disposition: RECORD_DISPOSITION.PRESERVE, conflict: true, data: existing.data };
+  }
+
+  const merged = { ...existing.data, ...shaped.data };
+  if (!valuesDiffer(merged, existing.data)) {
+    return { disposition: RECORD_DISPOSITION.PRESERVE, conflict: false, data: existing.data };
+  }
+  return { disposition: RECORD_DISPOSITION.UPDATE, conflict: false, data: merged };
 }
 
-function naturalKeyFolder(entity, naturalKey) {
-  return foldsCase(entity, naturalKey)
-    ? (value) => value.trim().toLowerCase()
-    : (value) => value.trim();
-}
+/* Build the complete plan and the preview report for a normalized package.
+ *
+ * The order is the point. Identity for every record in the package is settled
+ * first, so the source id -> target id map is complete before anything reads a
+ * reference; then records are shaped against that finished map; then references
+ * are resolved against final target ids. Relationship validation used to run on
+ * raw source ids and could therefore never see a remap, which is why matching a
+ * colliding parent had no way to fix its children.
+ */
+export async function buildMigrationPlan(normalized, queryable = pool) {
+  const plan = await planIdentity(normalized, queryable);
 
-// The SQL side of the same fold, so the stored value and the incoming value
-// are compared the same way.
-function foldSql(entity, naturalKey, expression) {
-  return foldsCase(entity, naturalKey) ? `lower(btrim(${expression}))` : `btrim(${expression})`;
-}
-
-export async function analyzeMigration(normalized, queryable = pool) {
-  const expected = normalized.kind === 'owner' ? MIGRATION_ENTITY_ORDER : ALL_ENTITIES;
-  const presentNames = Object.keys(normalized.entities);
-  const schemaIncompatibilities = [];
-  const duplicateIds = [];
-  const idCollisions = [];
-  const newerConflicts = [];
-  const relationshipProblems = [];
-  const entityResults = {};
-  const bundleIds = new Map();
   let recordsPresent = 0;
   let recordsToCreate = 0;
   let recordsToUpdate = 0;
   let recordsToPreserve = 0;
-  let skipped = 0;
+  let credentialsPreserved = 0;
+  let targetProtectedCount = 0;
+  const newerConflicts = [];
 
-  for (const entity of presentNames) {
+  for (const entity of plan.orderedNames) {
     const records = normalized.entities[entity] || [];
     recordsPresent += records.length;
-    if (!expected.includes(entity) || !entityExists(entity)) {
-      schemaIncompatibilities.push({ entity, reason: 'entity is not supported by this DashFlo schema' });
-      continue;
-    }
-    const ids = new Set();
-    for (const record of records) {
-      const id = String(record?.id || '').trim();
-      if (!id) schemaIncompatibilities.push({ entity, reason: 'record is missing its source id' });
-      else if (ids.has(id)) duplicateIds.push({ entity, id });
-      else ids.add(id);
-    }
-    bundleIds.set(entity, ids);
-  }
+    const entityPlan = plan.entityPlans.get(entity);
+    if (!entityPlan?.supported) continue;
 
-  for (const entity of presentNames.filter((name) => expected.includes(name) && entityExists(name))) {
-    const records = normalized.entities[entity] || [];
-    const ids = records.map((record) => String(record?.id || '')).filter(Boolean);
-    const existing = await loadExisting(queryable, entity, ids);
-    const stats = { present: records.length, create: 0, update: 0, preserve: 0, skip: 0, conflict: 0 };
-
-    const naturalKey = NATURAL_KEYS[entity];
-    if (naturalKey) {
-      const fold = naturalKeyFolder(entity, naturalKey);
-      const values = [...new Set(
-        records.map((r) => r?.[naturalKey])
-          .filter((v) => v != null && String(v) !== '')
-          .map((v) => fold(String(v))),
-      )];
-      if (values.length) {
-        // Both sides are folded before comparison. An address is the same
-        // person whatever its capitalisation, so comparing the raw strings let
-        // a capitalised Base44 address slip past this check and become a
-        // second account for somebody who already had one.
-        const { rows } = await queryable.query(
-          `SELECT id, ${foldSql(entity, naturalKey, 'data->>$1')} AS natural_value
-             FROM ${tableName(entity)}
-            WHERE ${foldSql(entity, naturalKey, 'data->>$1')} = ANY($2::text[])`,
-          [naturalKey, values],
-        );
-        const sourceByValue = new Map(records.map((r) => [fold(String(r[naturalKey] || '')), String(r.id || '')]));
-        for (const row of rows) {
-          const sourceId = sourceByValue.get(String(row.natural_value));
-          if (sourceId && sourceId !== String(row.id)) {
-            idCollisions.push({ entity, field: naturalKey, source_id: sourceId, existing_id: String(row.id) });
-          }
-        }
-      }
-
-      // Two records inside the same bundle that fold to one natural key are
-      // the same person or thing arriving twice. Creating both would produce
-      // the duplicate this check exists to prevent, and neither would collide
-      // with anything already stored, so the query above cannot see it.
-      const seen = new Map();
-      for (const record of records) {
-        const raw = record?.[naturalKey];
-        if (raw == null || String(raw) === '') continue;
-        const folded = fold(String(raw));
-        const id = String(record?.id || '');
-        const prior = seen.get(folded);
-        if (prior && prior !== id) {
-          idCollisions.push({ entity, field: naturalKey, source_id: id, existing_id: prior, within_bundle: true });
-        } else {
-          seen.set(folded, id);
-        }
-      }
-    }
+    const identity = plan.identity.get(entity) || new Map();
+    const existingRows = plan.existingRows.get(entity) || new Map();
 
     for (const source of records) {
-      const id = String(source?.id || '').trim();
-      if (!id) { stats.skip += 1; skipped += 1; continue; }
-      const current = existing.get(id);
-      const shaped = prepareMigrationRecord(normalized.kind, entity, source, current?.data || {});
-      if (!shaped) { stats.skip += 1; skipped += 1; continue; }
-      if (!current) {
-        stats.create += 1;
-        recordsToCreate += 1;
-        continue;
-      }
-      if (shaped.preserved) { stats.preserve += 1; recordsToPreserve += 1; }
-      const sourceDate = safeDate(source.updated_date);
-      const currentDate = safeDate(current.updated_date);
-      const newer = !sourceDate || (currentDate && currentDate > sourceDate);
-      if (newer && valuesDiffer(shaped.data, current.data)) {
-        stats.conflict += 1;
-        newerConflicts.push({ entity, id, reason: 'DashFlo record is newer than the source record' });
-        if (normalized.kind === 'owner' && Object.keys(ownerSecretPatch(entity, shaped.data)).length) {
-          stats.update += 1;
-          recordsToUpdate += 1;
-        } else {
-          stats.skip += 1;
-          skipped += 1;
-        }
-      } else if (valuesDiffer(shaped.data, current.data)) {
-        stats.update += 1;
-        recordsToUpdate += 1;
-      } else {
-        stats.preserve += 1;
-        recordsToPreserve += 1;
-      }
-    }
-    entityResults[entity] = stats;
-  }
+      const sourceId = String(source?.id || '').trim();
+      const resolved = identity.get(sourceId);
+      if (!resolved) continue; // excluded by rule, or unresolved: already accounted for.
 
-  const unresolvedByTarget = new Map();
-  for (const [entity, records] of Object.entries(normalized.entities)) {
-    if (!entityExists(entity)) continue;
-    for (const record of records) {
-      for (const [field, ref] of Object.entries(REFS[entity] || {})) {
-        if (ref.kind !== 'id' && ref.kind !== 'idsJson') continue;
-        for (const id of recordIds(record[field], ref.kind)) {
-          if (bundleIds.get(ref.target)?.has(id)) continue;
-          const set = unresolvedByTarget.get(ref.target) || new Set();
-          set.add(id);
-          unresolvedByTarget.set(ref.target, set);
-        }
+      const existing = existingRows.get(sourceId) || null;
+      const shaped = prepareMigrationRecord(normalized.kind, entity, source, existing?.data || {}, { remap: plan.remap, matched: Boolean(existing) });
+      if (!shaped) continue;
+      if (shaped.preserved) credentialsPreserved += 1;
+      if (shaped.targetProtected) targetProtectedCount += 1;
+
+      const outcome = disposeRecord({ kind: normalized.kind, entity, source, existing, shaped });
+      if (outcome.conflict && newerConflicts.length < DIAGNOSTIC_SAMPLE_LIMIT) {
+        newerConflicts.push({ entity, id: sourceId, reason: 'DashFlo record is newer than the source record' });
       }
-    }
-  }
-  for (const [target, ids] of unresolvedByTarget) {
-    if (!entityExists(target)) continue;
-    const existing = await loadExisting(queryable, target, [...ids]);
-    for (const id of ids) {
-      if (!existing.has(id)) relationshipProblems.push({ target, id, reason: 'referenced record is absent from both bundle and DashFlo' });
+      if (outcome.conflict) entityPlan.conflicts = (entityPlan.conflicts || 0) + 1;
+
+      if (outcome.disposition === RECORD_DISPOSITION.CREATE) { entityPlan.create += 1; recordsToCreate += 1; }
+      else if (outcome.disposition === RECORD_DISPOSITION.UPDATE) { entityPlan.update += 1; recordsToUpdate += 1; }
+      else { entityPlan.preserve += 1; recordsToPreserve += 1; }
     }
   }
 
-  const hardErrors = schemaIncompatibilities.length + duplicateIds.length + idCollisions.length + relationshipProblems.length;
-  const credentialEntities = publicCredentialCounts(normalized);
-  return {
+  const relationships = await planRelationships(normalized, plan, queryable);
+
+  const conflictCount = [...plan.entityPlans.values()].reduce((sum, e) => sum + (e.conflicts || 0), 0);
+  const declaredRecords = Object.values(normalized.declaredCounts || {})
+    .reduce((sum, value) => sum + (Number(value) >= 0 ? Number(value) : 0), 0);
+
+  const accounted = recordsToCreate + recordsToUpdate + recordsToPreserve
+    + plan.excludedRecordCount + plan.unresolvedCount;
+
+  const reconciliation = {
+    declared_records: declaredRecords,
+    exported_records: recordsPresent,
+    planned_creates: recordsToCreate,
+    planned_updates: recordsToUpdate,
+    planned_preserves: recordsToPreserve,
+    explicit_exclusions: plan.excludedRecordCount,
+    unresolved: plan.unresolvedCount,
+    // An attribute of the creates, updates and preserves above, never a sixth
+    // bucket. Adding it to the total would count every remapped record twice.
+    id_remaps: plan.remapCount,
+    accounted_records: accounted,
+    unaccounted_records: recordsPresent - accounted,
+    balanced: accounted === recordsPresent,
+    credentials_preserved: credentialsPreserved,
+    target_protected_records: targetProtectedCount,
+  };
+
+  const entityReconciliation = plan.orderedNames.map((entity) => {
+    const e = plan.entityPlans.get(entity);
+    return {
+      entity,
+      supported: e.supported,
+      declared: e.declared,
+      exported: e.decrypted,
+      create: e.create,
+      update: e.update,
+      preserve: e.preserve,
+      excluded: e.excluded,
+      unresolved: e.unresolved,
+      remapped: e.remapped,
+      balanced: e.create + e.update + e.preserve + e.excluded + e.unresolved === e.decrypted,
+    };
+  });
+
+  const hardBlockers = [];
+  for (const issue of plan.schemaIncompatibilities.slice(0, DIAGNOSTIC_SAMPLE_LIMIT)) {
+    hardBlockers.push({ kind: 'schema', entity: issue.entity, detail: issue.reason });
+  }
+  for (const duplicate of plan.duplicateIds.slice(0, DIAGNOSTIC_SAMPLE_LIMIT)) {
+    hardBlockers.push({ kind: 'duplicate_source_id', entity: duplicate.entity, source_id: duplicate.id, detail: 'the same source id appears more than once in this package' });
+  }
+  for (const collision of plan.collisions) {
+    if (collision.severity !== ISSUE_SEVERITY.BLOCKER) continue;
+    hardBlockers.push({ kind: 'id_collision', entity: collision.entity, source_id: collision.source_id, detail: collision.detail });
+  }
+  for (const issue of relationships.blockers.slice(0, DIAGNOSTIC_SAMPLE_LIMIT)) {
+    hardBlockers.push({
+      kind: 'relationship',
+      entity: issue.entity,
+      field: issue.field,
+      source_id: issue.sample_source_ids[0] || null,
+      detail: `${issue.reason}, and the DashFlo schema requires ${issue.entity}.${issue.field}`,
+    });
+  }
+  if (!reconciliation.balanced) {
+    hardBlockers.push({
+      kind: 'reconciliation',
+      entity: null,
+      detail: `${reconciliation.unaccounted_records} exported record(s) have no disposition`,
+    });
+  }
+
+  // Kept under its previous shape for the audit row writer and any older
+  // client, with the new buckets added beside the old ones.
+  const entityResults = {};
+  for (const entity of plan.orderedNames) {
+    const e = plan.entityPlans.get(entity);
+    entityResults[entity] = {
+      present: e.decrypted,
+      create: e.create,
+      update: e.update,
+      preserve: e.preserve,
+      skip: e.excluded + e.unresolved,
+      conflict: e.conflicts || 0,
+      excluded: e.excluded,
+      unresolved: e.unresolved,
+      remapped: e.remapped,
+    };
+  }
+
+  const resolvedRemaps = [];
+  for (const [entity, entityRemap] of plan.remap) {
+    const identity = plan.identity.get(entity) || new Map();
+    for (const [sourceId, targetId] of entityRemap) {
+      if (resolvedRemaps.length >= DIAGNOSTIC_SAMPLE_LIMIT) break;
+      const resolved = identity.get(sourceId);
+      resolvedRemaps.push({
+        entity,
+        source_id: sourceId,
+        target_id: targetId,
+        matched_by: resolved?.matchedBy || 'natural_key',
+        natural_key_field: resolved?.naturalKeyField || null,
+      });
+    }
+  }
+
+  const report = {
     package_version: normalized.packageVersion,
     source_application: normalized.sourceApplication,
     export_timestamp: normalized.exportedAt,
-    entities_present: presentNames,
-    entities_missing: expected.filter((name) => !presentNames.includes(name)),
+    entities_present: plan.presentNames,
+    entities_missing: plan.supportedNames.filter((name) => !plan.presentNames.includes(name)),
+
     records_present: recordsPresent,
     records_to_create: recordsToCreate,
     records_to_update: recordsToUpdate,
     records_to_preserve: recordsToPreserve,
-    records_to_skip: skipped,
-    credential_bearing_entities: credentialEntities,
-    relationship_problems: relationshipProblems.slice(0, SAMPLE_LIMIT),
-    schema_incompatibilities: schemaIncompatibilities.slice(0, SAMPLE_LIMIT),
-    duplicate_ids: duplicateIds.slice(0, SAMPLE_LIMIT),
-    id_collisions: idCollisions.slice(0, SAMPLE_LIMIT),
-    conflicts_with_newer_dashflo_data: newerConflicts.slice(0, SAMPLE_LIMIT),
-    conflict_count: newerConflicts.length,
+    records_to_skip: plan.excludedRecordCount + plan.unresolvedCount,
+
+    reconciliation,
+    entity_reconciliation: entityReconciliation,
+    explicit_exclusions: plan.exclusions,
+    resolved_id_remaps: resolvedRemaps,
+    id_remap_count: plan.remapCount,
+
+    id_collisions: plan.collisions,
+    id_collision_count: Object.values(plan.collisionCounts).reduce((a, b) => a + b, 0),
+    id_collision_types: plan.collisionCounts,
+
+    relationship_issues: relationships.issues.slice(0, DIAGNOSTIC_SAMPLE_LIMIT),
+    relationship_issue_count: relationships.issues.length,
+    relationship_resolved: relationships.resolved,
+
+    unresolved_records: plan.unresolved,
+    unresolved_count: plan.unresolvedCount,
+    hard_blockers: hardBlockers.slice(0, DIAGNOSTIC_SAMPLE_LIMIT),
+    hard_blocker_count: hardBlockers.length,
+
+    credential_bearing_entities: publicCredentialCounts(normalized),
+
+    // Kept under their previous names so an older client, the audit row writer
+    // and the existing status copy keep working unchanged.
+    relationship_problems: relationships.issues
+      .filter((issue) => issue.severity === ISSUE_SEVERITY.BLOCKER)
+      .slice(0, DIAGNOSTIC_SAMPLE_LIMIT)
+      .map((issue) => ({ target: issue.referenced_entity, id: issue.referenced_source_id, reason: issue.reason })),
+    schema_incompatibilities: plan.schemaIncompatibilities.slice(0, DIAGNOSTIC_SAMPLE_LIMIT),
+    duplicate_ids: plan.duplicateIds.slice(0, DIAGNOSTIC_SAMPLE_LIMIT),
+    conflicts_with_newer_dashflo_data: newerConflicts,
+    conflict_count: conflictCount,
     entity_results: entityResults,
     declared_count_discrepancies: normalized.countDiscrepancies || [],
-    can_apply: hardErrors === 0,
+
+    can_apply: hardBlockers.length === 0,
   };
+
+  return { report, plan };
 }
 
-async function writeProvenance(client, entity, id, updatedDate, data, modified = false) {
+export async function analyzeMigration(normalized, queryable = pool) {
+  const { report } = await buildMigrationPlan(normalized, queryable);
+  return report;
+}
+
+/* Record which source id became which DashFlo id.
+ *
+ * base44_id is the id the source system used and dashflo_id is the row that was
+ * actually written, so a remap is durable and auditable rather than something
+ * only the preview knew about. They are equal for every record whose id did not
+ * move, which is almost all of them.
+ */
+async function writeProvenance(client, entity, sourceId, targetId, updatedDate, data, modified = false) {
   await client.query(
     `INSERT INTO base44_record_provenance
        (entity, base44_id, dashflo_id, source_updated_date, dashflo_fingerprint, dashflo_modified, last_synced_at)
-     VALUES ($1, $2, $2, $3::timestamptz, $4, $5, now())
+     VALUES ($1, $2, $3, $4::timestamptz, $5, $6, now())
      ON CONFLICT (entity, base44_id) DO UPDATE SET
        dashflo_id = EXCLUDED.dashflo_id,
        source_updated_date = EXCLUDED.source_updated_date,
@@ -788,14 +876,26 @@ async function writeProvenance(client, entity, id, updatedDate, data, modified =
        conflict_reason = null,
        conflict_at = null,
        last_synced_at = now()`,
-    [entity, id, safeDate(updatedDate)?.toISOString() || null, fingerprint(data), modified],
+    [entity, sourceId, targetId, safeDate(updatedDate)?.toISOString() || null, fingerprint(data), modified],
   );
 }
 
-async function applyNormalized(normalized, report) {
+/* Apply a plan that a preview has already produced.
+ *
+ * The plan is not rebuilt here. Identity, the remap and every disposition were
+ * decided by buildMigrationPlan against the same target state inside the same
+ * request, and this walks that decision. That is what makes the preview counts a
+ * promise rather than an estimate: there is one identity decision path, not two
+ * that have to be kept in agreement.
+ *
+ * The row is still re-read FOR UPDATE and the disposition still recomputed
+ * against what the lock returns, so a concurrent write between the plan and the
+ * transaction cannot be overwritten unseen.
+ */
+async function applyNormalized(normalized, report, plan) {
   if (!report.can_apply) throw new MigrationValidationError('Migration cannot be applied until validation errors are resolved', 409);
   const result = {
-    created: 0, updated: 0, preserved: 0, skipped: 0, conflicts: 0, failed: 0,
+    created: 0, updated: 0, preserved: 0, skipped: 0, conflicts: 0, failed: 0, remapped: 0,
     // How many credentials were moved out of the legacy Legenex namespace on
     // this run. On a rerun of the same bundle this stays above zero (the
     // translation still applies) while created and updated fall to zero, which
@@ -807,80 +907,66 @@ async function applyNormalized(normalized, report) {
   await ensureBase44SyncSchema();
   await withTransaction(async (client) => {
     await client.query('SELECT pg_advisory_xact_lock($1)', [IMPORT_LOCK_ID]);
-    const ordered = [...Object.keys(normalized.entities)].sort((a, b) => {
-      const order = normalized.kind === 'owner' ? MIGRATION_ENTITY_ORDER : ENTITY_ORDER;
-      return order.indexOf(a) - order.indexOf(b);
-    });
 
-    for (const entity of ordered) {
+    for (const entity of plan.orderedNames) {
       if (!entityExists(entity)) continue;
+      const identity = plan.identity.get(entity);
+      if (!identity) continue;
       const table = tableName(entity);
-      const stats = { created: 0, updated: 0, preserved: 0, skipped: 0, conflicts: 0, failed: 0, credentials_namespaced: 0 };
+      const stats = {
+        created: 0, updated: 0, preserved: 0, skipped: 0, conflicts: 0, failed: 0,
+        remapped: 0, credentials_namespaced: 0,
+      };
+
       for (const source of normalized.entities[entity] || []) {
-        const id = String(source?.id || '').trim();
-        if (!id) { stats.skipped += 1; result.skipped += 1; continue; }
+        const sourceId = String(source?.id || '').trim();
+        const resolved = identity.get(sourceId);
+        // Excluded by an explicit rule, or left unresolved. can_apply already
+        // refused the second case, so what reaches here is an exclusion.
+        if (!resolved) { stats.skipped += 1; result.skipped += 1; continue; }
+        const targetId = resolved.targetId;
+
         const { rows } = await client.query(
           `SELECT id, data, created_by, created_date, updated_date FROM ${table} WHERE id = $1 FOR UPDATE`,
-          [id],
+          [targetId],
         );
         const current = rowToExisting(rows[0]);
-        const shaped = prepareMigrationRecord(normalized.kind, entity, source, current?.data || {});
+        const shaped = prepareMigrationRecord(normalized.kind, entity, source, current?.data || {}, { remap: plan.remap, matched: Boolean(current) });
         if (!shaped) { stats.skipped += 1; result.skipped += 1; continue; }
         if (shaped.namespaceMigrated) { stats.credentials_namespaced += 1; result.credentials_namespaced += 1; }
+        if (resolved.remapped) { stats.remapped += 1; result.remapped += 1; }
 
-        let data = shaped.data;
-        let action = current ? 'updated' : 'created';
-        let localNewerConflict = false;
-        if (current) {
-          const sourceDate = safeDate(source.updated_date);
-          const currentDate = safeDate(current.updated_date);
-          const newer = !sourceDate || (currentDate && currentDate > sourceDate);
-          if (newer && valuesDiffer(data, current.data)) {
-            localNewerConflict = true;
-            stats.conflicts += 1;
-            result.conflicts += 1;
-            if (normalized.kind === 'owner') {
-              const secrets = ownerSecretPatch(entity, data);
-              if (!Object.keys(secrets).length) {
-                stats.skipped += 1; result.skipped += 1; continue;
-              }
-              data = { ...current.data, ...secrets };
-              // Belt and braces. prepareMigrationRecord already translated and
-              // dropped the cleartext, so this branch should never see a raw
-              // key. If a future change reintroduces one, it is translated
-              // here too rather than being hashed in the old namespace.
-              if (CREDENTIAL_ENTITIES.has(entity) && data.key) {
-                const translated = translateCredentialNamespace(String(data.key));
-                data.key_hash = hashApiKey(translated);
-                data.key_prefix = keyPrefixOf(translated);
-                delete data.key;
-              }
-            } else {
-              stats.skipped += 1; result.skipped += 1; continue;
-            }
-          } else {
-            data = { ...current.data, ...data };
-          }
-          if (!valuesDiffer(data, current.data)) action = 'preserved';
+        const outcome = disposeRecord({ kind: normalized.kind, entity, source, existing: current, shaped });
+        let data = outcome.data;
+        if (outcome.conflict) { stats.conflicts += 1; result.conflicts += 1; }
+
+        // Belt and braces. prepareMigrationRecord already translated and dropped
+        // the cleartext, so no branch should reach here holding a raw key. If a
+        // future change reintroduces one it is translated rather than hashed in
+        // the old namespace.
+        if (CREDENTIAL_ENTITIES.has(entity) && data.key && CREDENTIAL_SHAPE[entity]?.dropRaw) {
+          const translated = translateCredentialNamespace(String(data.key));
+          data = { ...data, key_hash: hashApiKey(translated), key_prefix: keyPrefixOf(translated) };
+          delete data.key;
         }
 
-        if (action === 'created') {
+        if (outcome.disposition === RECORD_DISPOSITION.CREATE) {
           await client.query(
             `INSERT INTO ${table} (id, data, created_by, created_date, updated_date)
              VALUES ($1, $2::jsonb, $3, COALESCE($4::timestamptz, now()), COALESCE($5::timestamptz, now()))`,
-            [id, JSON.stringify(data), shaped.meta.created_by, safeDate(source.created_date)?.toISOString() || null,
+            [targetId, JSON.stringify(data), shaped.meta.created_by, safeDate(source.created_date)?.toISOString() || null,
               safeDate(source.updated_date)?.toISOString() || null],
           );
           stats.created += 1; result.created += 1;
-        } else if (action === 'updated') {
+        } else if (outcome.disposition === RECORD_DISPOSITION.UPDATE) {
           await client.query(
             `UPDATE ${table} SET data = $2::jsonb,
                created_by = COALESCE($3, created_by),
                created_date = COALESCE($4::timestamptz, created_date),
                updated_date = COALESCE($5::timestamptz, updated_date)
              WHERE id = $1`,
-            [id, JSON.stringify(data), shaped.meta.created_by, safeDate(source.created_date)?.toISOString() || null,
-              localNewerConflict
+            [targetId, JSON.stringify(data), shaped.meta.created_by, safeDate(source.created_date)?.toISOString() || null,
+              outcome.keepTargetTimestamp
                 ? safeDate(current.updated_date)?.toISOString() || null
                 : safeDate(source.updated_date)?.toISOString() || null],
           );
@@ -888,8 +974,7 @@ async function applyNormalized(normalized, report) {
         } else {
           stats.preserved += 1; result.preserved += 1;
         }
-        if (shaped.preserved && action !== 'preserved') { stats.preserved += 1; result.preserved += 1; }
-        await writeProvenance(client, entity, id, source.updated_date, data, localNewerConflict);
+        await writeProvenance(client, entity, sourceId, targetId, source.updated_date, data, outcome.conflict);
       }
       result.entities[entity] = stats;
     }
@@ -939,7 +1024,9 @@ export async function runMigrationImport({ kind, mode, bundle, passphrase = '', 
   try {
     const normalized = normalizeMigrationBundle({ kind, bundle, passphrase, progress });
     progress.stage('validating');
-    const report = await analyzeMigration(normalized);
+    // One plan per run. The preview reports it and the apply walks it, so the
+    // counts an operator approved are the counts the apply produces.
+    const { report, plan } = await buildMigrationPlan(normalized);
     if (mode === 'preview') {
       progress.stage('building_preview');
       await finishRun(runId, 'validated', report);
@@ -949,7 +1036,7 @@ export async function runMigrationImport({ kind, mode, bundle, passphrase = '', 
     if (mode !== 'apply') throw new MigrationValidationError('Unknown migration mode');
     if (!confirmed) throw new MigrationValidationError('Explicit migration confirmation is required', 400, MIGRATION_ERROR_CODE.NOT_CONFIRMED);
     progress.stage('applying');
-    const result = await applyNormalized(normalized, report);
+    const result = await applyNormalized(normalized, report, plan);
     await finishRun(runId, 'success', report, result);
     progress.stage('complete');
     return { run_id: runId, mode, kind, ...report, result: 'success', applied: result };
@@ -961,5 +1048,12 @@ export async function runMigrationImport({ kind, mode, bundle, passphrase = '', 
 }
 
 export default {
-  MIGRATION_ERROR_CODE, normalizeMigrationBundle, analyzeMigration, runMigrationImport, mergeOrdinarySecrets, prepareMigrationRecord,
+  MIGRATION_ERROR_CODE,
+  normalizeMigrationBundle,
+  analyzeMigration,
+  buildMigrationPlan,
+  disposeRecord,
+  runMigrationImport,
+  mergeOrdinarySecrets,
+  prepareMigrationRecord,
 };

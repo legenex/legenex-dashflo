@@ -2164,3 +2164,171 @@ owner migration package can be imported at all, so prefer a forward fix.
 - The migration panel was not driven in a browser. It sits behind Google sign in
   as owner, and no browser automation here can authenticate without the
   operator's credentials.
+
+## Migration planner: identity, remapping and reconciliation, 19 August 2026
+
+The owner migration preview of the real package succeeded and then refused to
+apply. 93 entities, 141,860 records, every one of them a create, zero updates,
+zero preserves, and 24 blockers: 11 relationship issues and 13 ID collisions.
+The planner now resolves what is resolvable, blocks only what genuinely needs an
+owner decision, and shows the arithmetic.
+
+### Root cause
+
+Neither class of blocker was a data problem. Both were the same missing concept.
+
+The importer had no notion of a target id that differs from a source id. It
+asked one question per record, "is there already a row with this id", and every
+other outcome was an error. `NATURAL_KEYS` existed and the catalog described it
+as the mechanism for idempotent re-import, but `analyzeMigration` used it only to
+raise `id_collisions`, and `applyNormalized` did not consult it at all. So a
+natural key that matched an existing DashFlo record under a different id had
+nowhere to go, and the block was permanent: no package could ever be applied.
+
+Removing the check would have been worse than leaving it. Because nothing in the
+write path consulted a natural key either, an apply would have inserted a second
+row for the owner's own account, for each supplier, buyer, campaign, brand,
+vertical, disposition and custom field DashFlo already had.
+
+The relationship issues were the same defect one step downstream. Validation
+resolved raw source ids against the bundle and against DashFlo, so it could not
+see a match even if one had been made, and it reported only a target entity and
+an id with no indication of which record held the reference. It was not order
+dependent, which was the other hypothesis: `bundleIds` was fully built before
+the check ran. It was remap-blind.
+
+Two further hazards were found while proving the fix, both latent until identity
+matching existed:
+
+- `middleware/auth.js` resolves the caller with `repo('User').get(sub)`, so
+  `base_role`, `role` and `permissions` on the User entity row are the live
+  authorization. Matching the owner's account and merging source fields over it
+  would have changed what a real account may do. `lib/googleAccountLink.js`
+  refuses to let a Google login do exactly this.
+- `AppSettings.distribution_mode` was stripped from an outgoing export by
+  `FIELD_STRIP` but nothing stopped it arriving on an import, so a package could
+  have flipped live distribution mode.
+
+### What changed
+
+`server/src/lib/migrationPlan.js` is new and holds identity. It plans in the
+order the problem requires: inventory, exclusions, read target state, resolve
+identity by source id then by natural key, allocate ids for genuine collisions,
+build the complete source id to target id remap, and only then resolve
+relationships against final target ids. Entities are planned in catalog order
+rather than package order, so the plan does not depend on how the exporter wrote
+its chunks.
+
+Collisions are classified rather than counted: same logical record, DashFlo
+native and protected, different logical record under a taken id, ambiguous
+target match, duplicate inside the package, replacement id taken, and target
+already migrated from a different source record. The first three resolve
+automatically. The rest fail closed with the exact owner decision named.
+
+A replacement id is `sha256('dashflo-migration-remap:<entity>:<sourceId>')`
+truncated to 24 hex characters, the same shape `newId()` produces. Derived
+rather than random because the preview has to promise an id the apply will use
+and a rerun has to reach the same one.
+
+Relationship severity is read from the entity schema. A dangling reference in a
+field the schema marks required is a hard blocker. A dangling reference in an
+optional field is a warning and the value is carried across unchanged: the
+source system already held it, blanking it would lose data and dropping the
+record would lose more. Nothing is dropped to clear a warning.
+
+`REFS` gained the references that point at entities which can be remapped, which
+is exactly the entities in `NATURAL_KEYS`: `AdSpend.supplier_id`,
+`BuyerApiKey.buyer_id`, `ChatConversation.user_id`, `ChatMemory.user_id`,
+`Lead.buyer_record_id`, `MetaSyncRun.supplier_id`, `SystemKey.owner_user_id` and
+the three `StateChangeEvent` fields. Without them a remapped parent leaves those
+children pointing at an id that is no longer there. Polymorphic id fields
+(`KeyAuditEvent.subject_id`, `DistributionAudit.entity_id`, `CapCounter.scope_id`)
+and external identifiers (Meta ad account ids, Stripe and Xero ids) are
+deliberately still not declared. `Lead.buyer_id` stays a code.
+
+`MIGRATION_TARGET_PROTECTED_FIELDS` is new: on a record the importer matched,
+DashFlo owns `User.email`, `role`, `base_role`, `permissions`, `linked_buyer_id`
+and `linked_supplier_id`, including their absence, so a source record cannot
+introduce a portal scope an account never had. `distribution_mode` is now in
+`MIGRATION_DROP_FIELDS` so no import of either kind can carry it.
+
+`MIGRATION_EXCLUSION_RULES` makes every exclusion explicit with an entity, a
+scope, a count, a reason and the governing rule. There are four and no others:
+the `meta_oauth_state` record, user authentication fields, invitation acceptance
+tokens, and distribution mode.
+
+Reconciliation is now an invariant rather than a report. Creates plus updates
+plus preserves plus explicit exclusions plus unresolved must equal the exported
+record count, per entity and overall, and an imbalance is itself a hard blocker.
+Remaps are reported beside the totals, never inside them: a remapped record is
+already counted as a create, an update or a preserve. The old "skipped" bucket is
+gone. What it counted was a record the importer deliberately left alone because
+DashFlo held something newer, which is a preserve, and calling it a skip is what
+made the totals impossible to reconcile.
+
+Preview and apply now share one plan. `buildMigrationPlan` runs once per request
+and the apply walks it, so the counts an operator approves are the counts the
+apply produces. The apply still re-reads each row `FOR UPDATE` and recomputes the
+disposition against what the lock returns.
+
+`base44_record_provenance` records `base44_id` and `dashflo_id` separately, so a
+remap is durable and auditable. Its `UNIQUE (entity, dashflo_id)` index is now
+checked during planning, so a DashFlo record that a previous migration already
+came from is reported as a blocker instead of aborting the transaction.
+
+### Behaviour change to record
+
+An email collision between a source user and an existing DashFlo account used to
+refuse the whole package. It now resolves onto that account, and the protected
+field policy is what makes that safe. The tests in
+`server/test/authMigrationGate.test.js` were rewritten to assert the stronger
+property: one account, the DashFlo role and permissions untouched, the Google
+subject and password credential untouched, and a durable provenance row.
+
+### MetaSyncRun
+
+128,953 records in the 18 August package and about 137,767 in the 19 August one,
+roughly 97 per cent of the whole export. Its treatment was NOT changed.
+`server/src/lib/base44Sync.js` excludes it from the repeating six-hour delta only
+for volume, and says so: "It is a one time historical import, not a delta", and
+`docs/BASE44-BOUNDARY.md` says it "can be named explicitly for a one-time import
+and reconciliation". The encrypted owner migration is that one-time import, so
+the requirements authorise including it and nothing authorises dropping it.
+
+It is Meta ad-spend synchronisation history, read by
+`server/src/functions/metaSyncHistory.js` for the operator "View sync history"
+panel, most recent 50 to 200 by `started_at`. No other entity joins to it.
+`AdSpend` holds the spend itself. Recommendation, for the owner to decide as a
+separate task and not applied here: keep it for the migration, then consider a
+retention policy, because the panel reads a couple of hundred rows and 137k are
+being carried to serve it.
+
+### Evidence
+
+- Focused: `migrationPlanner.test.js` 26 new tests, `authMigrationGate.test.js`
+  18, `migrationPreviewReport.test.jsx` 12 new, `migrationCryptoContract.test.js`
+  20, `migrationPreviewRoute.test.js` 15, `migrationImportRoundTrip.test.js` 5.
+- `npm run gate` PASS, seven steps, 96 files, 1282 tests, none skipped, up from
+  94 files and 1238 tests.
+- Scale: 139,956 records planned against a disposable database in 0.3s, balanced,
+  4 KB preview response. The real package is 141,860.
+- The real 19 August package was not decrypted. Its passphrase was not
+  requested, and the 18 August package on disk was read only for its plaintext
+  manifest envelope: 93 entity keys, 133,004 records, 128,953 of them
+  MetaSyncRun. No ciphertext was decoded.
+- No migration was applied and no production data was read or written.
+
+### Rollback
+
+`git revert` the commit and redeploy. There is no schema change and no data
+movement: the tables the planner reads are read only, and
+`base44_record_provenance` already had both id columns. Reverting restores the
+state in which the real package previews and can never be applied.
+
+### Not done
+
+- The identity of the 24 production blockers is still UNPROVEN. The old preview
+  retained only counts, so they cannot be recovered without another preview. The
+  next owner preview will name each one.
+- The migration panel was not driven in a browser. It sits behind Google sign in
+  as owner.
