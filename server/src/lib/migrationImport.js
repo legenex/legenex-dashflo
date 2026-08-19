@@ -497,6 +497,7 @@ function applyCredentialNamespace(kind, entity, data, existingData = {}, meta = 
  */
 export function prepareMigrationRecord(kind, entity, source, existingData = {}, options = {}) {
   const remap = options.remap || null;
+  const aliasTargets = options.aliasTargets || null;
   // Whether this record resolved onto a DashFlo record that already exists.
   // Defaulted from existingData so the three and four argument callers behave
   // exactly as they did, and passed explicitly by the planner and the apply.
@@ -534,8 +535,8 @@ export function prepareMigrationRecord(kind, entity, source, existingData = {}, 
   // Every declared record reference is moved onto its final target id. Without
   // this, matching a colliding parent through its natural key would relink the
   // parent and leave every child still pointing at the source id.
-  if (remap && remap.size) {
-    ({ data } = rewriteReferences(entity, data, remap));
+  if ((remap && remap.size) || (aliasTargets && aliasTargets.size)) {
+    ({ data } = rewriteReferences(entity, data, remap || new Map(), aliasTargets));
   }
 
   // Fields DashFlo owns on a record it already holds. See
@@ -650,6 +651,13 @@ export function disposeRecord({ kind, entity, source, existing, shaped }) {
  */
 export async function buildMigrationPlan(normalized, queryable = pool) {
   const plan = await planIdentity(normalized, queryable);
+  // Relationships are planned before any record is shaped. Nothing in
+  // planRelationships reads a shaped record: it works from plan.identity and
+  // the raw package data. Planning it first is what makes its result, the
+  // alias target map in particular, available to rewriteReferences below,
+  // rather than only existing after the shaping loop that needed it.
+  const relationships = await planRelationships(normalized, plan, queryable);
+  plan.aliasTargets = relationships.aliasTargets;
 
   let recordsPresent = 0;
   let recordsToCreate = 0;
@@ -674,7 +682,9 @@ export async function buildMigrationPlan(normalized, queryable = pool) {
       if (!resolved) continue; // excluded by rule, or unresolved: already accounted for.
 
       const existing = existingRows.get(sourceId) || null;
-      const shaped = prepareMigrationRecord(normalized.kind, entity, source, existing?.data || {}, { remap: plan.remap, matched: Boolean(existing) });
+      const shaped = prepareMigrationRecord(normalized.kind, entity, source, existing?.data || {}, {
+        remap: plan.remap, aliasTargets: plan.aliasTargets, matched: Boolean(existing),
+      });
       if (!shaped) continue;
       if (shaped.preserved) credentialsPreserved += 1;
       if (shaped.targetProtected) targetProtectedCount += 1;
@@ -691,7 +701,6 @@ export async function buildMigrationPlan(normalized, queryable = pool) {
     }
   }
 
-  const relationships = await planRelationships(normalized, plan, queryable);
 
   const conflictCount = [...plan.entityPlans.values()].reduce((sum, e) => sum + (e.conflicts || 0), 0);
   const declaredRecords = Object.values(normalized.declaredCounts || {})
@@ -823,6 +832,13 @@ export async function buildMigrationPlan(normalized, queryable = pool) {
     relationship_issues: relationships.issues.slice(0, DIAGNOSTIC_SAMPLE_LIMIT),
     relationship_issue_count: relationships.issues.length,
     relationship_resolved: relationships.resolved,
+    // A reference resolved because its value was not a record id at all, but
+    // matched the referenced entity's own natural key exactly once. See
+    // "Legacy identity alias" in migrationPlan.js. Reported explicitly, not
+    // folded silently into relationship_resolved, so an automatic resolution
+    // of this kind stays auditable rather than merely counted.
+    relationship_alias_resolutions: relationships.aliasResolutions.slice(0, DIAGNOSTIC_SAMPLE_LIMIT),
+    relationship_alias_resolution_count: relationships.aliasResolutions.length,
 
     unresolved_records: plan.unresolved,
     unresolved_count: plan.unresolvedCount,
@@ -931,7 +947,9 @@ async function applyNormalized(normalized, report, plan) {
           [targetId],
         );
         const current = rowToExisting(rows[0]);
-        const shaped = prepareMigrationRecord(normalized.kind, entity, source, current?.data || {}, { remap: plan.remap, matched: Boolean(current) });
+        const shaped = prepareMigrationRecord(normalized.kind, entity, source, current?.data || {}, {
+          remap: plan.remap, aliasTargets: plan.aliasTargets, matched: Boolean(current),
+        });
         if (!shaped) { stats.skipped += 1; result.skipped += 1; continue; }
         if (shaped.namespaceMigrated) { stats.credentials_namespaced += 1; result.credentials_namespaced += 1; }
         if (resolved.remapped) { stats.remapped += 1; result.remapped += 1; }

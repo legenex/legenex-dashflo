@@ -83,7 +83,9 @@ const baseReport = (overrides = {}) => ({
     resolution: 'Carried across unchanged.',
   }],
   relationship_issue_count: 1,
-  relationship_resolved: { resolved_in_package: 30, resolved_by_remap: 4, resolved_in_target: 0 },
+  relationship_resolved: { resolved_in_package: 30, resolved_by_remap: 4, resolved_in_target: 0, resolved_by_natural_key_alias: 0 },
+  relationship_alias_resolutions: [],
+  relationship_alias_resolution_count: 0,
   unresolved_records: [],
   unresolved_count: 0,
   hard_blockers: [],
@@ -162,6 +164,20 @@ describe('migration preview report', () => {
     expect(html).toContain('Hard blocker');
   });
 
+  it('labels an ambiguous alias distinctly from a plain missing reference', () => {
+    const html = render(baseReport({
+      can_apply: false,
+      relationship_issues: [{
+        entity: 'Delivery', field: 'buyer_id', referenced_entity: 'Buyer', referenced_source_id: 'DUP',
+        status: 'referenced_record_ambiguous_alias', record_count: 1, sample_source_ids: ['src-delivery'], required: true,
+        severity: 'blocker', reason: 'this value is not a Buyer id, and more than one Buyer record shares it as Buyer.buyer_code',
+        resolution: 'Owner decision required.',
+      }],
+      relationship_issue_count: 1,
+    }));
+    expect(html).toContain('Value matches more than one record by natural key');
+  });
+
   it('shows the blocked banner only when a hard blocker exists', () => {
     expect(render(baseReport())).toContain('data-testid="migration-ready"');
     expect(render(baseReport())).not.toContain('data-testid="migration-blocked"');
@@ -197,6 +213,28 @@ describe('migration preview report', () => {
     expect(html).toContain('kept in the migration provenance record');
   });
 
+  it('renders resolved relationship aliases as auditable, distinct from an ordinary remap', () => {
+    const html = render(baseReport({
+      relationship_alias_resolutions: [{
+        entity: 'RouteGroup', field: 'campaign_id', referenced_entity: 'Campaign',
+        referenced_value: 'C1', resolved_target_id: 'dashflo-campaign-1', natural_key_field: 'campaign_id', via: 'dashflo',
+        record_count: 3, sample_source_ids: ['src-group-1'],
+      }],
+      relationship_alias_resolution_count: 1,
+    }));
+    expect(html).toContain('Resolved relationship aliases');
+    expect(html).toContain('C1');
+    expect(html).toContain('dashflo-campaign-1');
+    expect(html).toContain('Campaign.campaign_id');
+    expect(html).toContain('DashFlo');
+    expect(html).toContain('never a record id');
+  });
+
+  it('shows zero resolved relationship aliases as its own explicit state', () => {
+    const html = render(baseReport());
+    expect(html).toContain('No reference needed to be resolved by anything other than a record id.');
+  });
+
   it('never renders a credential value, a passphrase or record content', () => {
     // A report that had somehow acquired sensitive values must not surface them
     // even so. The server side is what keeps them out; this is the second line.
@@ -214,11 +252,18 @@ describe('migration preview report', () => {
         key: 'lgnx_sup_should_never_render',
         secret: 'meta-app-secret-value',
       }],
+      relationship_alias_resolutions: [{
+        entity: 'SupplierAdAccount', field: 'connection_id', referenced_entity: 'MetaConnection',
+        referenced_value: '1234567890', resolved_target_id: 'dashflo-meta', natural_key_field: 'connected_account_id', via: 'dashflo',
+        record_count: 1, sample_source_ids: ['src-saa'], token: 'do-not-leak-this-meta-token',
+      }],
+      relationship_alias_resolution_count: 1,
       passphrase: 'the migration passphrase',
     }));
     expect(html).not.toContain('lgnx_sup_should_never_render');
     expect(html).not.toContain('meta-app-secret-value');
     expect(html).not.toContain('the migration passphrase');
+    expect(html).not.toContain('do-not-leak-this-meta-token');
     // The credential summary names entities and counts only.
     expect(html).toContain('Credential-bearing entities found: ApiKey');
     expect(html).toContain('No credential values are shown, logged, or used to match identity');

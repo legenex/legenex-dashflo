@@ -341,6 +341,12 @@ export const NATURAL_KEYS = {
   Campaign: 'campaign_id',
   CustomField: 'field_name',
   Disposition: 'name',
+  // The stable Meta identifier from GET /me, not a secret: SECRET_FIELDS and
+  // MIGRATION_SECRETS_EXPECTED name only MetaConnection.token. A production
+  // MetaConnection is one durable relationship with one real Meta Business
+  // Manager account, and this is that account's own external id, the same
+  // role Supplier.sid plays for a real-world supplier.
+  MetaConnection: 'connected_account_id',
   Supplier: 'sid',
   SupplierSource: 'source_code',
   User: 'email',

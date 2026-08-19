@@ -180,6 +180,7 @@ describe.skipIf(!reachable)('owner migration preview over HTTP', () => {
       'records_to_create', 'records_to_update', 'records_to_preserve', 'conflict_count', 'can_apply',
       'reconciliation', 'entity_reconciliation', 'explicit_exclusions', 'resolved_id_remaps',
       'id_collisions', 'id_collision_count', 'relationship_issues', 'relationship_issue_count',
+      'relationship_alias_resolutions', 'relationship_alias_resolution_count',
       'unresolved_records', 'unresolved_count', 'hard_blockers', 'hard_blocker_count',
     ]) {
       expect(body, field).toHaveProperty(field);

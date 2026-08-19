@@ -2332,3 +2332,104 @@ state in which the real package previews and can never be applied.
   next owner preview will name each one.
 - The migration panel was not driven in a browser. It sits behind Google sign in
   as owner.
+
+## Migration planner: legacy identity alias for relationship resolution, 19 August 2026
+
+The real package's second production preview reconciled completely (141848
+creates plus 12 preserves equals 141860 exported records, zero unresolved) but
+still carried 8 hard blockers among 13 relationship issues, and 12 of 13 ID
+collisions resolved automatically as remaps. This closes the remaining gap in
+the relationship resolver that the identity work in the previous entry did not
+reach.
+
+### Root cause
+
+Not a data problem and not a planner ordering bug. `Lead.buyer_id` is the one
+proven case of a reference field holding a natural key value instead of a
+record id: across legacy imports and LeadByte feedback matching it carries a
+buyer CODE, which is exactly why `lib/buyerIdentity.js` exists and why REFS
+marks that field `kind: 'code'`, never touched by identity resolution.
+
+`RouteGroup.campaign_id`, `ContractVersion.campaign_id`, `BuyerCplRule.campaign_id`
+and `LeadSource.campaign_id` share their name with `NATURAL_KEYS.Campaign`, the
+same shape of naming that produced the proven case. The identity of the real
+package's 8 blockers cannot be proven without the owner's passphrase, so this is
+reported as the well-evidenced mechanism a real field of this shape would hit,
+not as eight confirmed rows.
+
+### What changed
+
+`server/src/lib/migrationPlan.js`: `planIdentity` now builds, as a byproduct of
+identity resolution it already does, `naturalKeyAlias`: entity -> folded natural
+key value -> the target id that value's own package record resolved to, marked
+ambiguous when two records fold to one value and resolved to different targets.
+`planRelationships` consults this as a third source of truth, strictly after id
+resolution against the package and against DashFlo has already failed: first the
+package's own alias index, then one batched query against DashFlo's natural key
+index for whatever remains. A hit that is ambiguous, in the package or in
+DashFlo, fails closed rather than choosing.
+
+`MetaConnection.connected_account_id` (the Meta user or system-user id from
+GET /me, not the `token` field) is a new entry in `NATURAL_KEYS`. It is a
+genuine external identifier, not a secret, and it lets `SupplierAdAccount`'s
+required `connection_id` resolve through the exact same collision-and-remap
+machinery Buyer and Supplier already use, rather than through the alias
+fallback: the real package's single MetaConnection colliding with a DashFlo
+native one is a normal natural-key match once this exists.
+
+A correctness bug was caught while proving the fix rather than shipped: an
+alias-resolved reference was correctly counted as resolved in the preview, but
+`rewriteReferences` only consulted `plan.remap` (source id to target id) and had
+no way to rewrite a value that was never a record id in the first place. Applying
+a package with an alias-resolvable reference would have stored the legacy code
+verbatim, passing preview and failing at runtime the first time application code
+read that field expecting a record id. `planRelationships` now returns
+`aliasTargets` (entity -> folded value -> target id, merging package and DashFlo
+resolutions), `buildMigrationPlan` computes relationships before shaping any
+record so the map exists in time, and `rewriteReferences` takes it as a second
+source alongside the ordinary remap.
+
+Every alias resolution is reported, not folded silently into a count:
+`report.relationship_alias_resolutions` names entity, field, referenced entity,
+the value that resolved, the target id, the natural key field, and whether it
+was found in the package or in DashFlo. The preview UI gained a "Resolved
+relationship aliases" section for it, and a distinct label for the ambiguous
+case so it reads differently from a plain missing reference.
+
+### What this does not do
+
+`RouteGroup` and `Delivery` have no natural key and none was invented for them:
+`name` is the only candidate field and it collides too easily to serve as
+identity. `RouteMember.route_group_id` and `SubDelivery.delivery_id` therefore
+still resolve strictly by record id. If either is among the real package's
+remaining blockers, it is honestly reported and requires an owner decision; nothing
+here papers over it.
+
+### Evidence
+
+- Focused: `migrationRelationshipAlias.test.js`, 14 new tests, including the
+  MetaConnection collision resolving both identity and a dependent reference
+  together, ambiguous-in-package and ambiguous-in-DashFlo both failing closed, no
+  alias fallback for an entity with no natural key, the write path storing the
+  resolved id rather than the alias value, no source bundle mutation, no
+  credential value anywhere in the diagnostics, and preview staying read only.
+- Existing 125 migration tests unaffected, run alongside the new ones.
+- Scale: 139,825 synthetic records including a Campaign-code-shaped RouteGroup
+  reference planned in 0.33s, balanced, two records resolved by alias.
+- `npm run gate` PASS, seven steps, 97 files, 1299 tests, none skipped, up from
+  96 files and 1282 tests.
+- No production data was read or written, no passphrase was requested, and the
+  real package was not decrypted.
+
+### Rollback
+
+`git revert` the commit. No schema change, no data movement: `naturalKeyAlias`
+and `aliasTargets` are computed in memory per request. Reverting restores
+strict record-id-only relationship resolution, which is safe (it never applies
+either), only less complete.
+
+### Not done
+
+- The identity of the real package's 8 hard blockers remains UNPROVEN. The next
+  owner preview will show whether they resolved, and if any remain, the exact
+  entity, field and referenced value each one needs.

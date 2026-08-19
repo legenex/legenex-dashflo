@@ -51,6 +51,7 @@ const RELATIONSHIP_LABEL = {
   referenced_record_absent: 'Referenced record is in neither the package nor DashFlo',
   referenced_record_excluded: 'Referenced record is excluded by an explicit rule',
   referenced_entity_unsupported: 'Referenced entity is not in the DashFlo schema',
+  referenced_record_ambiguous_alias: 'Value matches more than one record by natural key',
 };
 
 const number = (value) => Number(value || 0).toLocaleString();
@@ -152,6 +153,7 @@ export function MigrationPreviewReport({ report }) {
   const collisions = report.id_collisions || [];
   const relationships = report.relationship_issues || [];
   const remaps = report.resolved_id_remaps || [];
+  const relationshipAliases = report.relationship_alias_resolutions || [];
   const exclusions = report.explicit_exclusions || [];
   const blockers = report.hard_blockers || [];
   const unresolvedRecords = report.unresolved_records || [];
@@ -279,6 +281,32 @@ export function MigrationPreviewReport({ report }) {
         <p className="mt-2 text-[11px] text-muted-foreground">
           Every reference to a remapped record anywhere in the package is rewritten to the target id before anything is
           written, and the original source id is kept in the migration provenance record.
+        </p>
+      </Section>
+
+      <Section
+        title="Resolved relationship aliases"
+        count={report.relationship_alias_resolution_count || 0}
+        tone="primary"
+        empty="No reference needed to be resolved by anything other than a record id."
+      >
+        <Table headers={['Entity', 'Field', 'Referenced entity', 'Referenced value', 'Resolved to', 'Natural key', 'Found in']}>
+          {relationshipAliases.map((row, index) => (
+            <tr key={`${row.entity}-${row.field}-${row.referenced_value}-${index}`}>
+              <Cell>{row.entity}</Cell>
+              <Cell>{row.field}</Cell>
+              <Cell>{row.referenced_entity}</Cell>
+              <Cell><span className="font-mono">{row.referenced_value}</span></Cell>
+              <Cell><span className="font-mono">{row.resolved_target_id}</span></Cell>
+              <Cell>{row.natural_key_field ? `${row.referenced_entity}.${row.natural_key_field}` : '-'}</Cell>
+              <Cell>{row.via === 'dashflo' ? 'DashFlo' : 'this package'}</Cell>
+            </tr>
+          ))}
+        </Table>
+        <p className="mt-2 text-[11px] text-muted-foreground">
+          A row here is a reference whose value was never a record id, in the package or in DashFlo, but matched the
+          referenced entity&apos;s own natural key exactly once. The write path stores the resolved record id, not the
+          value the package carried.
         </p>
       </Section>
 
