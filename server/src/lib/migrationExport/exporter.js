@@ -409,6 +409,9 @@ export class MigrationExporter {
       'sha256'
     );
 
+    // Clear passphrase from memory after key derivation
+    this.passphrase = null;
+
     const chunks = [];
 
     for (const entity of MIGRATION_ENTITY_ORDER) {
