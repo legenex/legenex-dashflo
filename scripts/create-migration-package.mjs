@@ -5,11 +5,11 @@
 // Base44 (legenex-dashboard) data. Performs preflight validation before encryption.
 //
 // Usage (interactive, preferred for manual use):
-//   node scripts/create-migration-package.mjs --output <file> --diagnostic-report <file>
+//   node scripts/create-migration-package.mjs
 //
 // Usage (automation):
-//   MIGRATION_PASSPHRASE="..." node scripts/create-migration-package.mjs --output <file> --diagnostic-report <file>
-//   echo "passphrase" | node scripts/create-migration-package.mjs --output <file> --diagnostic-report <file>
+//   MIGRATION_PASSPHRASE="..." node scripts/create-migration-package.mjs
+//   echo "passphrase" | node scripts/create-migration-package.mjs
 //
 // Environment:
 //   BASE44_APP_ID           the source app id (e.g. 6a4957e7b03e9b10c170d29e)
@@ -19,56 +19,20 @@
 
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import readline from 'node:readline';
 import { base44ConfigFromEnv } from '../server/src/lib/base44Source.js';
 import { MigrationExporter } from '../server/src/lib/migrationExport/exporter.js';
-import { generateTimestampedFilename, createReadlineInterface, question } from './migrationCliUtils.js';
+import { generateTimestampedFilename, readHiddenPassphraseWithConfirmation, readPassphraseFromStdin } from './migrationCliUtils.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.dirname(HERE);
+const DEFAULT_OUTPUT_DIR = path.join(ROOT, 'docs', 'resources');
 
 const MIN_PASSPHRASE_LENGTH = 16;
 
-async function readPassphraseFromStdin() {
-  return new Promise((resolve, reject) => {
-    let data = '';
-    process.stdin.setEncoding('utf8');
-    process.stdin.on('data', (chunk) => { data += chunk; });
-    process.stdin.on('end', () => resolve(data.trim()));
-    process.stdin.on('error', reject);
-    process.stdin.resume();
-  });
-}
-
-async function getPassphraseInteractive(rl) {
-  const stdinIsTTY = process.stdin.isTTY;
-
-  if (!stdinIsTTY) {
-    const fromStdin = await readPassphraseFromStdin();
-    if (fromStdin) return fromStdin;
-    const fromEnv = process.env.MIGRATION_PASSPHRASE;
-    if (fromEnv) return fromEnv;
-    console.error('Error: No passphrase provided. Use MIGRATION_PASSPHRASE env var or pipe via stdin for non-interactive use.');
-    process.exit(1);
-  }
-
-  while (true) {
-    const passphrase = await question(rl, 'Migration passphrase: ');
-    if (!passphrase) {
-      console.error('Error: passphrase cannot be empty');
-      continue;
-    }
-    if (passphrase.length < MIN_PASSPHRASE_LENGTH) {
-      console.error(`Error: passphrase must be at least ${MIN_PASSPHRASE_LENGTH} characters`);
-      continue;
-    }
-    const confirm = await question(rl, 'Confirm migration passphrase: ');
-    if (passphrase !== confirm) {
-      console.error('Error: passphrases do not match');
-      continue;
-    }
-    return passphrase;
-  }
+function ensureDir(dir) {
+  try {
+    require('node:fs').mkdirSync(dir, { recursive: true });
+  } catch {}
 }
 
 function parseArgs() {
@@ -93,16 +57,18 @@ function parseArgs() {
 
   if (result.help) {
     console.log(`
-Usage: node scripts/create-migration-package.mjs --output <file> --diagnostic-report <file> [options]
+Usage: node scripts/create-migration-package.mjs [options]
 
 Options:
-  --output <path>             Output path for encrypted migration package (default: legenex-dashflo-migration-YYYY-MM-DD-HH-mm.json.enc)
-  --diagnostic-report <path>  Optional path for diagnostic report JSON (default: legenex-dashflo-migration-diagnostic-YYYY-MM-DD-HH-mm.json)
+  --output <path>             Output path for encrypted migration package
+                              (default: docs/resources/legenex-dashflo-migration-YYYY-MM-DD-HH-mm.json.enc)
+  --diagnostic-report <path>  Optional path for diagnostic report JSON
+                              (default: docs/resources/legenex-dashflo-migration-diagnostic-YYYY-MM-DD-HH-mm.json)
   --preflight-only            Run validation only, do not create package
   --help, -h                  Show this help
 
 Passphrase (choose one, interactive preferred for manual use):
-  1. Interactive prompt (default when stdin is a TTY)
+  1. Interactive hidden prompt (default when stdin is a TTY)
   2. MIGRATION_PASSPHRASE environment variable (automation)
   3. Piped via stdin (automation)
 
@@ -120,28 +86,47 @@ Environment:
 
 async function main() {
   const args = parseArgs();
-  const rl = createReadlineInterface();
 
   let passphrase = '';
   let diagnosticPath = args.diagnostic;
   let outputPath = args.output;
 
   try {
-    // Resolve passphrase securely
-    passphrase = await getPassphraseInteractive(rl);
-    rl.close();
-
-    if (passphrase.length < MIN_PASSPHRASE_LENGTH) {
-      console.error(`Error: passphrase must be at least ${MIN_PASSPHRASE_LENGTH} characters`);
-      process.exit(1);
-    }
-
-    // Generate default filenames if not provided
+    // Resolve default output paths ONCE at the start
     if (!outputPath) {
-      outputPath = generateTimestampedFilename('legenex-dashflo-migration', 'json.enc');
+      ensureDir(DEFAULT_OUTPUT_DIR);
+      outputPath = path.join(DEFAULT_OUTPUT_DIR, generateTimestampedFilename('legenex-dashflo-migration', 'json.enc'));
     }
     if (!diagnosticPath) {
-      diagnosticPath = generateTimestampedFilename('legenex-dashflo-migration-diagnostic', 'json');
+      ensureDir(DEFAULT_OUTPUT_DIR);
+      diagnosticPath = path.join(DEFAULT_OUTPUT_DIR, generateTimestampedFilename('legenex-dashflo-migration-diagnostic', 'json'));
+    }
+
+    // Resolve passphrase securely
+    const stdinIsTTY = process.stdin.isTTY;
+    if (stdinIsTTY) {
+      // Interactive hidden prompt
+      passphrase = await readHiddenPassphraseWithConfirmation(
+        'Migration passphrase: ',
+        'Confirm migration passphrase: ',
+        MIN_PASSPHRASE_LENGTH
+      );
+    } else {
+      // Non-interactive: stdin or env var
+      const fromStdin = await readPassphraseFromStdin();
+      if (fromStdin) {
+        passphrase = fromStdin;
+      } else {
+        passphrase = process.env.MIGRATION_PASSPHRASE || '';
+      }
+      if (!passphrase) {
+        console.error('Error: No passphrase provided. Use MIGRATION_PASSPHRASE env var or pipe via stdin for non-interactive use.');
+        process.exit(1);
+      }
+      if (passphrase.length < MIN_PASSPHRASE_LENGTH) {
+        console.error(`Error: passphrase must be at least ${MIN_PASSPHRASE_LENGTH} characters`);
+        process.exit(1);
+      }
     }
 
     // Validate Base44 config early
@@ -187,13 +172,11 @@ async function main() {
     console.log(`Elapsed: ${(elapsedMs / 1000).toFixed(1)}s`);
 
   } catch (error) {
-    rl.close();
     if (passphrase) passphrase = null;
 
     if (error.message === 'PREFLIGHT_FAILED') {
-      // Diagnostic report was already written by exporter
+      // Use the ALREADY resolved diagnostic path, not a new one
       const fs = await import('node:fs');
-      let diagnosticPath = args.diagnostic || generateTimestampedFilename('legenex-dashflo-migration-diagnostic', 'json');
       let diagnostic = null;
       try {
         diagnostic = JSON.parse(fs.readFileSync(diagnosticPath, 'utf8'));
@@ -213,6 +196,11 @@ async function main() {
       }
       console.error(`Diagnostic: ${diagnosticPath}`);
       process.exit(1);
+    }
+
+    if (error.message === 'Cancelled') {
+      console.error('Cancelled');
+      process.exit(130);
     }
 
     console.error('Export failed:', error.message);
