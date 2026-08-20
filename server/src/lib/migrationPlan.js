@@ -255,7 +255,7 @@ export function referenceIds(value, kind) {
   }
 }
 
-function requiredFields(entity) {
+export function requiredFields(entity) {
   const schema = getSchema(entity);
   return new Set(Array.isArray(schema?.required) ? schema.required : []);
 }
