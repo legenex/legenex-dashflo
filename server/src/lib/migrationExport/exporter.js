@@ -48,6 +48,15 @@ export class MigrationExporter {
     this.log('Base44 source ping successful');
 
     await this.collectEntities();
+    
+    // Verify that we actually collected data before proceeding
+    const totalRecords = Array.from(this.counts.values()).reduce((a, b) => a + b, 0);
+    if (totalRecords === 0) {
+      const msg = 'No records collected from Base44 source. The export would produce an empty package. This indicates a source configuration or connectivity issue.';
+      this.log(msg, SEVERITY.ERROR);
+      throw new Error(msg);
+    }
+
     this.validateRecordIds();
     await this.validateRelationships();
     this.checkManifest();
@@ -400,6 +409,15 @@ export class MigrationExporter {
   }
 
   async createEncryptedPackage() {
+    // Final validation before package creation
+    const totalRecords = Array.from(this.counts.values()).reduce((a, b) => a + b, 0);
+    if (totalRecords === 0) {
+      throw new Error('Cannot create encrypted package: no records collected');
+    }
+    if (this.entities.size === 0) {
+      throw new Error('Cannot create encrypted package: no entities collected');
+    }
+
     const salt = crypto.randomBytes(MIGRATION_FORMAT.salt_bytes);
     const key = crypto.pbkdf2Sync(
       Buffer.from(this.passphrase, 'utf8'),
@@ -435,6 +453,10 @@ export class MigrationExporter {
           plaintext_sha256: crypto.createHash('sha256').update(plaintext).digest('hex'),
         });
       }
+    }
+
+    if (chunks.length === 0) {
+      throw new Error('Cannot create encrypted package: no chunks generated (no records to encrypt)');
     }
 
     const bundle = {
