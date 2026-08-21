@@ -95,7 +95,7 @@ export class MigrationExporter {
     this.log('Collecting entities...');
 
     for (const entity of MIGRATION_ENTITY_ORDER) {
-      if (entity === 'User' || entity === 'Invitation') {
+      if (entity === 'Invitation') {
         this.log(`Skipping ${entity} (authentication not portable)`);
         continue;
       }
