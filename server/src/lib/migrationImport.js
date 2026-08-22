@@ -228,8 +228,11 @@ function normalizeOwner(bundle, passphrase, progress = NULL_PROGRESS) {
     positions.add(position);
 
     const payload = decryptChunk(chunk, key);
-    if (payload?.entity !== envelopeEntity || Number(payload?.offset || 0) !== Number(chunk.offset || 0)) {
+    if (payload?.entity !== envelopeEntity) {
       throw new MigrationValidationError('Chunk envelope does not match its encrypted payload');
+    }
+    if (payload.offset !== undefined && Number(payload.offset) !== Number(chunk.offset || 0)) {
+      throw new MigrationValidationError('Chunk envelope offset does not match its encrypted payload');
     }
     if (!Array.isArray(payload.records) || payload.records.length !== Number(chunk.records)) {
       throw new MigrationValidationError(`Chunk record count does not match for ${envelopeEntity}`);

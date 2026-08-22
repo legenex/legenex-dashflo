@@ -703,6 +703,18 @@ export async function planIdentity(normalized, queryable = pool) {
     const ids = importable.map((item) => item.sourceId);
     const byId = await loadRowsByIds(queryable, entity, ids);
 
+    // Prioritize records that have an exact ID match in the target database.
+    // This ensures that when two source records share a natural key and one has
+    // an exact ID match (sourceId === targetId), that record gets priority over
+    // a record that would only match via natural key remap.
+    importable.sort((a, b) => {
+      const aHasExactMatch = byId.has(a.sourceId);
+      const bHasExactMatch = byId.has(b.sourceId);
+      if (aHasExactMatch && !bHasExactMatch) return -1;
+      if (!aHasExactMatch && bHasExactMatch) return 1;
+      return 0;
+    });
+
     const naturalKeyField = NATURAL_KEYS[entity] || null;
     let byNaturalKey = new Map();
     if (naturalKeyField) {
@@ -724,6 +736,7 @@ export async function planIdentity(normalized, queryable = pool) {
     const entityIdentity = new Map();
     const entityExisting = new Map();
     const claimedTargetIds = new Set();
+    const claimedTargetHasExactMatch = new Map();
     const allocatedIds = new Set();
     // Two source records folding to one natural key, where neither matched a
     // DashFlo record, are created side by side. Reported, never dropped.
@@ -782,6 +795,28 @@ export async function planIdentity(normalized, queryable = pool) {
         };
       }
 
+      // If a record loses a natural-key race to another record in the same package
+      // but has no exact ID match of its own, check if the winner had an exact match.
+      // If the winner had an exact match, exclude the loser (it's a duplicate).
+      // If neither had an exact match, it's a genuine conflict that must block.
+      if (!decision.targetId && decision.collision?.type === COLLISION_TYPE.DUPLICATE_IN_PACKAGE_CLAIMS_TARGET && !rowById) {
+        const targetId = decision.collision.existing_target_id;
+        const winnerHadExactMatch = claimedTargetHasExactMatch.get(targetId) === true;
+        if (winnerHadExactMatch) {
+          plan.excluded += 1;
+          excludedRecordCount += 1;
+          const bucket = exclusionCounts.get('duplicate_natural_key_loser') || { rule: { key: 'duplicate_natural_key_loser', entity, scope: 'record' }, count: 0, ids: [] };
+          bucket.count += 1;
+          if (bucket.ids.length < 20) bucket.ids.push(sourceId);
+          exclusionCounts.set('duplicate_natural_key_loser', bucket);
+          const set = excludedIds.get(entity) || new Set();
+          set.add(sourceId);
+          excludedIds.set(entity, set);
+          continue;
+        }
+        // No winner with exact match: genuine conflict, let it fall through to blocker handling
+      }
+
       if (!decision.targetId) {
         plan.unresolved += 1;
         unresolvedCount += 1;
@@ -823,7 +858,13 @@ export async function planIdentity(normalized, queryable = pool) {
         });
       }
 
-      if (decision.existing) claimedTargetIds.add(decision.existing.id);
+      if (decision.existing) {
+        claimedTargetIds.add(decision.existing.id);
+        // Record whether this claimant had an exact ID match (sourceId === targetId).
+        // This is used to resolve duplicate-in-package conflicts: a claimant with
+        // an exact match beats one without.
+        claimedTargetHasExactMatch.set(decision.existing.id, decision.matchedBy === 'source_id');
+      }
       if (decision.matchedBy === 'allocated') allocatedIds.add(decision.targetId);
       if (decision.targetId !== sourceId) {
         entityRemap.set(sourceId, decision.targetId);
