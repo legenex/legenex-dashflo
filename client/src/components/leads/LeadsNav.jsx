@@ -45,7 +45,7 @@ export default function LeadsNav() {
   // and the table answering the same question: counting all time next to a
   // table showing one month is what made Sold read 562 above a list of 292.
   const [searchParams] = useSearchParams();
-  const period = searchParams.get('period') || 'this_month';
+  const period = searchParams.get('period') || 'last60';
   const customPeriod = {
     from: searchParams.get('from') || '',
     to: searchParams.get('to') || '',

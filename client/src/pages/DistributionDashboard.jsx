@@ -104,7 +104,7 @@ const Btn = ({ icon: Icon, children, primary, onClick }) => (
 export default function DistributionDashboard() {
   const qc = useQueryClient();
   const navigate = useNavigate();
-  const [period, setPeriod] = useState('this_month');
+  const [period, setPeriod] = useState('last60');
   const [custom, setCustom] = useState({ from: '', to: '' });
   const [aiText, setAiText] = useState('');
   const [aiLoading, setAiLoading] = useState(false);

@@ -175,7 +175,7 @@ export default function LeadsTable({ view }) {
   // custom range with the Custom tab lit. Nothing is persisted either, so two
   // visits can never resolve different windows and report different counts.
   const [, setSearchParams] = useSearchParams();
-  const [period, setPeriodState] = useState('this_month');
+  const [period, setPeriodState] = useState('last60');
   const [customPeriod, setCustomPeriodState] = useState({ from: '', to: '' });
 
   // Publish the current window to the URL, including on first mount, which
