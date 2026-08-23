@@ -220,14 +220,23 @@ export function spendInWindow(rows = [], filters = {}) {
 // is missing, fall back to the the backend created_date (import time).
 export function leadEventInstant(lead) {
   const ts = leadField(lead, 'timestamp');
-  if (typeof ts === 'string' && /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}/.test(ts.trim())) {
-    const raw = ts.trim().replace(' ', 'T');
-    // If the string already carries a timezone (trailing Z or ±HH:MM offset),
-    // parse it as an absolute instant. Only naive wall-clock strings are
-    // interpreted in APP_TZ.
-    const hasZone = /(?:Z|[+-]\d{2}:?\d{2})$/.test(raw);
-    const d = hasZone ? new Date(raw) : fromZonedTime(raw, APP_TZ);
-    if (!isNaN(d.getTime())) return d;
+  if (typeof ts === 'string') {
+    const trimmed = ts.trim();
+    // ISO-like: 2026-07-17T04:29:52 or 2026-07-17 04:29:52 (with optional zone)
+    if (/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}/.test(trimmed)) {
+      const raw = trimmed.replace(' ', 'T');
+      const hasZone = /(?:Z|[+-]\d{2}:?\d{2})$/.test(raw);
+      const d = hasZone ? new Date(raw) : fromZonedTime(raw, APP_TZ);
+      if (!isNaN(d.getTime())) return d;
+    }
+    // MM/DD/YYYY HH:mm:ss (naive wall-clock in APP_TZ) — common in Base44 payloads
+    if (/^\d{2}\/\d{2}\/\d{4} \d{2}:\d{2}:\d{2}$/.test(trimmed)) {
+      const [datePart, timePart] = trimmed.split(' ');
+      const [month, day, year] = datePart.split('/').map(Number);
+      const [hours, minutes, seconds] = timePart.split(':').map(Number);
+      const d = new Date(Date.UTC(year, month - 1, day, hours, minutes, seconds));
+      if (!isNaN(d.getTime())) return d;
+    }
   }
   // created_date is stored without a timezone suffix; it is a UTC value, so
   // append Z when missing to avoid the browser parsing it as local time.
