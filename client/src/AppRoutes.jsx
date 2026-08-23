@@ -60,7 +60,7 @@ const OperationsLayout = lazy(() => import('@/components/operations/OperationsLa
 const AdManagerLayout = lazy(() => import('@/components/admanager/AdManagerLayout'));
 const ToolsLayout = lazy(() => import('@/components/tools/ToolsLayout'));
 const Overview = lazy(() => import('@/pages/Overview'));
-import DistributionDashboard from '@/pages/DistributionDashboard';
+const DistributionDashboard = lazy(() => import(/* webpackChunkName: "distribution-dashboard" */ '@/pages/DistributionDashboard'));
 const LeadsView = lazy(() => import('@/pages/LeadsView'));
 const QueueRecovery = lazy(() => import('@/pages/QueueRecovery'));
 const Campaigns = lazy(() => import('@/pages/Campaigns'));
