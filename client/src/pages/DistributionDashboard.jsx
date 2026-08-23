@@ -102,6 +102,7 @@ const Btn = ({ icon: Icon, children, primary, onClick }) => (
 );
 
 export default function DistributionDashboard() {
+  throw new Error('TEST ERROR - DistributionDashboard rendering');
   const qc = useQueryClient();
   const navigate = useNavigate();
   const [period, setPeriod] = useState('last60');
