@@ -22,6 +22,7 @@ import PermissionRoute from '@/components/PermissionRoute';
 import ScrollToTop from './components/ScrollToTop';
 import { hostScope, isAllowedOnProgressHost } from '@/lib/hostScope';
 import { DOCS_ROUTES } from '@/components/docs/docsConfig';
+import ErrorBoundary from '@/components/ErrorBoundary';
 
 // The authentication entry points stay eagerly imported. They are the first
 // thing an unauthenticated visitor renders, including everyone arriving from the
@@ -196,7 +197,11 @@ export function OperatorRoutes() {
           <Route path="/queue-recovery" element={<QueueRecovery />} />
           <Route path="/errors" element={<Navigate to="/settings?tab=errors" replace />} />
           <Route element={<DistributionLayout />}>
-            <Route path="/distribution" element={<DistributionDashboard />} />
+            <Route path="/distribution" element={
+              <ErrorBoundary>
+                <DistributionDashboard />
+              </ErrorBoundary>
+            } />
             <Route path="/campaigns" element={<Campaigns />} />
             {/* Buyers live in Operations only. These paths are kept as redirects so
                 existing bookmarks and cross-links do not 404. */}
