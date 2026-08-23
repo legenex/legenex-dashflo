@@ -288,3 +288,7 @@
 .hero-routing-scene[data-motion='paused'] .hero-sale-packet {
   animation-play-state: paused;
 }
+
+.hero-content h1 span {
+  color: #F04A53;
+}
