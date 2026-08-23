@@ -19,7 +19,7 @@ import BuyerDetailPage from '@/components/operations/buyers/BuyerDetailPage';
 import BuyerCreateModal from '@/components/operations/buyers/BuyerCreateModal';
 import { Button } from '@/components/ui/button';
 import { Plus, RefreshCw } from 'lucide-react';
-import { computeBlastRadius } from '@/components/operations/buyers/buyerListModel';
+import { computeBlastRadius, filterBuyerRows, matchesBuyerTab } from '@/components/operations/buyers/buyerListModel';
 import { useRecomputeCoverage } from '@/components/operations/buyers/useRecomputeCoverage';
 import RecomputingIndicator from '@/components/operations/buyers/RecomputingIndicator';
 import AutoCreatedReviewBanner from '@/components/operations/AutoCreatedReviewBanner';
@@ -40,30 +40,6 @@ const TABS = [
   { key: 'disabled', label: 'Disabled' },
 ];
 
-// A buyer is considered disabled when its status is paused or terminated.
-function isDisabled(buyer) {
-  const status = String(buyer.status || '').toLowerCase();
-  return status === 'paused' || status === 'terminated';
-}
-
-// Match a buyer against a tab. Unclassified = client_type is null/empty.
-// Disabled = status paused or terminated.
-// A buyer that arrived from a lead payload rather than onboarding: it has no type
-// and no pricing, so reports can point at it but nothing can route to it. These
-// need an operator to finish them, which is what the Needs Setup tab collects.
-export function needsSetup(buyer) {
-  if (!buyer) return false;
-  return !buyer.client_type || buyer.status === 'draft';
-}
-
-function matchesTab(buyer, tabKey) {
-  if (tabKey === 'disabled') return isDisabled(buyer);
-  if (tabKey === 'all') return true;
-  if (tabKey === 'needs_setup') return needsSetup(buyer);
-  if (tabKey === 'unclassified') return !buyer.client_type;
-  return buyer.client_type === tabKey;
-}
-
 export default function OperationsBuyers() {
   useTheme();
   const qc = useQueryClient();
@@ -82,9 +58,13 @@ export default function OperationsBuyers() {
   const [bulkDeleting, setBulkDeleting] = useState(false);
   const { recomputing, scheduleRecompute } = useRecomputeCoverage();
 
-  const { data: buyers = [] } = useQuery({
-    queryKey: ['op-buyers'],
+  const {
+    data: buyers = [], isLoading: buyersLoading, isError: buyersError, refetch: refetchBuyers,
+  } = useQuery({
+    queryKey: ['op-buyers', 'catalog'],
     queryFn: () => api.entities.Buyer.list('-updated_date', 500),
+    refetchOnMount: 'always',
+    refetchOnWindowFocus: true,
   });
 
   const { data: cplRows = [] } = useQuery({
@@ -141,13 +121,13 @@ export default function OperationsBuyers() {
     const counts = {};
     // Counts respect the vertical filter so the tab badges agree with the rows
     // actually listed underneath them.
-    for (const t of TABS) counts[t.key] = buyers.filter((b) => matchesTab(b, t.key) && matchesVertical(b)).length;
+    for (const t of TABS) counts[t.key] = buyers.filter((b) => matchesBuyerTab(b, t.key) && matchesVertical(b)).length;
     return counts;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [buyers, verticalFilter]);
 
   const rows = useMemo(() => {
-    const filtered = buyers.filter((b) => matchesTab(b, tab) && matchesVertical(b));
+    const filtered = filterBuyerRows(buyers, tab, verticalFilter);
     const col = getBuyerColumnDef(sortKey);
     if (!col) return filtered;
     const sorted = [...filtered].sort((a, b) => {
@@ -317,7 +297,20 @@ export default function OperationsBuyers() {
 
       <AutoCreatedReviewBanner kind="buyer" />
 
-      {buyers.length === 0 ? (
+      {buyersLoading ? (
+        <div className="bg-card border border-border rounded-[10px] px-4 py-10 text-center text-muted-foreground">
+          <RefreshCw className="w-5 h-5 mx-auto mb-2 animate-spin" />
+          Loading buyers...
+        </div>
+      ) : buyersError ? (
+        <div className="bg-card border border-border rounded-[10px] px-4 py-10 text-center">
+          <div className="text-[14px] font-semibold text-foreground">Unable to load buyers</div>
+          <div className="text-[12px] text-muted-foreground mt-1">The buyer catalog could not be refreshed.</div>
+          <Button variant="outline" size="sm" className="mt-3 gap-1.5" onClick={() => refetchBuyers()}>
+            <RefreshCw className="w-3.5 h-3.5" /> Retry
+          </Button>
+        </div>
+      ) : buyers.length === 0 ? (
         <BuyersEmptyState onCreate={() => setCreateOpen(true)} />
       ) : (
         <>

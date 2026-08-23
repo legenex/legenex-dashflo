@@ -1,15 +1,16 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Calendar, ChevronDown, Check } from 'lucide-react';
-import { PERIODS, PERIOD_LABELS } from '@/lib/periodRange';
+import { LEADS_PERIODS, PERIOD_LABELS } from '@/lib/periodRange';
 
 // Reusable period selector matching the Overview style: pill presets
-// (Today, Yesterday, Last 7, This Month, Last Month, Last 60) plus a Custom
-// visual date range picker, plus a compact dropdown. This Month is the default.
+// (All Time, Today, Yesterday, Last 7, This Month, Last Month, Last 60) plus a Custom
+// visual date range picker, plus a compact dropdown. All Time is the default
+// for All Leads, while status-specific lead views supply This Month.
 //
 // Controlled via `period` + `custom` ({ from, to }) with onPeriodChange /
 // onCustomChange callbacks, mirroring resolvePeriod's contract in periodRange.
 export default function LeadsPeriodFilter({
-  period = 'this_month',
+  period = 'all',
   custom,
   onPeriodChange,
   onCustomChange,
@@ -37,7 +38,7 @@ export default function LeadsPeriodFilter({
     <div className={`flex items-center gap-2 flex-wrap ${className}`}>
       {/* Pill presets */}
       <div className="inline-flex items-center bg-card border border-border rounded-lg p-0.5">
-        {PERIODS.map((p) => {
+        {LEADS_PERIODS.map((p) => {
           const active = p.value === period;
           return (
             <button
@@ -66,7 +67,7 @@ export default function LeadsPeriodFilter({
 
         {open && (
           <div className="absolute right-0 z-50 mt-1.5 w-60 rounded-lg border border-border bg-popover p-1 shadow-xl">
-            {PERIODS.map((p) => (
+            {LEADS_PERIODS.map((p) => (
               <button
                 key={p.value}
                 type="button"

@@ -5,7 +5,7 @@ import { useQuery } from '@tanstack/react-query';
 import { api } from '@/api/client';
 import { differenceInHours } from 'date-fns';
 import SubNavShell from '@/components/layout/SubNavShell';
-import { resolvePeriod } from '@/lib/periodRange';
+import { defaultLeadsPeriod, resolvePeriod } from '@/lib/periodRange';
 import { leadEventInstant } from '@/lib/reportMetrics';
 
 const ITEMS = [
@@ -45,7 +45,8 @@ export default function LeadsNav() {
   // and the table answering the same question: counting all time next to a
   // table showing one month is what made Sold read 562 above a list of 292.
   const [searchParams] = useSearchParams();
-  const period = searchParams.get('period') || 'last60';
+  const activeView = ITEMS.find((item) => item.path === location.pathname)?.view || 'all';
+  const period = searchParams.get('period') || defaultLeadsPeriod(activeView);
   const customPeriod = {
     from: searchParams.get('from') || '',
     to: searchParams.get('to') || '',

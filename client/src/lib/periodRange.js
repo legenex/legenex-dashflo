@@ -30,11 +30,25 @@ export const PERIODS = [
   { value: 'custom', label: 'Custom' },
 ];
 
+// Lead inventory has an explicit all-time view. Reporting dashboards keep
+// their bounded periods because changing their default window would change the
+// meaning of business metrics.
+export const LEADS_PERIODS = [
+  { value: 'all', label: 'All Time' },
+  ...PERIODS,
+];
+
+export function defaultLeadsPeriod(view) {
+  return view === 'all' ? 'all' : 'this_month';
+}
+
 // Resolve a period value (+ optional custom {from,to}) into a { start, end } window.
 export function resolvePeriod(value, custom) {
   // "now" in APP_TZ so day boundaries land on the correct local calendar day.
   const now = new Date();
   switch (value) {
+    case 'all':
+      return { start: null, end: null };
     case 'today':
       return { start: zoned(now, startOfDay), end: zoned(now, endOfDay) };
     case 'yesterday': {
@@ -71,7 +85,7 @@ export function priorWindow({ start, end }) {
   return { start: new Date(start.getTime() - len), end: new Date(start.getTime()) };
 }
 
-export const PERIOD_LABELS = PERIODS.reduce((m, p) => { m[p.value] = p.label; return m; }, {});
+export const PERIOD_LABELS = LEADS_PERIODS.reduce((m, p) => { m[p.value] = p.label; return m; }, {});
 
 // The standardized preset set used by every Finance + Report date filter.
 export const STANDARD_PERIODS = [

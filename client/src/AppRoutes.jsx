@@ -196,11 +196,13 @@ export function OperatorRoutes() {
           </Route>
           <Route path="/queue-recovery" element={<QueueRecovery />} />
           <Route path="/errors" element={<Navigate to="/settings?tab=errors" replace />} />
-          <Route element={<DistributionLayout />}>
+          <Route element={
+            <ErrorBoundary title="Unable to load Distribution">
+              <DistributionLayout />
+            </ErrorBoundary>
+          }>
             <Route path="/distribution" element={
-              <ErrorBoundary>
-                <DistributionDashboard />
-              </ErrorBoundary>
+              <DistributionDashboard />
             } />
             <Route path="/campaigns" element={<Campaigns />} />
             {/* Buyers live in Operations only. These paths are kept as redirects so

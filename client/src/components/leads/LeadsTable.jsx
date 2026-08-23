@@ -19,7 +19,7 @@ import { bulkDeleteLeads } from '@/functions/bulkDeleteLeads';
 import { loadColumnConfig, saveColumnConfig, getColumnDef, buildAvailableColumns } from '@/lib/columnConfig';
 import { leadEventInstant, leadField } from '@/lib/reportMetrics';
 import { invalidateLeadCaches } from '@/lib/leadCaches';
-import { resolvePeriod } from '@/lib/periodRange';
+import { defaultLeadsPeriod, resolvePeriod } from '@/lib/periodRange';
 import LeadCountsStrip, { leadCounts } from '@/components/shared/LeadCountsStrip';
 
 function getFieldValue(lead, field) {
@@ -164,9 +164,11 @@ function persistSavedSets(view, sets) {
 export default function LeadsTable({ view }) {
   const qc = useQueryClient();
   const config = VIEW_CONFIGS[view] || VIEW_CONFIGS.all;
+  const initialPeriod = defaultLeadsPeriod(view);
 
   const [search, setSearch] = useState('');
-  // Period ALWAYS starts at This Month, on every visit, refresh and login.
+  // All Leads opens on the complete non-archived inventory. Status-specific
+  // views retain the reporting convention of This Month.
   //
   // The URL is an OUTPUT only, never an input: the sub-nav badges and the
   // telemetry footer read it so they resolve the same window as this table.
@@ -175,7 +177,7 @@ export default function LeadsTable({ view }) {
   // custom range with the Custom tab lit. Nothing is persisted either, so two
   // visits can never resolve different windows and report different counts.
   const [, setSearchParams] = useSearchParams();
-  const [period, setPeriodState] = useState('last60');
+  const [period, setPeriodState] = useState(() => initialPeriod);
   const [customPeriod, setCustomPeriodState] = useState({ from: '', to: '' });
 
   // Publish the current window to the URL, including on first mount, which
@@ -251,7 +253,7 @@ export default function LeadsTable({ view }) {
     setSearch('');
     // Reset straight through the raw setters. Going via setPeriod /
     // setCustomPeriod here is what caused the Custom-on-load bug.
-    setPeriodState('this_month');
+    setPeriodState(initialPeriod);
     setCustomPeriodState({ from: '', to: '' });
     setCustomFilters([]);
     setSavedSets(loadSavedSets(view));
@@ -260,7 +262,7 @@ export default function LeadsTable({ view }) {
     setStatusFilter([]);
     setSupplierFilter([]);
     setSourceFilter([]);
-  }, [view]);
+  }, [view, initialPeriod]);
 
   // Persist column layout whenever it changes.
   useEffect(() => {
@@ -292,6 +294,8 @@ export default function LeadsTable({ view }) {
       }
       return all;
     },
+    refetchOnMount: 'always',
+    refetchOnWindowFocus: true,
   });
 
   const { data: errorLogs = [] } = useQuery({
@@ -432,7 +436,7 @@ export default function LeadsTable({ view }) {
       return Number.isNaN(t) ? -Infinity : t;
     };
     return result.sort((a, b) => instant(b) - instant(a));
-  }, [scoped, supplierFilter, sourceFilter]);
+  }, [scoped, supplierFilter, buyerFilter, sourceFilter, verticalFilter]);
 
   // Client-side pagination over the filtered set. Selection and bulk actions
   // still span the whole filtered set; only the rendered rows are sliced.
@@ -498,7 +502,7 @@ export default function LeadsTable({ view }) {
   };
 
   const applySavedSet = (set) => {
-    setPeriod(set.period || 'this_month');
+    setPeriod(set.period || initialPeriod);
     setCustomPeriod(set.customPeriod || { from: '', to: '' });
     setCustomFilters(set.customFilters || []);
     setSearch(set.search || '');
@@ -646,6 +650,7 @@ export default function LeadsTable({ view }) {
         setSearch={setSearch}
         period={period}
         setPeriod={setPeriod}
+        defaultPeriod={initialPeriod}
         customPeriod={customPeriod}
         setCustomPeriod={setCustomPeriod}
         customFilters={customFilters}

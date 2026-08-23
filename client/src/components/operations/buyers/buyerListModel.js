@@ -1,6 +1,31 @@
 // Pure helpers for the Buyer Management list surface. No entity reads here;
 // callers pass in already-fetched Buyer, BuyerStateCpl and StateStatus rows.
 
+export function isDisabledBuyer(buyer) {
+  const status = String(buyer?.status || '').toLowerCase();
+  return status === 'paused' || status === 'terminated';
+}
+
+export function buyerNeedsSetup(buyer) {
+  if (!buyer) return false;
+  return !buyer.client_type || buyer.status === 'draft';
+}
+
+export function matchesBuyerTab(buyer, tabKey) {
+  if (tabKey === 'disabled') return isDisabledBuyer(buyer);
+  if (tabKey === 'all') return true;
+  if (tabKey === 'needs_setup') return buyerNeedsSetup(buyer);
+  if (tabKey === 'unclassified') return !buyer.client_type;
+  return buyer.client_type === tabKey;
+}
+
+export function filterBuyerRows(buyers = [], tabKey = 'all', verticalFilter = []) {
+  return buyers.filter((buyer) => {
+    if (!matchesBuyerTab(buyer, tabKey)) return false;
+    return verticalFilter.length === 0 || verticalFilter.includes(buyer.vertical);
+  });
+}
+
 // Active BuyerStateCpl rows for a given buyer.
 export function activeCplRows(buyerId, cplRows) {
   return (cplRows || []).filter((r) => r.buyer_id === buyerId && r.active);

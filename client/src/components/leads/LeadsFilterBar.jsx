@@ -28,6 +28,7 @@ const NO_VALUE_OPERATORS = ['is_empty', 'is_not_empty'];
 export default function LeadsFilterBar({
   search, setSearch,
   period, setPeriod,
+  defaultPeriod = 'this_month',
   customPeriod, setCustomPeriod,
   customFilters, setCustomFilters,
   savedSets, onSaveSet, onDeleteSet, onApplySet,
@@ -58,7 +59,7 @@ export default function LeadsFilterBar({
 
   const clearAll = () => {
     setSearch('');
-    setPeriod('this_month');
+    setPeriod(defaultPeriod);
     setCustomPeriod({ from: '', to: '' });
     setCustomFilters([]);
     setActiveSetId('');
@@ -95,10 +96,10 @@ export default function LeadsFilterBar({
   const supplierCount = Array.isArray(supplierFilter) ? supplierFilter.length : 0;
   const buyerCount = Array.isArray(buyerFilter) ? buyerFilter.length : 0;
   const sourceCount = Array.isArray(sourceFilter) ? sourceFilter.length : 0;
-  const hasActiveFilters = search || period !== 'this_month' || customFilters.length > 0 || statusCount || supplierCount || buyerCount || sourceCount;
+  const hasActiveFilters = search || period !== defaultPeriod || customFilters.length > 0 || statusCount || supplierCount || buyerCount || sourceCount;
 
   // Count active filters for the mobile Filters badge (search is separate).
-  const activeCount = (period !== 'this_month' ? 1 : 0) + customFilters.length +
+  const activeCount = (period !== defaultPeriod ? 1 : 0) + customFilters.length +
     statusCount + supplierCount + buyerCount + sourceCount;
 
   // Status / Suppliers / Sources / Time / Filters / Save controls. Rendered

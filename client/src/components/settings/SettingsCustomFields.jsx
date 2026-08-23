@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '@/api/client';
+import { fetchAll } from '@/lib/fetchAll';
+import { customFieldCatalog } from '@/lib/customFieldCatalog';
 import { renameField } from '@/functions/renameField';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { DragDropContext, Droppable, Draggable } from '@hello-pangea/dnd';
@@ -13,7 +15,7 @@ import { SearchableSelect } from '@/components/ui/searchable-select';
 import { Textarea } from '@/components/ui/textarea';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { Badge } from '@/components/ui/badge';
-import { Plus, Copy, Trash2, Edit2, Wand2, GripVertical, Sparkles, CheckCheck, Ban, ArrowDownUp, Search, ChevronUp, ChevronDown, ChevronsUpDown } from 'lucide-react';
+import { Plus, Copy, Trash2, Edit2, Wand2, GripVertical, Sparkles, CheckCheck, Ban, ArrowDownUp, Search, ChevronUp, ChevronDown, ChevronsUpDown, RefreshCw } from 'lucide-react';
 import { toast } from 'sonner';
 import ImportExportFieldsDialog from '@/components/settings/ImportExportFieldsDialog';
 import AutoDetectedFieldsDialog from '@/components/settings/AutoDetectedFieldsDialog';
@@ -60,9 +62,13 @@ export default function SettingsCustomFields() {
   // null = manual drag order. Otherwise { key, dir: 'asc' | 'desc' }.
   const [sortConfig, setSortConfig] = useState(null);
 
-  const { data: fields = [] } = useQuery({
-    queryKey: ['custom-fields'],
-    queryFn: () => api.entities.CustomField.list(),
+  const {
+    data: fields = [], isFetching: fieldsFetching, isError: fieldsError, refetch: refetchFields,
+  } = useQuery({
+    queryKey: ['custom-fields', 'catalog'],
+    queryFn: () => fetchAll((limit, skip) => api.entities.CustomField.list('sort_order', limit, skip)),
+    refetchOnMount: 'always',
+    refetchOnWindowFocus: true,
   });
 
   const { data: appSettings } = useQuery({
@@ -87,7 +93,28 @@ export default function SettingsCustomFields() {
     setOrderedFields(sorted);
   }, [fields]);
 
-  const autoFields = fields.filter(f => f.auto_created);
+  if (fieldsFetching) {
+    return (
+      <div className="bg-card border border-border rounded-[10px] px-4 py-10 text-center text-muted-foreground">
+        <RefreshCw className="w-5 h-5 mx-auto mb-2 animate-spin" />
+        Refreshing persisted field catalog...
+      </div>
+    );
+  }
+
+  if (fieldsError) {
+    return (
+      <div className="bg-card border border-border rounded-[10px] px-4 py-10 text-center">
+        <div className="text-[14px] font-semibold text-foreground">Unable to load custom fields</div>
+        <div className="text-[12px] text-muted-foreground mt-1">The persisted field catalog could not be refreshed.</div>
+        <Button variant="outline" size="sm" className="mt-3 gap-1.5" onClick={() => refetchFields()}>
+          <RefreshCw className="w-3.5 h-3.5" /> Retry
+        </Button>
+      </div>
+    );
+  }
+
+  const { autoDetected: autoFields } = customFieldCatalog(fields);
   const autoCount = autoFields.length;
 
   const isSystem = (f) => f.field_type === 'system';
@@ -402,7 +429,7 @@ export default function SettingsCustomFields() {
       {/* Sticky toolbar, stays visible while the field table scrolls beneath it. */}
       <div className="sticky top-0 z-20 bg-background pt-1 pb-3 -mt-1">
         <div className="flex items-center justify-between mb-4">
-          <div className="text-[13px] text-muted-foreground">{fields.length} fields defined</div>
+          <div className="text-[13px] text-muted-foreground">Defined fields: {fields.length}</div>
           <div className="flex gap-2">
             <Button size="sm" variant="outline" onClick={() => setImportExportOpen(true)} className="gap-1.5">
               <ArrowDownUp className="w-3.5 h-3.5" /> Import / Export Fields
@@ -432,7 +459,7 @@ export default function SettingsCustomFields() {
             className="w-full flex items-center gap-2 mb-3 px-3 py-2 bg-primary/10 border border-primary/30 rounded-lg hover:bg-primary/15 transition-colors text-left"
           >
             <Sparkles className="w-4 h-4 text-primary shrink-0" />
-            <span className="text-[13px] text-primary">{autoCount} field{autoCount !== 1 ? 's' : ''} auto-detected from inbound leads</span>
+            <span className="text-[13px] text-primary">Auto-detected candidates: {autoCount}</span>
             <span className="text-[12px] text-primary/70 ml-auto">Review →</span>
           </button>
         )}

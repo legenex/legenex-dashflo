@@ -112,7 +112,12 @@ export default function DistributionDashboard() {
   const win = useMemo(() => resolvePeriod(period, custom), [period, custom]);
   const prior = useMemo(() => priorWindow(win), [win]);
 
-  const { data: leads = [] } = useQuery({ queryKey: ['dist-leads'], queryFn: () => api.entities.Lead.filter({ archived: false }, '-created_date', 2000) });
+  const { data: leads = [] } = useQuery({
+    queryKey: ['dist-leads'],
+    queryFn: () => fetchAll((limit, skip) => api.entities.Lead.filter({ archived: false }, '-created_date', limit, skip)),
+    refetchOnMount: 'always',
+    refetchOnWindowFocus: true,
+  });
   const { data: errors = [] } = useQuery({ queryKey: ['dist-errors'], queryFn: () => fetchAll((limit, skip) => api.entities.ErrorLog.list('-created_date', limit, skip)) });
   const { data: hlrArr = [] } = useQuery({ queryKey: ['hlr-settings'], queryFn: () => api.entities.HlrSettings.list() });
   const { data: emailArr = [] } = useQuery({ queryKey: ['email-val-settings'], queryFn: () => api.entities.EmailValidationSettings.list() });

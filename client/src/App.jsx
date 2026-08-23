@@ -19,6 +19,7 @@ import ForgotPassword from '@/pages/ForgotPassword';
 import ResetPassword from '@/pages/ResetPassword';
 
 import ApiStatus from '@/pages/ApiStatus';
+import ErrorBoundary from '@/components/ErrorBoundary';
 
 
 
@@ -184,9 +185,11 @@ function App() {
       <QueryClientProvider client={queryClientInstance}>
         <Router>
           <ScrollToTop />
-          <Suspense fallback={<RouteFallback />}>
-            <AuthenticatedApp />
-          </Suspense>
+          <ErrorBoundary title="Unable to load DashFlo">
+            <Suspense fallback={<RouteFallback />}>
+              <AuthenticatedApp />
+            </Suspense>
+          </ErrorBoundary>
         </Router>
         <Toaster />
         {/* Sonner, mounted. 119 modules report their outcome through `toast`

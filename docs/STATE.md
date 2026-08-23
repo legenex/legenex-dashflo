@@ -2687,3 +2687,47 @@ have been.
   it generically from existing catalog structure instead, which is provably
   consistent with current behavior rather than a new hand-authored table that
   could itself drift from it.
+
+## 2026-08-23: Production catalog and Distribution UI recovery
+
+### Production evidence
+
+- Read-only PostgreSQL checks found 1,982 Leads, including 1,874 non-archived
+  Leads, 13 Buyers, and 84 CustomFields. The non-archived Lead event range is
+  2026-06-01 07:18:00 UTC through 2026-08-22 17:39:19.624 UTC. The current
+  month contains 472 Leads and the last 60 days contain 1,395.
+- Authenticated production API checks returned 1,982 unfiltered Leads, 1,874
+  Leads for the UI's non-archived query, 13 Buyers, and 84 CustomFields.
+- The successful migration audit created 1,982 Leads and 13 Buyers. It created
+  71 CustomFields while preserving the 13 already present. The reported empty
+  Lead and Buyer views and 13-field Settings view therefore matched client
+  query data cached before the migration, not the production database or API.
+- The production Distribution chunks and every direct dependency returned
+  non-empty JavaScript. Retired hashed Distribution chunk URLs from previous
+  deployments returned the HTML application shell. A tab holding an old entry
+  point therefore received `text/html` for a JavaScript module and raised the
+  browser's dynamic import failure before `DistributionLayout` could mount.
+
+### Application changes
+
+- All Leads now defaults to All Time, while status-specific views retain the
+  existing This Month reporting convention. A fresh catalog query refetches on
+  mount and focus, and all active filters participate in memoization.
+- Buyers and CustomFields use catalog-specific query keys, refetch on mount and
+  focus, and distinguish loading and request failure from a genuinely empty
+  catalog. CustomFields displays the persisted catalog separately from the
+  auto-detected candidate subset.
+- Distribution pages load the complete paginated Lead catalog instead of the
+  server's 1,000-row maximum first page.
+- The Distribution layout and the application-level lazy route shell now have
+  visible error boundaries. A retired-chunk failure receives one guarded reload
+  and then offers Retry and Reload controls. Safe diagnostics contain only the
+  error name, sanitized message, component label, and route path.
+
+### Validation and rollback
+
+- Focused coverage exercises All Time Lead defaults, all 13 populated Buyer
+  rows, all 84 persisted CustomFields with 19 auto-detected candidates,
+  production-shaped Distribution data, and visible lazy-chunk recovery.
+- Roll back with `git revert` of the UI recovery commit. No schema, migration,
+  production data, credentials, delivery, or billing behavior changed.
