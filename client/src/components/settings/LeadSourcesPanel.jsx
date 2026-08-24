@@ -58,7 +58,7 @@ export default function LeadSourcesPanel() {
     <div className="space-y-4">
       <div className="flex items-start justify-between gap-4">
         <p className="text-[13px] text-muted-foreground max-w-2xl">
-          Call platforms that post inbound calls to this workspace. Calls flow through the same processing pipeline as the API and LeadByte, so validation, dedup, conversion events and revenue all run.
+          Call platforms that post inbound calls to this workspace. Calls flow through the same processing pipeline as the API, so validation, dedup, conversion events and revenue all run.
         </p>
         <div className="flex items-center gap-2 shrink-0">
           <Button size="sm" variant="outline" className="gap-1.5" onClick={() => setDialog({ open: true, source: null, provider: 'ringba' })}>

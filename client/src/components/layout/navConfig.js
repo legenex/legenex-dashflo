@@ -54,7 +54,7 @@ export const navGroups = [
     children: [
       { label: 'Dashboard', path: '/distribution', icon: LayoutDashboard, permKey: 'dist_dashboard' },
       { label: 'Campaigns', path: '/campaigns', icon: Megaphone, permKey: 'dist_campaigns' },
-      { label: 'Webhooks', path: '/deliveries', icon: Webhook, permKey: 'dist_deliveries' },
+      { label: 'Webhooks', path: '/webhooks', icon: Webhook, permKey: 'dist_webhooks' },
       { label: 'Conversion Events', path: '/conversion-events', icon: Zap, permKey: 'dist_conversion_events' },
     ],
   },

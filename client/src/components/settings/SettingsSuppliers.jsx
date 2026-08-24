@@ -269,7 +269,7 @@ export default function SettingsSuppliers() {
         <div className="flex items-center justify-between gap-3 pt-3 border-t border-border">
           <div>
             <Label className="text-[12px]">Require TrustedForm Cert</Label>
-            <p className="text-[11px] text-muted-foreground mt-0.5">When enabled, leads without a valid TrustedForm cert URL are queued before reaching LeadByte.</p>
+            <p className="text-[11px] text-muted-foreground mt-0.5">When enabled, leads without a valid TrustedForm cert URL are queued before delivery.</p>
           </div>
           <Switch checked={requireCert} onCheckedChange={toggleCertGate} />
         </div>

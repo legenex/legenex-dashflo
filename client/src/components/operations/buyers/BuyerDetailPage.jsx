@@ -54,7 +54,7 @@ export default function BuyerDetailPage({ buyer, verticals, onBack, initialTab }
             <BuyerStatusPill status={buyer.status} />
           </div>
           <div className="flex items-center gap-2 mt-0.5">
-            <span className="font-mono text-[11px] text-muted-foreground">{buyer.buyer_code || 'No code'}</span>
+            <span className="font-mono text-[11px] text-muted-foreground" title="Buyer ID">{buyer.buyer_code || 'No ID'}</span>
             <span className="text-muted-foreground/40">|</span>
             <span className="inline-flex items-center rounded-full border border-border bg-card px-2 py-0.5 text-[11px] font-medium text-muted-foreground">{verticalName}</span>
           </div>

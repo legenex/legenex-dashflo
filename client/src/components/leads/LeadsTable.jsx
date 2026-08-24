@@ -139,7 +139,7 @@ const SYSTEM_FILTER_FIELDS = [
   { value: 'mobile', label: 'Mobile' },
   { value: 'final_status', label: 'Final Status' },
   { value: 'hlr_status', label: 'HLR Status' },
-  { value: 'leadbyte_record_status', label: 'LB Record Status' },
+  { value: 'leadbyte_record_status', label: 'Delivery Status' },
   { value: 'lead_id', label: 'Lead ID' },
   { value: 'revenue', label: 'Revenue' },
 ];

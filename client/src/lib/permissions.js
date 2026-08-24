@@ -133,7 +133,10 @@ export const PATH_KEYS = {
   '/campaigns': 'dist_campaigns',
   '/campaigns/deliveries': 'dist_deliveries',
   '/distribution/buyers': 'dist_buyers',
-  '/deliveries': 'dist_webhooks',
+  '/webhooks': 'dist_webhooks',
+  // '/deliveries' is a permanent redirect to '/webhooks' (see AppRoutes.jsx) and
+  // deliberately has no key here: the Navigate element renders freely and the
+  // real permission check happens once at '/webhooks'.
   '/conversion-events': 'dist_conversion_events',
   '/distribution/routes': 'dist_routes',
   '/distribution/simulator': 'dist_simulator',
@@ -201,7 +204,7 @@ export function keyForLocation(pathname, search) {
 // First path a user with the given can(key) checker is allowed to land on.
 export function firstAllowedPath(can) {
   const order = ['/', '/leads', '/leads/sold', '/leads/unsold', '/leads/disqualified',
-    '/leads/rejected', '/leads/queued', '/leads/converted', '/reports', '/distribution', '/campaigns', '/deliveries',
+    '/leads/rejected', '/leads/queued', '/leads/converted', '/reports', '/distribution', '/campaigns', '/webhooks',
     '/conversion-events', '/finances', '/notifications'];
   for (const p of order) {
     const key = PATH_KEYS[p];

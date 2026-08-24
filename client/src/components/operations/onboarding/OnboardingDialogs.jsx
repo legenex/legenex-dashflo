@@ -12,7 +12,7 @@ const EXTERNAL_STEPS = [
   { key: 'deposit_invoice', label: 'Stripe deposit invoice' },
   { key: 'xero_invoice', label: 'Xero sales invoice' },
   { key: 'payment_link', label: 'Rebrandly payment link' },
-  { key: 'leadbyte_buyer', label: 'LeadByte buyer' },
+  { key: 'delivery_buyer', label: 'Delivery buyer' },
   { key: 'crm_contact', label: 'GHL contact' },
 ];
 
@@ -41,7 +41,7 @@ export function RunOnboardingDialog({ open, onOpenChange, actionLabel, onConfirm
             <div className="space-y-2 text-[13px]">
               <p>
                 This is not a dry run. Running onboarding creates real records in Stripe, Xero,
-                LeadByte, Rebrandly and GHL, and sends a real onboarding email to the buyer contact.
+                the delivery connector, Rebrandly and GHL, and sends a real onboarding email to the buyer contact.
               </p>
               <p className="text-muted-foreground">
                 Steps that already hold an external id are not repeated, so nothing is created twice.

@@ -163,7 +163,7 @@ export default function CampaignBuyers() {
       />
 
       <TableShell head={COLS} template={BUYER_TEMPLATE} minWidth="1000px">
-        {buyers.length === 0 && <EmptyRow>No buyers yet. Buyers can be created manually or are auto-created from LeadByte sold responses.</EmptyRow>}
+        {buyers.length === 0 && <EmptyRow>No buyers yet. Buyers can be created manually or are auto-created from delivery sold responses.</EmptyRow>}
         {buyers.map((b, i) => {
           const bDeliveries = deliveriesByBuyer[b.id] || [];
           const isOpen = expanded.has(b.id);

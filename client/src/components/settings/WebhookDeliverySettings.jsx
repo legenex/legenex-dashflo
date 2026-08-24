@@ -12,7 +12,7 @@ import { Badge } from '@/components/ui/badge';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
 import JsonViewer from '@/components/shared/JsonViewer';
-import { testLeadByteConnector } from '@/functions/testLeadByteConnector';
+import { testWebhookDelivery } from '@/functions/testWebhookDelivery';
 import DeliveryLogsTab from '@/components/settings/DeliveryLogsTab';
 import { buildDefaultActualPayload } from '@/components/settings/ActualPayloadEditor';
 import { HighlightedPayloadEditor } from '@/components/settings/HighlightedPayloadEditor';
@@ -185,7 +185,7 @@ function parseHeaderRows(val) {
 
 
 
-export default function SettingsLeadByte() {
+export default function WebhookDeliverySettings() {
   const qc = useQueryClient();
   const [editing, setEditing] = useState(null);
   const [headerRows, setHeaderRows] = useState([]);
@@ -306,7 +306,7 @@ export default function SettingsLeadByte() {
       return;
     }
     await saveTestPayload(testPayloadStr);
-    const resp = await testLeadByteConnector({ connector_id: editing.id, test_payload: parsed });
+    const resp = await testWebhookDelivery({ connector_id: editing.id, test_payload: parsed });
     const data = resp.data;
     setTestResult(data);
     if (data?.error) {

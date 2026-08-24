@@ -18,7 +18,7 @@ export const BUYER_COLUMNS = [
     className: 'font-medium text-foreground',
   },
   {
-    key: 'buyer_code', header: 'Code', sortable: true,
+    key: 'buyer_code', header: 'Buyer ID', sortable: true,
     sortValue: (b) => b.buyer_code || '',
     accessor: (b) => b.buyer_code || '-',
     className: 'font-mono text-[11px] text-muted-foreground',

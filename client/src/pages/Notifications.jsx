@@ -16,11 +16,11 @@ import { toast } from 'sonner';
 const conditionLabels = {
   errors_same_stage: 'N errors of the same stage within M minutes',
   hlr_unreachable: 'HLR provider unreachable',
-  leadbyte_non_success: 'LeadByte returning non success',
+  leadbyte_non_success: 'Delivery returning non success',
   sold_rate_below: 'Sold rate drops below X percent over last N leads',
   api_error: 'API connector error',
   capi_failure: 'Facebook CAPI event failure',
-  lead_queued: 'Lead queued at gate or by LeadByte',
+  lead_queued: 'Lead queued at gate or by the delivery connector',
   missing_fields: 'Required fields missing on inbound lead',
 };
 

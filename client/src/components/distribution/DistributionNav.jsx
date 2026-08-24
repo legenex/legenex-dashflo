@@ -19,9 +19,9 @@ import SubNavShell from '@/components/layout/SubNavShell';
 const ITEMS = [
   { label: 'Dashboard', path: '/distribution', icon: LayoutDashboard },
   { label: 'Campaigns', path: '/campaigns', icon: Megaphone },
-  // Webhooks is Nick's live rename of the former Deliveries page; it stays at
-  // /deliveries (the live route) and is NOT moved to a new path.
-  { label: 'Webhooks', path: '/deliveries', icon: Webhook },
+  // Canonical webhook/delivery configuration screen. /deliveries is kept as a
+  // permanent redirect to this path (see AppRoutes.jsx) for old bookmarks.
+  { label: 'Webhooks', path: '/webhooks', icon: Webhook },
   { label: 'Conversion Events', path: '/conversion-events', icon: Zap },
 ];
 

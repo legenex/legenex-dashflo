@@ -29,7 +29,7 @@ function sortValue(record, key) {
 
 const COLUMNS = [
   { key: 'company', label: 'Company', align: 'left' },
-  { key: 'buyer_code', label: 'Linked buyer code', align: 'left' },
+  { key: 'buyer_code', label: 'Linked buyer ID', align: 'left' },
   { key: 'status', label: 'Status', align: 'left' },
   { key: 'current_step', label: 'Current step', align: 'left' },
   { key: 'progress', label: 'Steps complete', align: 'left' },

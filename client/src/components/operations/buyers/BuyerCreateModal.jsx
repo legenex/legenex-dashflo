@@ -61,7 +61,7 @@ export default function BuyerCreateModal({ open, onOpenChange, verticals, onCrea
       allocatedCode = res?.data?.buyer_code;
       if (!allocatedCode) throw new Error(res?.data?.error || 'No code returned.');
     } catch (err) {
-      toast.error(`Could not allocate a buyer code: ${err?.response?.data?.error || err?.message || 'unknown error'}`);
+      toast.error(`Could not allocate a buyer ID: ${err?.response?.data?.error || err?.message || 'unknown error'}`);
       setSubmitting(false);
       return;
     }
@@ -88,7 +88,7 @@ export default function BuyerCreateModal({ open, onOpenChange, verticals, onCrea
         status: 'draft',
       });
     } catch (err) {
-      toast.error(`Buyer creation failed after code ${allocatedCode} was allocated. That code has been consumed and will not be reused: ${err?.message || 'unknown error'}`);
+      toast.error(`Buyer creation failed after ID ${allocatedCode} was allocated. That ID has been consumed and will not be reused: ${err?.message || 'unknown error'}`);
       setSubmitting(false);
       return;
     }
@@ -101,7 +101,7 @@ export default function BuyerCreateModal({ open, onOpenChange, verticals, onCrea
       console.error('mintOnboardingLink failed', err);
     }
 
-    toast.success(`Buyer created with code ${allocatedCode}. Set state coverage so it can receive leads.`);
+    toast.success(`Buyer created with ID ${allocatedCode}. Set state coverage so it can receive leads.`);
     onOpenChange(false);
     onCreated?.(created);
   };

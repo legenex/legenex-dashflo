@@ -22,7 +22,7 @@ export default function BuyerDetailDrawer({ open, onOpenChange, buyer, verticals
                 <div className="min-w-0">
                   <h2 className="text-[17px] font-semibold text-foreground truncate">{buyer.company_name || 'Buyer'}</h2>
                   <div className="flex items-center gap-2 mt-1">
-                    <span className="font-mono text-[11px] text-muted-foreground">{buyer.buyer_code || 'No code'}</span>
+                    <span className="font-mono text-[11px] text-muted-foreground" title="Buyer ID">{buyer.buyer_code || 'No ID'}</span>
                     <span className="text-muted-foreground/40">|</span>
                     <span className="text-[12px] text-muted-foreground">{buyer.client_type || 'Unclassified'}</span>
                   </div>

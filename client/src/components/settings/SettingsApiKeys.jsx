@@ -191,7 +191,7 @@ export default function SettingsApiKeys() {
             <div className="flex items-start gap-2 mt-2">
               <div className="w-4 shrink-0" />
               <div className="text-[11px] text-muted-foreground bg-yellow-500/10 border border-yellow-500/20 rounded px-2 py-1.5 text-yellow-300">
-                ⚠ This is the <strong>Gateway API key</strong> generated here - <strong>not</strong> the LeadByte <code className="font-mono">X_KEY</code> header configured in the LeadByte connector settings.
+                ⚠ This is the <strong>DashFlo inbound API key</strong> generated here - <strong>not</strong> a <code className="font-mono">X_KEY</code> header configured in a separate delivery connector's settings.
               </div>
             </div>
           </div>

@@ -144,7 +144,7 @@ export default function OnboardingDrawer({ open, onOpenChange, record, buyer, ru
               <div className="rounded-[10px] border border-primary/30 px-3.5 py-3">
                 <div className="text-[12.5px] text-muted-foreground mb-2.5">
                   Cancel this onboarding. This does not delete the buyer or reverse anything already
-                  created in Stripe, Xero or LeadByte.
+                  created in Stripe, Xero or the delivery connector.
                 </div>
                 <Button variant="outline" size="sm" onClick={() => setCancelOpen(true)} className="text-primary border-primary/40 hover:bg-primary/10">
                   Cancel onboarding

@@ -314,7 +314,7 @@ export default function LeadDetailModal({ lead, open, onClose, initialTab = 'sum
                         ))}
                       </div>
                       {reportedTrustedFormUrl != null && String(reportedTrustedFormUrl).trim() !== '' && (
-                        <div className="text-[12px] text-muted-foreground mt-2">TrustedForm URL reported by LeadByte. Not a captured certificate.</div>
+                        <div className="text-[12px] text-muted-foreground mt-2">TrustedForm URL reported by the delivery destination. Not a captured certificate.</div>
                       )}
                     </div>
                   )}

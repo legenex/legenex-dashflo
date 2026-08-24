@@ -24,7 +24,7 @@ export function TopUpDialog({ open, onOpenChange, buyer, preview, onConfirm }) {
             <div className="space-y-2 text-[13px]">
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Buyer</span>
-                <span className="text-foreground">{buyer?.company_name} ({buyer?.buyer_code || 'no code'})</span>
+                <span className="text-foreground">{buyer?.company_name} ({buyer?.buyer_code || 'no ID'})</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Amount that would be invoiced</span>

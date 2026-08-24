@@ -49,9 +49,9 @@ function DeliveryItem({ name, trigger, ok, httpStatus, error, payload, response 
   );
 }
 
-// Renders the full delivery log for a lead: the LeadByte forward (its request +
-// response), plus every delivery destination / webhook fired, each as an
-// expandable item that reveals the actual request and response bodies.
+// Renders the full delivery log for a lead: the primary delivery forward (its
+// request + response), plus every delivery destination / webhook fired, each as
+// an expandable item that reveals the actual request and response bodies.
 export default function DeliveryLogView({ lead }) {
   const deliveries = parseList(lead.delivery_log);
   const hasLeadByte = !isEmpty(lead.leadbyte_request) || !isEmpty(lead.leadbyte_response);
@@ -71,7 +71,7 @@ export default function DeliveryLogView({ lead }) {
     <div className="space-y-2">
       {hasLeadByte && (
         <DeliveryItem
-          name="LeadByte"
+          name="Delivery"
           trigger="standard"
           ok={lbOk}
           httpStatus={null}

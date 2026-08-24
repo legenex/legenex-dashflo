@@ -38,7 +38,7 @@ export const DELIVERY_METHODS = [
 export const DISPOSITION_METHODS = [
   { value: 'live_google_sheet', label: 'Live Google Sheet (This is our default method)' },
   { value: 'api', label: 'Send Dispositions via API' },
-  { value: 'leadbyte_portal', label: 'Update Leads Manually in LeadByte Portal' },
+  { value: 'leadbyte_portal', label: 'Update Leads Manually in Buyer Portal' },
   { value: 'csv', label: 'Send CSV/Excel File' },
   { value: 'real_time_portal', label: 'Real Time Portal' },
 ];

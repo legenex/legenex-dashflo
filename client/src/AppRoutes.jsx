@@ -68,7 +68,7 @@ const SupplierDetail = lazy(() => import('@/pages/SupplierDetail'));
 const BuyerDetail = lazy(() => import('@/pages/BuyerDetail'));
 const Reports = lazy(() => import('@/pages/Reports'));
 const Finances = lazy(() => import('@/pages/Finances'));
-const Deliveries = lazy(() => import('@/pages/Deliveries'));
+const Webhooks = lazy(() => import('@/pages/Webhooks'));
 const ConversionEvents = lazy(() => import('@/pages/ConversionEvents'));
 const RouteSimulator = lazy(() => import('@/pages/RouteSimulator'));
 const RouteGroups = lazy(() => import('@/pages/RouteGroups'));
@@ -210,8 +210,11 @@ export function OperatorRoutes() {
             <Route path="/distribution/buyers" element={<Navigate to="/operations/buyers" replace />} />
             <Route path="/distribution/buyers/:id" element={<Navigate to="/operations/buyers" replace />} />
             <Route path="/campaigns/deliveries" element={<Navigate to="/campaigns" replace />} />
-            {/* Nick's live rename: /deliveries stays and renders the Webhooks page. */}
-            <Route path="/deliveries" element={<Deliveries />} />
+            {/* Canonical webhook/delivery configuration screen. */}
+            <Route path="/webhooks" element={<Webhooks />} />
+            {/* /deliveries is the old URL for this screen. Kept as a permanent
+                compatibility redirect so bookmarks and cross-links do not 404. */}
+            <Route path="/deliveries" element={<Navigate to="/webhooks" replace />} />
             <Route path="/conversion-events" element={<ConversionEvents />} />
             {/* Route Groups (Advanced) + Simulator stay routable, out of nav. */}
             <Route path="/distribution/routes" element={<RouteGroups />} />

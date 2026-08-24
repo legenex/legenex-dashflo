@@ -55,7 +55,7 @@ export const SYSTEM_COLUMNS = [
   { key: 'processTime', header: 'Time', accessor: (l) => l.process_time_ms ? `${l.process_time_ms}ms` : '-', className: 'font-mono text-[11px] text-muted-foreground' },
   { key: 'leadId', header: 'Lead ID', accessor: (l) => l.lead_id != null ? String(l.lead_id) : (getFromMapped(l, ['lead_id']) != null ? String(getFromMapped(l, ['lead_id'])) : '-'), className: 'font-mono text-[11px]' },
   { key: 'hlrStatus', header: 'HLR Status', accessor: (l) => l.hlr_status || '-' },
-  { key: 'lbStatus', header: 'LB Status', accessor: (l) => l.leadbyte_record_status || '-' },
+  { key: 'lbStatus', header: 'Delivery Status', accessor: (l) => l.leadbyte_record_status || '-' },
   { key: 'deliveryError', header: 'Delivery Error', accessor: (l) => l.delivery_error || '-', className: 'text-[11px] text-muted-foreground whitespace-nowrap' },
   { key: 'emailValid', header: 'Email Valid', accessor: (l) => l.email_valid || '-' },
 ];

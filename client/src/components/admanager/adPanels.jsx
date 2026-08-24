@@ -183,7 +183,7 @@ export function TruthKpis({ a, platform }) {
       <div className="flex items-center gap-2 mb-2 flex-wrap">
         <ShieldCheck className="w-3.5 h-3.5" style={{ color: TONE.good }} />
         <span className="text-[10px] font-bold tracking-[0.14em] uppercase" style={{ color: TONE.good }}>Verified truth</span>
-        <span className="text-[10.5px] text-muted-foreground/60">joined from the Lead entity and the LeadByte sold result, the downstream {P} cannot see</span>
+        <span className="text-[10.5px] text-muted-foreground/60">joined from the Lead entity and the delivery sold result, the downstream {P} cannot see</span>
       </div>
       <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-3">
         <KpiTile
@@ -194,7 +194,7 @@ export function TruthKpis({ a, platform }) {
           band={cplBand(a.realCpl)}
         />
         <KpiTile verified label="Qualified" value={num(a.qualified)} hint="Sold, Unsold or Returned" />
-        <KpiTile verified label="Sold leads" value={num(a.sold)} hint="LeadByte sold result" />
+        <KpiTile verified label="Sold leads" value={num(a.sold)} hint="Delivery sold result" />
         <KpiTile verified label="Revenue" value={f0(a.revenue)} hint="sum of Lead.revenue" />
         <KpiTile verified label="Real ROAS" value={roasText(a.roas)} hint="revenue / spend" band={roasBand(a.roas)} />
       </div>

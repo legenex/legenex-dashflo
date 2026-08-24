@@ -20,9 +20,9 @@ import { format } from 'date-fns';
 import { downloadCsv } from '@/lib/csv';
 
 const failModeDescriptions = {
-  fail_open: 'Continue processing without HLR data. Lead proceeds to LeadByte with HLR fields absent.',
+  fail_open: 'Continue processing without HLR data. Lead proceeds to delivery with HLR fields absent.',
   fail_closed: 'Stop processing immediately. Lead is marked as Error and supplier receives error response.',
-  forward_blank: 'Continue but send empty strings for all HLR passthrough fields to LeadByte.',
+  forward_blank: 'Continue but send empty strings for all HLR passthrough fields to the delivery connector.',
 };
 
 const phoneVerifiedSourceDescriptions = {

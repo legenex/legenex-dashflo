@@ -120,8 +120,8 @@ export default function SettingsGeneral() {
           <p className="text-[11px] text-muted-foreground mb-3">Set <code className="bg-muted px-1 rounded text-primary font-mono">lead_route</code> in the inbound payload to control routing. Matching uses a case-insensitive "contains" filter.</p>
           <div className="space-y-2">
             {[
-              ['standard', 'Goes to Leadbyte (default)'],
-              ['direct', 'Bypasses Leadbyte and allows all other delivery / event processing'],
+              ['standard', 'Goes to the default delivery connector'],
+              ['direct', 'Bypasses the default connector and allows all other delivery / event processing'],
               ['data', 'Allows leads to be sent to data partners'],
               ['internal', 'Sends lead to the system only. No webhooks, deliveries or conversion events fire.'],
               ['event', 'Only allows leads to be sent to Conversion Events'],

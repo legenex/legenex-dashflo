@@ -91,7 +91,7 @@ export default function StateDetailDrawer({ open, onOpenChange, state, vertical,
                           )}
                         </div>
                         <div className="flex items-center gap-2 mt-1 text-[11px] text-muted-foreground">
-                          <span className="font-mono">{buyer.buyer_code || 'No code'}</span>
+                          <span className="font-mono">{buyer.buyer_code || 'No ID'}</span>
                           <span className="text-muted-foreground/40">|</span>
                           <span>{buyer.client_type || 'Unclassified'}</span>
                         </div>

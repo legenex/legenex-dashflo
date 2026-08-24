@@ -90,8 +90,15 @@ export default function ErrorLogs({ embedded = false }) {
           <SelectTrigger className="w-[130px] bg-card"><SelectValue placeholder="Stage" /></SelectTrigger>
           <SelectContent>
             <SelectItem value="all">All Stages</SelectItem>
-            {['auth', 'validation', 'mapping', 'hlr', 'leadbyte', 'system'].map(s => (
-              <SelectItem key={s} value={s}>{s}</SelectItem>
+            {[
+              { value: 'auth', label: 'auth' },
+              { value: 'validation', label: 'validation' },
+              { value: 'mapping', label: 'mapping' },
+              { value: 'hlr', label: 'hlr' },
+              { value: 'leadbyte', label: 'delivery' },
+              { value: 'system', label: 'system' },
+            ].map(s => (
+              <SelectItem key={s.value} value={s.value}>{s.label}</SelectItem>
             ))}
           </SelectContent>
         </Select>

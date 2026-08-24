@@ -672,7 +672,7 @@ export default function Overview() {
                   <div className="h-[220px] flex flex-col items-center justify-center text-center gap-1.5 px-4">
                     <Layers className="w-7 h-7 text-muted-foreground/50" />
                     <div className="text-[13px] text-muted-foreground">No leads in period</div>
-                    <div className="text-[11px] text-muted-foreground/70 max-w-[300px]">Likely cause: Leadbyte ingestion has never synced. Distribution and status counts depend on it.</div>
+                    <div className="text-[11px] text-muted-foreground/70 max-w-[300px]">Likely cause: no leads have been received for this period yet. Distribution and status counts depend on inbound lead volume.</div>
                     <Link to="/payload-tester" className="inline-flex items-center gap-1 text-[11px] text-primary hover:underline mt-1">Run Payload Tester <ArrowUpRight className="w-3 h-3" /></Link>
                   </div>
                 )}

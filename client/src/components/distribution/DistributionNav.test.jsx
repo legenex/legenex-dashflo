@@ -21,14 +21,16 @@ function render(path = '/distribution') {
 const PRESENT = [
   ['Dashboard', '/distribution'],
   ['Campaigns', '/campaigns'],
-  ['Webhooks', '/deliveries'],
+  ['Webhooks', '/webhooks'],
   ['Conversion Events', '/conversion-events'],
 ];
 // Buyers is deliberately absent: buyers are managed in Operations and their
 // deliveries are configured in the campaign, so a second buyer list here was a
 // duplicate editor for the same records.
 const ABSENT_LABELS = ['Verticals', 'Brands', 'Suppliers', 'Deliveries', 'Route Groups', 'Simulator', 'Buyers'];
-const ABSENT_ROUTES = ['/campaigns/deliveries', '/distribution/buyers', '/distribution/routes', '/distribution/simulator', 'tab=verticals', 'tab=brands', 'tab=suppliers'];
+// '/deliveries' is the old URL, kept only as a redirect (see AppRoutes.jsx) -
+// the nav must link to the canonical '/webhooks' path, never the legacy one.
+const ABSENT_ROUTES = ['/campaigns/deliveries', '/distribution/buyers', '/distribution/routes', '/distribution/simulator', 'tab=verticals', 'tab=brands', 'tab=suppliers', 'href="/deliveries"'];
 
 describe('DistributionNav pins the buyer-centric IA', () => {
   it('expanded column shows exactly the four sections with their routes', () => {

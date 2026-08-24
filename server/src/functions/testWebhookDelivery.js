@@ -156,7 +156,7 @@ async function assertOperator(db, user) {
   return caller.role === 'admin' || OPERATOR_PERMISSION_KEYS.some((k) => permissions[k] === true);
 }
 
-export default async function testLeadByteConnector(ctx) {
+export default async function testWebhookDelivery(ctx) {
   const user = requireUser(ctx);
   const db = ctx.db;
 

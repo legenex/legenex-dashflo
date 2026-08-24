@@ -40,7 +40,7 @@ function SideEffect({ step, buyer }) {
       </div>
     );
   }
-  if (step.key === 'leadbyte_buyer' && id) {
+  if (step.key === 'delivery_buyer' && id) {
     return <span className="font-mono text-[11px] text-muted-foreground break-all">bid {id}</span>;
   }
   if (id) {
@@ -108,7 +108,7 @@ export default function StepRail({ steps, buyer, running, onRetryStep }) {
                   )}
                   <div className="text-[11px] text-muted-foreground leading-snug">
                     Retry resumes from this step. Steps already complete that hold an external id are not repeated,
-                    so no duplicate Stripe customer, Xero contact or LeadByte buyer is created.
+                    so no duplicate Stripe customer, Xero contact or delivery buyer is created.
                   </div>
                 </div>
               )}

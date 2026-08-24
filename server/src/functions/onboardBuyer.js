@@ -5,7 +5,7 @@ import allocateBuyerCode from './allocateBuyerCode.js';
 //
 // Drives a BuyerOnboarding record through the full ordered list of steps:
 // validate, create_buyer, allocate_code, xero_contact, stripe_customer,
-// deposit_invoice, xero_invoice, payment_link, leadbyte_buyer, dispo_scope,
+// deposit_invoice, xero_invoice, payment_link, delivery_buyer, dispo_scope,
 // onboarding_email, crm_contact, schedule_intro_email.
 //
 // Each step is idempotent: a step holding an external_id (or already marked
@@ -33,7 +33,7 @@ const STEP_ORDER = [
   'deposit_invoice',
   'xero_invoice',
   'payment_link',
-  'leadbyte_buyer',
+  'delivery_buyer',
   'dispo_scope',
   'onboarding_email',
   'crm_contact',
@@ -693,9 +693,9 @@ export default async function onboardBuyer(ctx) {
               step.external_id = shortUrl;
             }
           }
-        } else if (key === 'leadbyte_buyer') {
+        } else if (key === 'delivery_buyer') {
           const buyer = await svc.entities.Buyer.get(buyerId).catch(() => null);
-          if (!buyer) throw new Error('Buyer record not found for LeadByte buyer create.');
+          if (!buyer) throw new Error('Buyer record not found for delivery buyer create.');
           const { baseUrl, key: lbKey } = await getLeadByteConfig(svc);
           const firstName = str(payload.primary_contact_name).split(' ')[0] || '';
           const lastName = str(payload.primary_contact_name).split(' ').slice(1).join(' ') || '';
@@ -717,7 +717,7 @@ export default async function onboardBuyer(ctx) {
           const text = await resp.text();
           let data;
           try { data = JSON.parse(text); } catch { data = { raw: text }; }
-          if (!resp.ok) throw new Error(`LeadByte buyer create failed (HTTP ${resp.status}).`);
+          if (!resp.ok) throw new Error(`Delivery buyer create failed (HTTP ${resp.status}).`);
           const lbBuyerId = data?.buyer_id || data?.id || data?.records?.[0]?.id || data?.data?.id || '';
           step.external_id = lbBuyerId ? String(lbBuyerId) : (buyer.buyer_code || 'created');
         } else if (key === 'dispo_scope') {

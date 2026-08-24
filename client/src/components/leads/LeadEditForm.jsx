@@ -40,8 +40,8 @@ const FIELD_GROUPS = [
     fields: [
       ['hlr_status', 'HLR Status'],
       ['hlr_summary_score', 'HLR Score', 'number'],
-      ['leadbyte_record_status', 'LeadByte Status'],
-      ['leadbyte_lead_id', 'LeadByte Lead ID', 'number'],
+      ['leadbyte_record_status', 'Delivery Status'],
+      ['leadbyte_lead_id', 'Delivery Lead ID', 'number'],
       ['leadbyte_queue_id', 'Queue ID'],
     ],
   },
