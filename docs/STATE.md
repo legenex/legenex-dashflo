@@ -3142,3 +3142,361 @@ ACTIVATION: NOT PERFORMED`.
    routing evaluation for that buyer at all.
 7. The `distribution_mode` cutover itself: a live buyer-activation human
    gate under `AGENTS.md` section 13, independent of every item above.
+
+## Lead Distribution rebuild, Stage 3: generic production-executable native delivery engine
+
+25 August 2026. Builds on `9d35ab7`/`b480973` (Stage 1) and `7fd9b49` (Stage
+2). Seven commits, `210dd9c` through `5ec0aa7`, each independently gate-passing
+and pushed as its own coherent unit rather than one giant end-of-stage commit,
+so partial progress was never left uncommitted and each commit's GitHub
+Actions deployment was independently verified before the next began.
+
+### 1. Engine generator root cause and restoration, `210dd9c`
+
+Confirmed by searching `git log --all --diff-filter=A` across the whole
+repository: `scripts/generate-backend-engine.mjs` and
+`scripts/check-engine-parity.mjs` never existed in this repository's history.
+The real originals exist only in the upstream mirror this project migrated
+from, `https://github.com/legenex/legenex-dashboard` (cloned read-only to a
+scratch directory to inspect, never merged), where they generate a Base44
+Deno-function bundle fanned out as identical copies into seven separate
+`base44/functions/*/routingEngine.generated.js` folders, because Base44's
+bundler cannot resolve relative imports across function directories. That
+fan-out mechanism does not apply to this repository's dynamically-loaded
+Express server, which already imports one generated file directly.
+
+Restored, adapted to this repository's single-output-file layout, using the
+identical esbuild invocation as the original (`bundle`, `format: esm`,
+`platform: neutral`, `target: es2022`, `legalComments: none`) against the same
+canonical entry point, `client/src/lib/distribution/backend-entry.js`.
+Verified byte-for-byte before writing anything: reproducing this bundle
+against the current canonical source matched the already-committed
+`routingEngine.generated.js`'s 2550-line body exactly. Regenerating changed
+only the header's `canonical-engine-sha256` line, replacing an unreproducible
+legacy hash (no recipe over any combination of source files matched it,
+almost certainly a hash computed by tooling from before this repository's own
+history) with one this generator computes and verifies deterministically
+going forward. The engine had zero undetected drift even without a
+generator.
+
+`check-engine-parity.mjs` restored scoped to what this repository needs:
+bundle-vs-committed-file parity, plus the original's anti-mirror scan (now
+over `server/src/functions` instead of `base44/functions`) refusing any
+hand-written redefinition of `routeWaterfall`/`evaluateMember`/
+`classifyResponse`/`deliverDirectPost` outside the generated file. Wired as
+an eighth gate step, `engine-parity`. `AGENTS.md` section 9 updated from
+seven steps to eight.
+
+Found but deliberately out of scope: `server/src/functions/
+supplierRules.generated.js`, `outboundPayload.generated.js`,
+`leadIdentity.generated.js`, `llmClient.generated.js`,
+`systemTransfer(Redact).generated.js` are five more generated files this
+repository carries with no generator of their own, governed by three more
+generators in the same upstream mirror (`generate-supplier-rules.mjs`,
+`generate-outbound-payload.mjs`, `generate-lead-identity.mjs`,
+`generate-llm-client.mjs`, `generate-transfer-catalog.mjs`). Restoring those
+is a separate, unrequested task; `llmClient.generated.js` was already flagged
+dead code in an earlier session (see "Corrections to historical
+assumptions" above) and left alone for the same reason.
+
+### 2. `payload_template` wired into the real native send path, `b2e9164`
+
+`deliverDirectPost` (the real send path, reached from `processLead.js`
+through `distributeRun.js` whenever `distribution_mode` leaves `legacy_only`)
+now uses `SubDelivery.payload_template` when configured, authoritative over
+`field_map`, which remains the fallback for a SubDelivery that never
+configured a template. Fails closed, not silently: a template that renders to
+invalid JSON, or to a JSON array or scalar rather than an object, records the
+attempt as `ERROR`/`INVALID_PAYLOAD_TEMPLATE` and sends nothing.
+
+Moved `payloadTemplate.js` from `server/src/lib/` into the canonical
+isomorphic engine source at `client/src/lib/distribution/`, re-exported from
+`backend-entry.js` (as `applyTemplateTransform`, avoiding a name collision
+with `transforms.js`'s distinct field-map `applyTransform`), so it now flows
+through the same generated bundle as `deliverDirectPost` itself.
+`deliveryPayloadPreview.js`, `deliveryMockSend.js`, and the legacy
+LeadByteConnector test-send path (`testWebhookDelivery.js`) all now pull
+`buildPayloadFromTemplate` from the generated bundle instead of each
+importing a standalone lib file separately.
+
+### 3. Response evaluator consolidated to one shared translation, `c054f3e`
+
+`classifyResponse` (`deliveryAttempt.js`) was already the one evaluator used
+everywhere, but the persisted `SubDelivery.response_mapping` storage shape
+was translated into `classifyResponse`'s param shape by three separate
+hand-written call sites (the real send path via `deliveryResolve.js`, the
+Response Handling editor's live preview, `deliveryMockSend.js`) that
+currently agreed but had nothing enforcing that. Added
+`toClassifyResponseMapping(rm)` next to `classifyResponse` itself as the one
+place this translation happens; all three call sites, plus a fourth the
+initial audit missed (`previewClient.js`'s `classifySampleResponse`, the
+Campaigns > Deliveries dry-run preview), now use it. That fourth site would
+have silently stopped matching any configured accept/reject pattern the
+moment `resolveSubDeliveryCfg`'s output shape changed as part of this same
+commit - a real regression introduced and fixed together, caught by its own
+existing test.
+
+### 4. Circuit breaker wired into the live path, both directions, `2648af4`
+
+Read side: `engine.js`'s eligibility check previously read only the raw
+`state === 'open'` string. Since nothing ever called `recordResult` from the
+live path, an open circuit could never self-heal even in principle - a raw
+state check excludes a destination from routing before a send is ever
+attempted, and only a real send outcome can call `recordResult`. Now
+`snapshot.js` pre-resolves a `blocked` boolean via the existing
+`isBlocked(record, nowMs)`, the same pattern already used for
+`withinSchedule`, so `engine.js` stays pure of ambient time. `isBlocked`
+treats a cooldown-elapsed open circuit as not blocked (a half-open trial),
+which is what makes recovery reachable.
+
+Write side: `distributeRun.js`'s real delivery step now calls
+`healthStore.recordResult` after every real send outcome, `ACCEPTED` counting
+as success (matching the retry worker's own pre-existing definition),
+wrapped so a health-store failure can never break a delivery.
+`runDistribution` defaults `healthStore` to the real per-endpoint adapter
+unless a caller injects one, the same pattern already used for
+`attemptStore`/`capStore`/`walletStore`.
+
+Fixed a pre-existing key mismatch found while wiring this: the
+`DestinationHealth` schema declares `sub_delivery_id` canonical ("per
+endpoint, not per buyer") with `destination_id` retained only for legacy
+compatibility, but every `recordResult` call site (both inside
+`retryWorker.js`) passed only `destination_id`, which is `null` for every
+native SubDelivery-based route member. Both call sites and both store
+implementations now accept a `{ subDeliveryId, destinationId }` key and
+prefer `subDeliveryId`, with a bare string still accepted as a legacy
+`destination_id` for backward compatibility.
+
+### 5. Retry worker production-readiness, three real bugs plus a scheduler, `378d78f`
+
+`nativeRetryWorker.js` had zero callers before this stage, so three real
+defects had never been exercised: it called `engine.makeDbAttemptStore`,
+which does not exist (the real export is `makeEntityAttemptStore`, so this
+would have thrown against any real database the moment both safety gates
+opened); `runRetryWorker` already increments `attempt_number` before calling
+`deliverFn`, and `deliverFn` incremented it a second time, permanently
+skipping a number on every retry; and the health store was rebuilt fresh
+in-memory on every invocation, so the circuit breaker's consecutive-failure
+count could never survive between calls, while `leadData` was hardcoded to
+`{}`, so a retry through `payload_template` or `field_map` would have
+rendered an empty payload. A fourth, related defect found while adding tests
+that actually reach `deliverFn`: `runRetryWorker`'s own success/reject/
+duplicate branch never included `attempt_number` in its `updateAttempt`
+patch (only the dead-letter and reschedule branches did), so a successfully
+retried attempt's stored `attempt_number` silently stayed at its pre-retry
+value; `manualRetry` had the identical gap. All four fixed.
+
+Extracted the retry-tick logic into `server/src/lib/nativeRetryRunner.js` so
+the operator-triggered HTTP function and the new scheduled caller share one
+implementation. Added the scheduled caller Stage 3 requires:
+`server/src/lib/nativeRetryScheduler.js`, an in-process `setInterval`
+(`unref`'d, never keeps the process alive on its own) wired into
+`server/src/index.js` at startup. Deliberately in-process rather than an
+external scheduler: this app is a single always-running self-hosted Docker
+service, and calling the retry logic directly avoids inventing a new
+authenticated cross-network credential - entering or creating a production
+credential is a human-approval gate under `AGENTS.md` section 13 - just to
+let a scheduler call its own server's endpoint. It creates no timer at all
+unless `NATIVE_RETRY_WORKER_ENABLED=true`, unset in every environment today,
+so this ships inert.
+
+### 6. Resellability proof: a wholly new destination, config only, `3cde125`
+
+`genericDestinationDryRun.test.js` builds "Example Destination A", a wholly
+fictional destination carrying no buyer/supplier/reseller/law-firm/platform
+proper noun, deliberately unlike the existing Walker fixture in every
+dimension the brief calls out: a different endpoint shape
+(`/v2/leads/ingest` vs `/apiJSON.php`), a nested `payload_template` with its
+own outbound key names instead of Walker's flat `field_map`, a
+differently-shaped response, a weekend-only schedule instead of Walker's
+weekday window, an hourly cap instead of a daily one, and a different
+vertical (WC instead of MVA). It resolves and delivers through the exact
+same generic pipeline with zero destination-specific branches anywhere in
+`client/src/lib/distribution` - onboarding it required writing only this
+file's fixture data, no product code. Covers the full generic dry-run
+scenario list end to end: eligible/accepted, eligible/rejected, a real
+network timeout, an ineligible state, an outside-schedule lead, an
+exhausted cap, a circuit breaker both still within cooldown and past it, a
+503 retryable failure kept distinct from a timeout, a `payload_template`
+that fails closed with nothing sent, a malformed non-JSON response, a
+disabled SubDelivery, and cross-buyer ownership (the latter two were already
+enforced at runtime in `snapshot.js`'s `resolveEndpoint` and already unit
+tested in `snapshot.test.js`; this adds their end-to-end proof rather than
+leaving the resellability file with an unexplained gap).
+
+### 7. Deterministic RouteMember -> SubDelivery mapping and route audit, `7e950c4`
+
+`server/src/lib/routeMemberMapping.js`'s `planRouteMemberMapping` is pure,
+generic, and buyer-agnostic: for each RouteMember it finds every active
+SubDelivery whose parent Delivery belongs to the same buyer (never
+cross-buyer) and either shares the RouteGroup's campaign vertical or
+declares no vertical of its own. Exactly one candidate proposes a mapping;
+zero or many do not guess. An already-mapped RouteMember is verified, not
+reassigned: still buyer-consistent is `READY` untouched; a stale or
+cross-buyer existing mapping is reported as `OWNERSHIP_MISMATCH` rather than
+silently corrected. States: `READY`, `MISSING_DELIVERY`,
+`MISSING_SUBDELIVERY`, `MISSING_ROUTE`, `AMBIGUOUS`, `LEGACY_ONLY` (a member
+still on the deprecated `destination_id` path), `UNKNOWN_BUYER`,
+`OWNERSHIP_MISMATCH`.
+
+`server/scripts/wire-route-member-subdeliveries.js` is the CLI wrapper,
+report-only by default, `--apply` to write. `--apply` touches exactly one
+column, `RouteMember.sub_delivery_id`, and only for rows classified `READY`
+with a proposal; it never activates a RouteGroup, changes `Delivery.status`,
+or touches `distribution_mode`. Not run against production - see "Production
+data work not performed this session" below.
+
+### Whitelabel / proper-noun audit result
+
+A dedicated research pass audited `DeliveryEditorDialog.jsx` and its full
+component tree, every module under `client/src/lib/distribution/`, the
+generated bundle, the routing/dispatch portion of `processLead.js`,
+`payloadTemplate.js`, and `nativeRetryWorker.js`. Result: zero
+`NEEDS_REMOVAL` findings of hardcoded customer/provider behavior. Two
+cosmetic proper-noun occurrences in reusable code (a credential-reference
+input placeholder reading `walker_advertising_auth`, a header-value
+placeholder reading Walker's real `X-Env: prod`, both in
+`DeliveryEditorDialog.jsx`; a doc comment in `deliveryMockSend.js` naming
+Walker as its illustrative example) were fixed to neutral examples - none
+were behavior branches, all were example copy. Every remaining "leadbyte"/
+"LeadByte" occurrence in touched files is the pre-existing, correctly scoped
+legacy relay system (`LeadByteConnector` entity, its snapshot-loader bridge,
+`testWebhookDelivery.js`'s legacy test-send path) or a historical doc
+comment explaining that boundary, consistent with the exception Stage 1
+already established. `server/scripts/configure-walker-native-delivery.js`
+correctly carries Walker's real identity throughout: it is an acceptance
+fixture script, not reusable engine code, exactly as Stage 2 built it.
+
+### Legacy relay invariant
+
+`git diff --name-only 7fd9b49..5ec0aa7` touches no file whose name matches
+`leadbyte|WebhookDeliverySettings|LeadByteConnector`, confirmed by grep
+across the full Stage 3 diff. The legacy relay - `LeadByteConnector` entity,
+`WebhookDeliverySettings.jsx`, `processLead.js`'s legacy send/response-
+mapping path - was not touched in any of the seven commits.
+
+### Production data work not performed this session
+
+A dedicated investigation confirmed this session has no production database
+or authenticated production API credential of any kind: no `DATABASE_URL`/
+`PG*` pointed at a non-local host, no `server/.env`/`server/.env.production`
+with production values, no SSH key in `~/.ssh` wired for automatic use
+(several exist, unconfigured in `~/.ssh/config`, consistent with
+`AGENTS.md` section 15's stated exception list for the operator's own
+gated, manual VPS work). The earlier "Read-only PostgreSQL checks" entry
+dated 23 August 2026 is best explained as the operator's own out-of-band
+check, not something a coding session's own tool use reproduced or can
+reproduce; every other session in this document, including this one,
+reports the same absence of access. Consequently, consistent with Stage 2's
+identical documented limitation for the Walker configuration script:
+
+- `server/scripts/wire-route-member-subdeliveries.js` has not been run
+  against production. Written and tested against disposable fixture data
+  only (16 tests, `server/test/routeMemberMapping.test.js`).
+- The production route mapping audit (classifying every real RouteMember
+  READY/MISSING_*/AMBIGUOUS/LEGACY_ONLY/OWNERSHIP_MISMATCH) has not been
+  produced, because it requires the same access. The tool that would
+  produce it (the same script, without `--apply`) is built, tested, and
+  ready to run the moment an operator supplies production database access
+  or runs it themselves on the VPS.
+- `server/scripts/configure-walker-native-delivery.js` (Stage 2) remains
+  unrun against production for the identical reason, unchanged this stage
+  beyond a stale comment path fix.
+- No real production `Buyer`/`Delivery`/`SubDelivery`/`RouteMember` record
+  was read, created, or modified by this session.
+
+### Status/trigger model, reconfirmed
+
+`RouteMember`'s schema still declares no trigger/lifecycle-event field
+(`route_group_id`, `buyer_id`, `sub_delivery_id`, `destination_id`,
+`destination_name`, `alias`, `active`, `priority`, `weight`,
+`reserve_price`, `price_mode`, `fixed_price`, `payout_type`,
+`conditional_pricing_enabled`, `filters`, `conditions`, `caps`,
+`budget_caps`, `kpi_metrics`, `transforms`, `ping_config`,
+`delivery_config`, `integration_complete`, `schedule`,
+`suppression_list_id`, `pause_reason` - the complete list). Stage 2's
+conclusion holds unchanged: the native engine only participates in the
+primary-sale decision, so a generic trigger model has nothing in the
+runtime to configure yet. `Disposition.json` and `Lead.final_status` are
+confirmed as the existing status/disposition catalog this would reference
+if a future stage adds post-sale native fan-out (`on_sold`/`on_dq`-style
+triggers).
+
+### Evidence
+
+- `npm run gate`: PASS, all eight steps, at every one of the seven commits
+  individually (not just at the end). Final state: 122 test files, 1562
+  tests, 0 failures, up from 118 files and 1490 tests before this stage.
+  148 net new tests across the stage: 8 generator, 6 payload-template live
+  path, 5 response-mapping consolidation, 24 circuit breaker (14 module + 5
+  write-side wiring + 5 read-side fixture updates), 12 retry-worker
+  (4 scheduler + 3 deliverFn-against-a-real-attempt + 5 attempt_number
+  persistence), 14 generic-destination resellability proof, 16 route-member
+  mapping, plus fixture updates to five pre-existing test files whose
+  hand-authored `responseMapping` fixtures used the pre-consolidation key
+  names.
+- Every commit was pushed individually; GitHub Actions deployed each one.
+  One transient failure, run `32783198493` for commit `378d78f`
+  ("Could not read a host key from 2.24.130.44 on port 22" - an SSH-scan
+  timeout reaching the VPS in the deploy job, after the Gate job had
+  already passed), self-resolved: the very next push, `3cde125`, deployed
+  cleanly, and production's concurrency serialization
+  (`cancel-in-progress: false`) meant nothing was left mid-deploy. Not
+  caused by, or related to, the committed change.
+- `git diff --check`: clean on every commit. `run-migration-apply.mjs`
+  (pre-existing, present before Stage 1, not authored by any stage)
+  deliberately excluded from every commit and left exactly as found, per
+  the explicit instruction carried since Stage 1.
+- Security self-review each commit: grepped new/changed files for
+  credential/secret-shaped log statements (none found); confirmed no new
+  code path calls `resolveCredential` outside the existing, audited call
+  sites; the gate's own `secret-scan` step passed on every commit.
+
+### Required end state, self-assessed against the brief's own checklist
+
+`GENERIC NATIVE DELIVERY ENGINE: READY` - `ENGINE GENERATOR: RESTORED` -
+`ENGINE PARITY: PASS` (enforced as an eighth gate step, not just proven
+once) - `PAYLOAD TEMPLATE LIVE PATH: WORKING` (wired, fail-closed, proven
+end to end against two independently-shaped fixtures) - `GENERIC RESPONSE
+HANDLING: WORKING` (one evaluator, one translation, four callers, no
+drift) - `GENERIC CIRCUIT BREAKER: WORKING` (read and write wired, cooldown
+-aware, provably able to recover) - `RETRY WORKER: PRODUCTION-READY BUT
+DISABLED` (three real bugs fixed, scheduled caller exists, both safety
+gates still closed in every environment) - `ROUTEMEMBER -> SUBDELIVERY:
+WIRED GENERICALLY` (deterministic planner built and tested; not yet applied
+to production, no access this session) - `NEW BUYER/DESTINATION:
+CONFIGURATION ONLY` (proven end to end against a wholly fictional second
+destination, 14 passing scenarios, zero destination-specific code) -
+`CUSTOMER-SPECIFIC NATIVE CODE: ZERO` (audited; two cosmetic example-copy
+occurrences found and fixed, no behavior branches found) - `WEBHOOKS +
+BUYER EDITOR: SAME GENERIC EDITOR` (unchanged from Stage 2, not touched
+this stage since nothing required it) - `LEGACY RELAY: UNCHANGED` (proven
+by `git diff --name-only`) - `DISTRIBUTION MODE: LEGACY_ONLY` (not touched
+by any commit this stage) - `LIVE NATIVE DELIVERY: NOT ACTIVATED`.
+
+`REAL PRODUCTION CONFIG DRY RUN: NOT PERFORMED THIS SESSION` - no
+production database or API credential was available; Stage 2's Walker
+fixture (real production shape, synthetic values) remains the closest
+proof available without operator-supplied access, alongside this stage's
+new generic-destination fixture.
+
+### Exact blockers before Stage 4 / any live cutover
+
+1. Production database or authenticated production API access, for an
+   operator to either run `wire-route-member-subdeliveries.js` and
+   `configure-walker-native-delivery.js --apply` directly, or to hand this
+   session temporary read access to produce the real production route
+   mapping audit this stage's tooling is otherwise ready to generate.
+2. `NATIVE_RETRY_WORKER_ENABLED=true` is still unset in every environment -
+   an operator decision, not a code gap.
+3. `distribution_mode` remains `legacy_only` - a live buyer-activation human
+   gate under `AGENTS.md` section 13, independent of every item above and
+   unaffected by anything in this stage.
+4. No RouteGroup used in any fixture or script this stage is active; every
+   one Stage 2's `ensureDeliveryRouteMember` creates stays inactive/draft by
+   construction, and this stage added no path that changes that.
+5. The five sibling generated files with no generator of their own
+   (`supplierRules`, `outboundPayload`, `leadIdentity`, `llmClient`,
+   `systemTransfer`/`systemTransferRedact`) remain an open, separate,
+   unrequested gap against the same invariant this stage restored
+   protection for on the routing engine specifically.
