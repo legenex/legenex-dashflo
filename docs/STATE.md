@@ -2731,3 +2731,158 @@ have been.
   production-shaped Distribution data, and visible lazy-chunk recovery.
 - Roll back with `git revert` of the UI recovery commit. No schema, migration,
   production data, credentials, delivery, or billing behavior changed.
+
+## Lead Distribution rebuild, Stage 1: terminology, Buyer ID, /webhooks route
+
+24 August 2026. First stage of a much larger requested rebuild (see the
+operator's full 27-section brief for the remaining scope). Before touching
+anything, five parallel research agents audited the current delivery domain.
+Findings, condensed:
+
+- Two parallel delivery systems exist and are genuinely different mechanisms,
+  not duplicate editors of the same thing. `LeadByteConnector` (backs
+  `SettingsLeadByte.jsx`, now `WebhookDeliverySettings.jsx`, mounted at
+  `/deliveries`, now `/webhooks`) is what every real lead sends through today:
+  `processLead.js` posts to the `is_default` connector at
+  `legenex.leadbyte.co`, DashFlo's own LeadByte reseller relationship, which
+  does its own internal buyer routing and reports outcomes back over a
+  webhook. DashFlo has never natively delivered a lead directly to a buyer.
+  `Delivery`/`SubDelivery` (backs the buyer-owned editor under Operations >
+  Buyers) is the architecturally correct model, with real caps, real
+  timezone-aware schedule enforcement, and five pricing/selection strategies
+  already running in `client/src/lib/distribution/*`, compiled into
+  `server/src/functions/routingEngine.generated.js`. It is never wired in
+  production: `AppSettings.distribution_mode` has no row and falls through to
+  `legacy_only`, every `RouteMember.sub_delivery_id` is null (structurally
+  `CONFIG_INVALID`), and the retry worker has zero scheduled callers.
+  `scripts/generate-backend-engine.mjs`, the generator the compiled bundle's
+  own header names as its source of truth, does not exist anywhere in this
+  repository's working tree or history, a standing gap against invariant 13.
+- Walker Advertising's real production config: an active `Buyer` row
+  (`buyer_code`/`leadbyte_bid` both `AG1`), 45 real per-state `BuyerStateCpl`
+  pricing rows, and a draft `Delivery`/`SubDelivery` pair with empty
+  `target_url`/`headers`/`credential_ref`. The `walkeradvertising.leadportal.
+  com/apiJSON.php` endpoint and `X-Env: prod` header from the operator's
+  screenshots are a new direct-to-Walker delivery to configure, not something
+  already migrated. 308 historical Walker leads were all delivered through the
+  external LeadByte relay, not natively, and none have the R1
+  `buyer_record_id`/`buyer_code` backfill applied.
+- 604 case-insensitive "leadbyte" hits across roughly 145 files, but the
+  genuinely user-facing rebrand debt was concentrated in about 25 files: the
+  `LeadByteConnector` screen's own chrome, half a dozen Lead-record field
+  labels, the Buyer "LeadByte BID" field, narrative copy on eight settings and
+  notification screens, an onboarding step literally named "LeadByte buyer,"
+  and one option on the public `/apply` buyer form.
+
+Two decisions were confirmed with the operator before writing code:
+canonicalize the buyer-facing identity as "Buyer ID" bound to the existing
+`buyer_code` field (a UI relabel only, no schema change, since `buyer_code` is
+already unique, deterministically allocated, and used in over 200 places) with
+`leadbyte_bid` dropped from the profile and kept only as a hidden legacy
+compatibility alias; and scope this session to terminology, identity, and the
+route rename, deferring the canonical delivery-editor consolidation, Beautify,
+caps/schedule UI, Walker's native delivery, and any `distribution_mode`
+cutover to a later stage. That cutover is a "live buyer activation" under
+`AGENTS.md` section 13 and needs its own explicit approval regardless of how
+far the engineering gets.
+
+### What changed, commit `9d35ab7`
+
+- `/webhooks` is now the canonical route; `/deliveries` is a permanent
+  `<Navigate>` redirect. Renamed the backing files (`Deliveries.jsx` ->
+  `Webhooks.jsx`, `SettingsLeadByte.jsx` -> `WebhookDeliverySettings.jsx`) and
+  fixed a latent bug found along the way: the sidebar nav gated the Webhooks
+  link's visibility on `dist_deliveries` while route access required
+  `dist_webhooks`, a permission-key mismatch that predates this change.
+- Renamed the operator-only test-send function `testLeadByteConnector` to
+  `testWebhookDelivery` (server handler, client wrapper, and the one caller in
+  the webhook editor).
+- Buyer ID: the profile, detail header, detail drawer, buyer list column, and
+  the onboarding/billing screens that display a buyer's short code now say
+  "Buyer ID" instead of "Buyer Code," still reading `buyer_code`. Removed the
+  "LeadByte BID" field and the "Buyer Code" label from the normal buyer
+  profile entirely. `leadbyte_bid` stays in the schema, still auto-populated
+  at buyer creation for backward reconciliation with older migrated data, but
+  is no longer shown or editable anywhere in the operator UI.
+  `BuyerProfileTab.jsx` was reorganized into Identity / Billing & Delivery
+  Policy / Contact / Notes sections, with Contact Name moved out of Identity
+  and into Contact, next to Contact Email.
+  `Buyer.billing_type` on the real Walker row is `"invoiced_daily"`, a value
+  outside the schema's declared enum (`prepay|net_7|net_15|net_30`); left
+  alone since correcting live data was not in scope, but worth a look before
+  Buyer form validation is tightened.
+- Removed user-facing "LeadByte" copy from Lead field labels and CSV export
+  columns, the delivery log view, TrustedForm copy, error-log stage filter,
+  Settings General routing-mode descriptions, the API Keys warning banner,
+  call-sourcing copy, supplier TrustedForm copy, notification and HLR
+  fail-mode descriptions, ad manager tooltips, the campaign buyers empty
+  state, the Overview dashboard empty-state hint (rewritten to describe the
+  actual gating condition, an empty Lead window, rather than a stale
+  "Leadbyte ingestion sync" claim), the onboarding checklist step ("LeadByte
+  buyer" -> "Delivery buyer," key `leadbyte_buyer` -> `delivery_buyer`
+  renamed everywhere it is matched), and the public `/apply` buyer form's
+  disposition-method label (kept the stored value `leadbyte_portal` since it
+  is a documented enum member on `Buyer.disposition_method`, relabeled the
+  option only).
+- Checked the "Settings > General" base URL fields reported in the operator's
+  screenshot as showing `https://api.legenex.com`: no hardcoded default exists
+  anywhere in `SettingsGeneral.jsx` or its config chain, both placeholders
+  already read `https://app.dashflo.io`/`https://api.dashflo.io`, and the
+  actual values come from a persisted `AppSettings` row. If an operator is
+  still seeing the legacy host, it is live settings data, not a code default,
+  and needs a manual update through the Settings UI.
+- Left untouched, deliberately: the `LeadByteConnector` entity name and its
+  schema, the `kind: 'leadbyte'` stored enum value and its dropdown option
+  (it correctly denotes DashFlo's real external relay to `legenex.leadbyte.
+  co`), every `leadbyte_*` field on `Lead`/`Buyer`, the public
+  `leadbyteWebhook` route, `LEADBYTE_API_KEY`/`LEADBYTE_BASE_URL` env var
+  names, the Progress Control Center's "LeadByte Migration" naming (accurate
+  internal tooling per `AGENTS.md` section 18, out of this rebrand's scope),
+  and all test/doc fixtures. `client/src/lib/progress/pageManifest.json`
+  still lists the old `deliveries`/`Deliveries.jsx` route and component path;
+  it is generated by `progressSync.js` (`generated_at`/`app_commit` header)
+  and per invariant 13 was not hand-edited, so it will refresh on the next
+  Progress sync run rather than in this commit.
+
+### Evidence
+
+- New regression suite `server/test/leadByteTerminologyRegression.test.js`
+  (32 tests): pins the specific removed strings per file rather than a
+  repository-wide ban (most "leadbyte" occurrences are legitimate), the
+  `/webhooks` route and `/deliveries` redirect in `AppRoutes.jsx`, the Buyer
+  ID field and section layout in `BuyerProfileTab.jsx`, the buyer list
+  column header, the nav/permission wiring, and the renamed test-delivery
+  function. Updated `DistributionNav.test.jsx` (4 tests) for the new path
+  and added an assertion that the nav never links to the legacy `/deliveries`
+  URL. All 36 tests pass.
+- `npm run gate`: PASS, all seven steps (tests, function loader, client lint,
+  client build, bundle purity, secret scan, em-dash check).
+- `git diff --check`: clean on the staged change. The pre-existing untracked
+  `run-migration-apply.mjs` at the repository root (present before this
+  session, not authored by it) has trailing-whitespace violations and was
+  deliberately excluded from the commit and left as found.
+- Pushed as `9d35ab7`. GitHub Actions run `32774178466` (Gate, then Deploy to
+  production) succeeded end to end, deployed SHA confirmed equal to `9d35ab7`.
+  `https://app.dashflo.io/api/health` returns 200, `/webhooks` and
+  `/deliveries` both return 200 (client-side route; the actual redirect and
+  the reorganized buyer profile layout are react-router/React behavior not
+  independently checkable with `curl` and still need a one-time human look in
+  a browser).
+
+### Not done, carried to Stage 2
+
+Everything from the operator's brief beyond terminology/identity/routing: the
+single canonical delivery editor shared by `/webhooks` and Buyer > Deliveries
+(merging `WebhookDeliverySettings.jsx`'s token-highlighted payload editor,
+AND/OR filter builder, response-rule builder, test-lead sender, and delivery
+logs onto the `Delivery`/`SubDelivery` model that `DeliveryEditorDialog.jsx`
+currently backs), the JSON payload Beautify button, migrating the four real
+`LeadByteConnector` rows into `Delivery`/`SubDelivery` without breaking live
+sends, Walker's native `SubDelivery` endpoint/header/credential configuration,
+surfacing the engine's already-real caps/schedule/state-coverage enforcement
+in that editor, consolidating the two independent response-mapping
+evaluators, scheduling `runRetryWorker` and wiring the destination health
+circuit breaker onto the primary send path, and the eventual
+`distribution_mode` cutover itself, which is a live buyer-activation human
+gate under `AGENTS.md` section 13 independent of how complete the engineering
+is.
