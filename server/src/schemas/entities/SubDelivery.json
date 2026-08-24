@@ -21,8 +21,9 @@
     "headers": { "type": "string", "description": "JSON of NON-secret headers only. Never store auth/API keys here." },
     "credential_ref": { "type": "string", "description": "Opaque reference to a secret in secret storage. NEVER the secret value itself." },
     "credential_updated_at": { "type": "string", "format": "date-time", "description": "When the referenced credential was last replaced (presence/audit only)." },
-    "field_map": { "type": "string", "description": "JSON: outbound field -> lead field/path mapping" },
+    "field_map": { "type": "string", "description": "JSON: outbound field -> lead field/path mapping. Used by directPost.js's buildPayload when payload_template is absent." },
     "transforms": { "type": "string", "description": "JSON: ordered transform steps applied before send" },
+    "payload_template": { "type": "string", "description": "Additive. Free-text JSON body with {{token}} / {{token|transform}} placeholders, resolved by lib/payloadTemplate.js (same resolver as the legacy LeadByteConnector). Used by the canonical editor's Payload section, Beautify, and the Dry Run / Mock Send test functions. Not yet consumed by the live directPost.js send path, which still builds its payload from field_map; see server/scripts/configure-walker-native-delivery.mjs and docs/STATE.md for the pre-existing engine-generator gap that blocks wiring it in." },
     "response_mapping": { "type": "string", "description": "JSON: paths for accepted/rejected/duplicate/queued, revenue, buyer_lead_id" },
     "timeout_ms": { "type": "number", "default": 10000, "description": "Per-request timeout" },
     "retry_policy": { "type": "string", "description": "JSON: max_attempts + backoff config" }

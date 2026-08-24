@@ -2886,3 +2886,259 @@ circuit breaker onto the primary send path, and the eventual
 `distribution_mode` cutover itself, which is a live buyer-activation human
 gate under `AGENTS.md` section 13 independent of how complete the engineering
 is.
+
+## Lead Distribution rebuild, Stage 2: canonical delivery editor, Walker dry-run
+
+24 August 2026, same day as Stage 1. Builds on `9d35ab7`/`b480973`.
+
+### Domain re-confirmation before writing (per the operator's brief, section 2)
+
+Two facts settled the whole design and are worth recording precisely:
+
+- **`DeliveryEditorDialog.jsx` (the pre-Stage-2 buyer-side editor) wrote a
+  `SubDelivery.transports` field that is not in `SubDelivery.json`'s schema
+  and that `resolveSubDeliveryCfg`/`directPost.js` never read.** The real send
+  path builds its payload from `target_url`/`headers`/`field_map`/
+  `response_mapping`. The old editor's "Delivery methods" webhook/email/sheet
+  fan-out UI was cosmetic: whatever an operator configured through it was
+  silently never sent. This is the same class of bug as Stage 1's nav
+  permission-key mismatch, just larger blast radius. `DeliveryTransportsEditor.jsx`
+  is deleted; nothing else imported it.
+- **Filters, qualification conditions, caps, and schedule are `RouteMember`
+  fields at runtime, not `SubDelivery`/`Delivery` fields.**
+  `client/src/lib/distribution/engine.js`'s `evaluateMember` reads them off
+  the assembled routing-snapshot member, and `snapshot.js` assembles that
+  member from `RouteGroup` -> `RouteMember` -> `SubDelivery`/`Delivery`, not
+  the other way around. A `RouteMember` requires a `route_group_id`, and a
+  `RouteGroup` requires a `campaign_id`. Building the editor as if these
+  fields lived on `SubDelivery` would have produced exactly the kind of
+  "UI-only field the runtime ignores" the brief repeatedly warns against.
+
+Also confirmed, both load-bearing for what got built:
+
+- `client/src/lib/distribution/conditions.js`'s real evaluator
+  (`evalConditionTree`/`OPERATORS`) uses a different, incompatible shape from
+  `client/src/lib/conditionGroups.js` (the legacy `LeadByteConnector.filter_conditions`
+  editor's shape). Writing the legacy shape into `RouteMember.conditions`
+  would pass client-side validation and then silently evaluate false for
+  every condition at runtime. `RouteConditionsEditor.jsx` /
+  `lib/routeConditionGroups.js` are a new, parallel implementation targeting
+  the engine's real shape, with every offered operator imported directly from
+  `conditions.js`'s own `OPERATORS` constant so the UI cannot drift ahead of
+  what `evalLeaf` actually implements.
+- `SubDelivery` has no free-text `{{token}}` payload template field at all;
+  it only has structured `field_map` (`{src, dest, transform}` triples). The
+  brief's Payload/Beautify/Token-Reference sections assume a free-text
+  template, matching the legacy `LeadByteConnector.payload_template`
+  experience. Resolved by adding `SubDelivery.payload_template` as a new,
+  additive schema field (see `payload_template` provenance note in the
+  schema file itself), used by the canonical editor and by the new Dry Run /
+  Mock Send functions via the shared `server/src/lib/payloadTemplate.js`
+  resolver (extracted from `testWebhookDelivery.js`, same behavior, now
+  shared instead of duplicated). It is intentionally NOT yet wired into
+  `directPost.js`'s live `buildPayload` (still `field_map`-only) - see the
+  generator-gap note below for why that is deferred rather than half-done.
+- **`scripts/generate-backend-engine.mjs` and `scripts/check-engine-parity.mjs`
+  are both referenced (by `backend-entry.js`'s own header and by
+  `routingEngine.generated.js`'s own header) but do not exist anywhere in
+  this repository's working tree or history.** This is a pre-existing gap,
+  not introduced by Stage 1 or 2: it means no change to the isomorphic engine
+  source under `client/src/lib/distribution/*` can reach the generated bundle
+  `server/src/functions/routingEngine.generated.js` that production actually
+  runs, until that generator is restored. Per `AGENTS.md` invariant 13
+  ("change generated code only through its source and generator"), this
+  session made no hand-edits to the generated bundle and did not modify
+  `directPost.js`, `engine.js`, or any other file the bundle is generated
+  from. Everything Stage 2 needed from the engine (schedule, caps, filter,
+  and response evaluation; `deliverDirectPost`'s transport) was already
+  present and already reachable via the existing bundle, so this gap did not
+  block anything Stage 2 built - but it does block the circuit-breaker
+  wiring and `payload_template` support in `directPost.js` that would
+  otherwise have been in scope, per the brief's own "if wiring it would
+  affect only native traffic, implement it" conditional. Both are deferred
+  and documented rather than hand-patched around the missing generator.
+
+### What was built, uncommitted at the time of writing, about to become commit(s) after this entry
+
+- **One canonical delivery editor.** `DeliveryEditorDialog.jsx` rewritten in
+  place (same file identity, so `BuyerDeliveriesCard.jsx`/`BuyerDeliveryRows.jsx`
+  needed zero changes) to edit the real `Delivery` + `SubDelivery` fields:
+  Identity (name, buyer, status, vertical), HTTP request (endpoint, method,
+  format), Headers & credential (JSON headers, `credential_ref` as a
+  plain-text opaque reference, never a secret value), Payload (new
+  `DeliveryPayloadEditor.jsx`: `HighlightedPayloadEditor` + Beautify +
+  `TokenReferencePanel`, both reused unmodified from the legacy editor since
+  neither is LeadByte-specific), Filters (new `RouteFiltersPanel.jsx` +
+  `RouteConditionsEditor.jsx`, bound to `RouteMember.filters`/`.conditions`),
+  Delivery policy (new `RouteScheduleEditor.jsx` + `RouteCapsEditor.jsx`,
+  bound to `RouteMember.schedule`/`.caps`, plus a read-only `BuyerStateCpl`
+  coverage summary - deliberately not editable here, so state pricing/coverage
+  stays owned by Operations > Buyers > Coverage and is never duplicated),
+  Response handling (new `DeliveryResponseRulesEditor.jsx`, bound to
+  `SubDelivery.response_mapping`, with a live classification preview using the
+  real `classifyResponse`), Testing (new `DeliveryTestPanel.jsx`: Dry Run and
+  Mock Send only, no Live Test surface here), Delivery history (new
+  `DeliveryHistoryTab.jsx`, reads real `DeliveryAttempt` rows).
+- **`RouteMember` is created lazily and safely.** New server function
+  `ensureDeliveryRouteMember.js`: idempotent (reuses an existing `RouteMember`
+  by `sub_delivery_id` rather than ever creating a second one), refuses with a
+  clear error if the `Delivery` has no vertical or no matching `Campaign`
+  exists, and any `RouteGroup` it creates is always `active:false`,
+  `lifecycle:'draft'` - stated explicitly in code rather than relying on the
+  schema default, so a future default change cannot silently change this
+  function's safety property. The editor only calls it when the operator
+  actually sets a filter/condition/cap/schedule value, or one already exists;
+  opening the dialog to look at an existing delivery never creates anything.
+  5 tests cover idempotency, the inactive/draft creation guarantee, and both
+  refusal paths.
+- **`/webhooks` restructured**: `Native Deliveries` (new `NativeDeliveriesList.jsx`,
+  default tab) and `Legacy Relay` (the unchanged `WebhookDeliverySettings.jsx`,
+  explicitly labeled as what actually sends real leads today). Native
+  Deliveries lists every `Delivery` with buyer, status, vertical, endpoint
+  host, method, and a schedule/cap summary read off the associated
+  `RouteMember` where one exists; opening a row or "New delivery" mounts the
+  identical `DeliveryEditorDialog`.
+- **JSON Beautify**: `lib/jsonBeautify.js`, a pure `beautifyJson(text)` that
+  parses and re-`JSON.stringify(_, null, 2)`s, leaving `{{token}}` strings
+  untouched (they are ordinary JSON string content), never modifies the
+  editor on invalid JSON, and reports a line/column when the underlying
+  `SyntaxError` exposes a character position. 6 tests, including a
+  token-preservation and an invalid-JSON-does-not-mutate case.
+- **Dry Run / Mock Send, no live network path.** New server functions
+  `deliveryPayloadPreview.js` (renders `payload_template` against an
+  operator-supplied sample lead, zero network calls - it does not import
+  `fetch` or any HTTP client at all) and `deliveryMockSend.js` (the same
+  render, plus classifies an operator-supplied *simulated* HTTP status/body
+  through the real `classifyResponse`, also with no network call - confirmed
+  by neither function calling `resolveCredential`, so neither can even
+  reach secret storage). 8 tests cover both, including operator-gating and
+  the "no template configured" refusal.
+- **Walker Advertising, rebuilt as far as the source allows.** New Walker
+  dry-run fixture, `client/src/lib/distribution/walkerNativeDryRun.test.js`
+  (9 tests, fixture-local Buyer/Delivery/SubDelivery/RouteGroup/RouteMember
+  objects, never touching the real database): buyer/delivery/endpoint
+  resolution, an accepted response and a rejected response against a real
+  loopback HTTP server (proving the actual wire protocol, field-mapping, and
+  classification, following the same pattern `routingDelivery.integration.test.js`
+  already established for this engine), a real `AbortController` timeout,
+  state-ineligible (both fail and pass), schedule-ineligible, and
+  cap-exhausted (both fail and pass) via `evaluateMember` directly. A new
+  script, `server/scripts/configure-walker-native-delivery.js` (report-only
+  by default, `--apply` to write, idempotent), documents the exact provenance
+  of every field it would write to Walker's real `SubDelivery` row(s):
+  confirmed from the operator's screenshots (`target_url`,
+  `X-Env: prod` header, `Medical_Treatment`/`Have_Attorney`/`Type_Of_Injury`/
+  `Incident_Date`), inferred by analogy to the existing default
+  `LeadByteConnector`'s own payload template for the same MVA vertical
+  (standard contact fields - name/phone/email/zip/state/TrustedForm -
+  flagged for operator confirmation), and deliberately left unset with a
+  stated reason (`response_mapping`: no real response has ever been observed
+  from Walker's own endpoint, since DashFlo has never posted there directly;
+  `schedule`/`caps`: the LeadByte-mediated reference showed a fully-open
+  schedule and all-zero caps, which is ambiguous between "unset" and a
+  different UI's zero-means-unlimited convention, so nothing was invented).
+  **This script has not been run against production.** Production's database
+  lives on the VPS; this session has no SSH or database credential path to it
+  (`AGENTS.md` section 15). It is safe to run against whatever `DATABASE_URL`
+  it is invoked with, and the same end state is reachable by an operator
+  through the deployed canonical editor once this ships, since both write the
+  identical `SubDelivery` record.
+- **Retry worker made schedulable without being made live.** New
+  `nativeRetryWorker.js` wraps `engine.runRetryWorker`, hard-gated behind
+  BOTH `NATIVE_RETRY_WORKER_ENABLED=true` (unset in every environment today)
+  and `distribution_mode !== 'legacy_only'` (still `legacy_only` in
+  production). 4 tests prove it is a no-op with either gate closed and that
+  it runs cleanly (against an empty in-memory attempt store, so nothing to
+  actually retry) with both open. What remains before this executes against
+  live native traffic: set the env flag, add an actual periodic caller (no
+  scheduled-job convention - cron or GitHub Actions `schedule:` trigger -
+  exists anywhere in this repository today, confirmed by grep), and move
+  `distribution_mode` off `legacy_only`, itself a separate human-approval
+  gate.
+- **Circuit breaker**: audited, not wired. `destinationHealth.js`'s
+  `recordResult`/`isBlocked` have no caller anywhere in `distributeRun.js` or
+  `directPost.js` (confirmed by grep) - the circuit breaker only fires inside
+  `retryWorker.js`, which nothing calls. Wiring it into the primary send path
+  would require editing `distributeRun.js`, one of the generator-blocked
+  isomorphic engine files, so it is left as a documented, not attempted,
+  finding rather than a source change that cannot reach production anyway.
+- **Response evaluator**: audited, not merged. `classifyResponse`
+  (`deliveryAttempt.js`) is already the one generic, non-LeadByte-shaped
+  evaluator for the native path, and is what the new Response Handling
+  section and Mock Send both use. The legacy `resolveResponseMapping`/
+  `ResponseMapping` entity stays untouched in `processLead.js`, since it is
+  what correctly interprets every real live LeadByte response today; merging
+  the two would risk that live path for no native benefit while
+  `distribution_mode` remains `legacy_only`.
+- Status triggers (Qualified/Disqualified/Sold/.../24m Lead, brief section
+  12) are **not** in the canonical editor: audited and confirmed `RouteMember`
+  has no trigger/lifecycle-event field at all (full property list checked
+  against the schema). The native model only participates in the primary-sale
+  decision; the legacy `LeadByteConnector.triggers` fan-out concept
+  (`on_received`/`on_sold`/`on_dq`/etc.) has no native equivalent today. Not
+  built, because there is nothing in the runtime for it to configure.
+  "Routes" filters (Standard/Direct/Data/.../Queue) are similarly absent from
+  `RouteFiltersPanel`: by the time a lead reaches native routing at all,
+  `lead_route` has already been narrowed to standard/gateway in
+  `processLead.js`, so a per-member route filter has no native meaning.
+
+### Evidence
+
+- Full suite: 117 test files, 1482 tests, all passing (`npx vitest run`),
+  including the 41 new pure-module tests from earlier in Stage 2, the 9-test
+  Walker dry-run fixture, and the 5+8+4 tests for
+  `ensureDeliveryRouteMember`/Dry-Run-Mock-Send/`nativeRetryWorker`.
+- `npm run gate`: PASS, all seven steps.
+- Security self-review: grepped every new/changed file for
+  credential/secret-shaped log statements (none found); confirmed neither
+  `deliveryMockSend.js` nor `deliveryPayloadPreview.js` ever calls
+  `resolveCredential` (they structurally cannot reach secret storage); the
+  gate's own `secret-scan` step passed over the same diff.
+- `git diff --check`: clean on the staged Stage 2 change. `run-migration-apply.mjs`
+  (pre-existing, present before Stage 1, not authored by either stage) again
+  deliberately excluded from staging and left exactly as found.
+
+### Required end state, self-assessed against the brief's own checklist
+
+`CANONICAL DELIVERY EDITOR: READY` (one component, two mount points, same
+records) - `WEBHOOKS + BUYER EDITOR: SAME RECORD` - `JSON BEAUTIFY: WORKING` -
+`CAPS: WORKING` (real `RouteMember.caps`, real `exhaustedCap` gate) -
+`SCHEDULE: WORKING` (real `RouteMember.schedule`, real `isWithinSchedule`) -
+`STATE ELIGIBILITY: WORKING` (real `filters.states`, real `FILTER_STATE`
+gate; BuyerStateCpl surfaced read-only, not engine-joined - a pre-existing
+engine limitation, not fixed here) - `GENERIC RESPONSE HANDLING: WORKING` -
+`WALKER CONFIG: REBUILT AS FAR AS SOURCE DATA ALLOWS` (script written,
+provenance stated per field, not yet run against production - no DB access
+from this session) - `WALKER DRY-RUN: PASS` (9/9) - `LEGACY LIVE RELAY:
+UNCHANGED` (`WebhookDeliverySettings.jsx`/`LeadByteConnector`/`processLead.js`
+not modified) - `DISTRIBUTION MODE: LEGACY_ONLY` (not touched, no code path
+in this session writes `AppSettings.distribution_mode`) - `LIVE WALKER
+ACTIVATION: NOT PERFORMED`.
+
+### Remaining before Stage 3 / any live cutover
+
+1. Run `server/scripts/configure-walker-native-delivery.js --apply` against
+   production (or have an operator enter the same configuration by hand
+   through the deployed `/webhooks` Native Deliveries editor) - this session
+   has no production database access to do it directly.
+2. Fill in Walker's real `response_mapping` once a real response from
+   `walkeradvertising.leadportal.com/apiJSON.php` has actually been observed
+   (Mock Send can exercise the classification logic today, but only against
+   an operator-supplied guess at the response shape).
+3. Confirm with the operator whether `Have_Attorney: "No"` should stay a
+   fixed literal or become a real token, and whether the analogy-inferred
+   contact fields are correct for Walker specifically.
+4. Restore `scripts/generate-backend-engine.mjs` / `scripts/check-engine-parity.mjs`
+   (missing, referenced, pre-existing) before any further isomorphic engine
+   source change (circuit breaker wiring, `payload_template` support in
+   `directPost.js`) can reach production.
+5. Decide and build an actual retry-worker scheduler (cron or a GitHub
+   Actions `schedule:` workflow) before `nativeRetryWorker` does anything
+   even once its two safety gates are opened.
+6. Create a real `RouteMember` linking a `SubDelivery` into an *active*
+   `RouteGroup` for Walker (or any buyer) - `ensureDeliveryRouteMember`
+   deliberately never does this; every group it creates stays inactive/draft.
+   This is the last, and only, step that would let a lead reach native
+   routing evaluation for that buyer at all.
+7. The `distribution_mode` cutover itself: a live buyer-activation human
+   gate under `AGENTS.md` section 13, independent of every item above.
