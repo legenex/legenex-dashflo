@@ -23,6 +23,7 @@
     "gate": "node scripts/gate.mjs"
   },
   "devDependencies": {
+    "esbuild": "0.28.2",
     "vitest": "^3.2.7"
   }
 }

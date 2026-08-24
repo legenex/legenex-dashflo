@@ -26,6 +26,12 @@ const STEPS = [
     args: ['scripts/verify-function-loader.mjs'],
   },
   {
+    name: 'engine-parity',
+    describe: 'routingEngine.generated.js matches its canonical source, no hand-written mirror',
+    cmd: 'node',
+    args: ['scripts/check-engine-parity.mjs'],
+  },
+  {
     name: 'lint',
     describe: 'client lint with the project rules unchanged',
     cmd: 'npm',

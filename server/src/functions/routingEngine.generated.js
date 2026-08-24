@@ -1,7 +1,7 @@
 // GENERATED FILE - DO NOT EDIT BY HAND.
 // Source of truth: src/lib/distribution/backend-entry.js and its imports.
 // Regenerate: node scripts/generate-backend-engine.mjs
-// canonical-engine-sha256: 944a1aed37897d6bd14c8ed748c54fb58ba224d0c824ecfac5e8b381d189e3bd
+// canonical-engine-sha256: ded5c94a5c1adadfc932df7f8fda70e2a19e64d043a3efdca8cd5e081f9f64ae
 // src/lib/distribution/engine.js
 var REASON = {
   ELIGIBLE: "ELIGIBLE",

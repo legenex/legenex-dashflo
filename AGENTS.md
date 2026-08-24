@@ -217,10 +217,19 @@ Then run the full gate before shipping any normal code change:
 npm run gate
 ```
 
-The gate runs seven steps: tests, function loader, client lint, client build,
-bundle purity, secret scan, and the em dash check. It is defined in
-`scripts/gate.mjs`. It must pass before a change is complete, and a release is
-never pushed on a failing gate.
+The gate runs eight steps: tests, function loader, engine parity, client lint,
+client build, bundle purity, secret scan, and the em dash check. It is defined
+in `scripts/gate.mjs`. It must pass before a change is complete, and a release
+is never pushed on a failing gate.
+
+The engine parity step (`scripts/check-engine-parity.mjs`) regenerates
+`server/src/functions/routingEngine.generated.js` from
+`client/src/lib/distribution/backend-entry.js` and its imports via
+`scripts/generate-backend-engine.mjs`, and fails if the committed file
+differs, or if a hand-written mirror of the routing engine appears anywhere
+else in `server/src/functions`. Regenerate after any change to
+`client/src/lib/distribution/*` with `node scripts/generate-backend-engine.mjs`
+and commit source and output together, per invariant 13.
 
 Database-backed suites look for PostgreSQL on `127.0.0.1:5433` and create their
 own disposable databases. They skip themselves loudly when no server is
