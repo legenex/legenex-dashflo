@@ -43,7 +43,7 @@ const CONFIRMED_HEADERS = { 'X-Env': 'prod' };
 
 // The four fields legible in that same draft screenshot, converted from its
 // [bracket] placeholder syntax to DashFlo's real {{token}} syntax (confirmed
-// against TokenReferencePanel / lib/payloadTemplate.js's resolveTokenValue -
+// against TokenReferencePanel / payloadTemplate.js's resolveTokenValue -
 // "treatment", "type_of_injury", and "incident_date" are all recognized
 // tokens). "Have_Attorney": "No" was typed as a literal, not a token, in the
 // source screenshot; it is carried over as a literal here rather than

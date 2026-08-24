@@ -1,6 +1,6 @@
 import { requireUser } from './_runtime.js';
-import { buildPayloadFromTemplate } from '../lib/payloadTemplate.js';
 import * as engine from './routingEngine.generated.js';
+const { buildPayloadFromTemplate } = engine;
 
 // Mock Send for a native SubDelivery: renders the real payload template
 // (same as deliveryPayloadPreview.js) AND runs an operator-supplied simulated

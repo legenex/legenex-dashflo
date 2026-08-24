@@ -1,5 +1,5 @@
 import { requireUser } from './_runtime.js';
-import { buildPayloadFromTemplate } from '../lib/payloadTemplate.js';
+import { buildPayloadFromTemplate } from './routingEngine.generated.js';
 
 // Render / Dry Run for a native SubDelivery. Resolves payload_template
 // against an operator-supplied sample lead and returns the rendered JSON.

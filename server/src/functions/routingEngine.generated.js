@@ -1,7 +1,7 @@
 // GENERATED FILE - DO NOT EDIT BY HAND.
 // Source of truth: src/lib/distribution/backend-entry.js and its imports.
 // Regenerate: node scripts/generate-backend-engine.mjs
-// canonical-engine-sha256: ded5c94a5c1adadfc932df7f8fda70e2a19e64d043a3efdca8cd5e081f9f64ae
+// canonical-engine-sha256: 7a15136977878e7d3afbd52a6b9b349cbee38aa5b74c7232ff49cd7ff1419440
 // src/lib/distribution/engine.js
 var REASON = {
   ELIGIBLE: "ELIGIBLE",
@@ -515,6 +515,8 @@ function resolveSubDeliveryCfg(sd) {
     credentialRef: sd.credential_ref || null,
     // opaque reference; resolved at send time
     fieldMap: toFieldMap(parseJson(sd.field_map)),
+    // Authoritative over fieldMap when non-empty; see directPost.js.
+    payloadTemplate: typeof sd.payload_template === "string" ? sd.payload_template : "",
     transforms: parseJson(sd.transforms) || [],
     responseMapping: toResponseMapping(parseJson(sd.response_mapping)),
     timeoutMs: Number(sd.timeout_ms) || 1e4,
@@ -1326,6 +1328,142 @@ function applyTransform(value, transform) {
   }
 }
 
+// src/lib/distribution/payloadTemplate.js
+async function sha256Hex(message) {
+  const buf = new TextEncoder().encode(message);
+  const hash = await crypto.subtle.digest("SHA-256", buf);
+  return Array.from(new Uint8Array(hash)).map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+function phoneUs(raw) {
+  let digits = String(raw || "").replace(/\D/g, "");
+  if (digits.length === 11 && digits.startsWith("1")) digits = digits.slice(1);
+  if (digits.length === 10) return "1" + digits;
+  return digits;
+}
+function escapeJsonString(s) {
+  return String(s).replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n").replace(/\r/g, "\\r").replace(/\t/g, "\\t");
+}
+function resolveTokenValue(token, d) {
+  switch (token) {
+    case "_c_eventtime":
+    case "event_time":
+      return String(Math.floor(Date.now() / 1e3));
+    case "_c_eventurl":
+    case "optin_url":
+      return d.optin_url || d.optinurl || d.landing_page_url || d.landingpage_url || "";
+    case "_device_userAgent":
+    case "user_agent":
+      return d.user_agent || d.useragent || "";
+    case "_tracking__fbc":
+    case "fbc":
+      return d.fbc || d._tracking__fbc || "";
+    case "_tracking__fbp":
+    case "fbp":
+      return d.fbp || d._tracking__fbp || "";
+    case "_geoip_city":
+    case "geoip_city":
+    case "city":
+      return d.geoip_city || d.city || d._geoip_city || "";
+    case "_geoip_regionName":
+    case "geoip_state":
+    case "state":
+      return d.geoip_state || d.state || d._geoip_regionName || "";
+    case "_geoip_countryName":
+    case "geoip_country":
+    case "country":
+      return d.geoip_country || d.country || d._geoip_countryName || "";
+    case "mobile_raw":
+    case "mobile":
+      return d.mobile || d.phone1 || d.phone || d.phone_number || "";
+    case "conv_value":
+      return d.conv_value != null ? String(d.conv_value) : "";
+    case "ip_address":
+      return d.ip_address || d.ipaddress || "";
+    case "email":
+      return d.email || "";
+    case "first_name":
+      return d.first_name || d.firstname || "";
+    case "last_name":
+      return d.last_name || d.lastname || "";
+    case "zip":
+      return d.zip || d.zipcode || d.zip_code || "";
+    case "lead_event":
+      return d.lead_event || "";
+    case "accident_state":
+      return d.accident_state || d.state || "";
+    case "trustedform_url":
+      return d.trustedform_url || d.trustedform_cert_url || d.trustedform_cert || "";
+    case "jornaya_token":
+      return d.jornaya_token || d.leadid_token || d.jornayaid || "";
+    case "fault":
+      return d.fault || d.at_fault || d.atfault || "";
+    case "treatment":
+      return d.treatment || d.physical_injury || d.injury || "";
+    case "attorney":
+      return d.attorney || d.with_lawyer || d.has_attorney || d.lawyer || "";
+    case "incident_date_2":
+      return d.incident_date_2 || d.incident_date || d.accident_date || "";
+    case "incident_date_3":
+      return d.incident_date_3 || d.incident_date || d.accident_date || "";
+    case "accident_details":
+      return d.accident_details || d.case_description || d.accident_description || "";
+    default: {
+      const val = d[token];
+      return val !== void 0 && val !== null ? String(val) : "";
+    }
+  }
+}
+async function applyTransform2(value, transform) {
+  switch (transform) {
+    case "sha256":
+      return await sha256Hex(value);
+    case "lowercase":
+      return String(value).toLowerCase();
+    case "uppercase":
+      return String(value).toUpperCase();
+    case "trim":
+      return String(value).trim();
+    case "phone_us":
+      return phoneUs(value);
+    default:
+      return value;
+  }
+}
+async function resolveTemplate(templateStr, data) {
+  const pattern = /\{\{([\w.]+(?:\|[\w]+)*)\}\}/g;
+  const matches = [];
+  let m;
+  while ((m = pattern.exec(templateStr)) !== null) {
+    matches.push({ expr: m[1], index: m.index, length: m[0].length });
+  }
+  const resolved = await Promise.all(matches.map(async (match) => {
+    const parts = match.expr.split("|").map((s) => s.trim());
+    const token = parts[0];
+    const transforms = parts.slice(1);
+    let value = resolveTokenValue(token, data || {});
+    for (const t of transforms) {
+      value = await applyTransform2(value, t);
+    }
+    return escapeJsonString(value);
+  }));
+  let result = templateStr;
+  for (let i = matches.length - 1; i >= 0; i--) {
+    const match = matches[i];
+    result = result.slice(0, match.index) + resolved[i] + result.slice(match.index + match.length);
+  }
+  return result;
+}
+async function buildPayloadFromTemplate(template, data) {
+  if (!template) return data;
+  const tmpl = typeof template === "string" ? template : JSON.stringify(template);
+  const resolved = await resolveTemplate(tmpl, data);
+  try {
+    return JSON.parse(resolved);
+  } catch {
+    return resolved;
+  }
+}
+
 // src/lib/distribution/directPost.js
 function getPath(obj, path) {
   if (!path) return void 0;
@@ -1361,7 +1499,21 @@ async function deliverDirectPost(cfg, ctx) {
       return failClosed(ctx, cfg, nowMs, "host_not_allowed", "HOST_NOT_ALLOWED");
     }
   }
-  const payload = buildPayload(cfg.leadData || {}, cfg.fieldMap);
+  let payload;
+  if (cfg.payloadTemplate && String(cfg.payloadTemplate).trim() !== "") {
+    let rendered;
+    try {
+      rendered = await buildPayloadFromTemplate(cfg.payloadTemplate, cfg.leadData || {});
+    } catch {
+      return failClosed(ctx, cfg, nowMs, "invalid_payload_template", "INVALID_PAYLOAD_TEMPLATE");
+    }
+    if (rendered === null || typeof rendered !== "object" || Array.isArray(rendered)) {
+      return failClosed(ctx, cfg, nowMs, "invalid_payload_template", "INVALID_PAYLOAD_TEMPLATE");
+    }
+    payload = rendered;
+  } else {
+    payload = buildPayload(cfg.leadData || {}, cfg.fieldMap);
+  }
   const encoding = cfg.encoding === "form" ? "form" : "json";
   const headers = { ...cfg.headers || {} };
   if (cfg.credentialRef && typeof ctx.resolveCredential === "function") {
@@ -2479,10 +2631,12 @@ export {
   WALLET,
   _clearActiveGroupCache,
   applyReturnAdjustment,
+  applyTransform2 as applyTemplateTransform,
   applyTransform,
   backoffWithJitter,
   buildAttemptRecord,
   buildModeAudit,
+  buildPayloadFromTemplate,
   buildPingPayload,
   buildRoutingSnapshot,
   buildVersionSnapshot,
@@ -2496,6 +2650,7 @@ export {
   deliverDirectPost,
   diffConfig,
   distributeLead,
+  escapeJsonString,
   evalConditionTree,
   evalLeaf,
   evaluateMember,
@@ -2521,6 +2676,7 @@ export {
   nextHealth,
   nextRetryAtIso,
   orderEligible,
+  phoneUs,
   planExecution,
   projectSubDeliveryForClient,
   rankBids,
@@ -2530,6 +2686,8 @@ export {
   resolveCampaign,
   resolvePrice,
   resolveSubDeliveryCfg,
+  resolveTemplate,
+  resolveTokenValue,
   resolveTraceVersion,
   routeWaterfall,
   runDistribution,
@@ -2542,6 +2700,7 @@ export {
   selectPriority,
   selectRoundRobin,
   selectWeighted,
+  sha256Hex,
   shouldFallback,
   shouldRetry,
   summarizeComparisons,

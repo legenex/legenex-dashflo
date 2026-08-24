@@ -136,3 +136,72 @@ describe('direct-post adapter integration (local mock destination)', () => {
     expect(store._debug.attempts[0].status).toBe(ATTEMPT_STATUS.ERROR);
   });
 });
+
+describe('direct-post adapter: payload_template live path (Stage 3)', () => {
+  it('a configured payload_template is authoritative and renders generic tokens into the real request body', async () => {
+    const r = await deliverDirectPost(cfg({
+      targetUrl: `${base}/echo`,
+      payloadTemplate: '{"their_field":"{{first_name}}","phone":"{{mobile|phone_us}}","fixed":"literal"}',
+      leadData: { first_name: 'Jane', mobile: '5551234567' },
+      fieldMap: [{ src: 'email', dest: 'email_should_not_appear' }],
+    }), ctx(makeInMemoryAttemptStore()));
+    expect(r.status).toBe(ATTEMPT_STATUS.ACCEPTED);
+  });
+
+  it('falls back to field_map when no payload_template is configured (backward compatible)', async () => {
+    const r = await deliverDirectPost(cfg({
+      targetUrl: `${base}/echo`,
+      fieldMap: [{ src: 'email', dest: 'email' }],
+      leadData: { email: 'a@b.com' },
+    }), ctx(makeInMemoryAttemptStore()));
+    expect(r.status).toBe(ATTEMPT_STATUS.ACCEPTED);
+  });
+
+  it('an empty-string payload_template does not shadow field_map', async () => {
+    const r = await deliverDirectPost(cfg({
+      targetUrl: `${base}/echo`, payloadTemplate: '', fieldMap: [{ src: 'email', dest: 'email' }],
+      leadData: { email: 'a@b.com' },
+    }), ctx(makeInMemoryAttemptStore()));
+    expect(r.status).toBe(ATTEMPT_STATUS.ACCEPTED);
+  });
+
+  it('fails closed, without sending, when the rendered template is not valid JSON', async () => {
+    const store = makeInMemoryAttemptStore();
+    const r = await deliverDirectPost(cfg({
+      targetUrl: `${base}/echo`,
+      payloadTemplate: '{"broken": {{first_name}}', // no closing brace/quote -> invalid JSON after render
+      leadData: { first_name: 'Jane' },
+    }), ctx(store));
+    expect(r.status).toBe(ATTEMPT_STATUS.ERROR);
+    expect(r.code).toBe('INVALID_PAYLOAD_TEMPLATE');
+    // fail-closed: no attempt was left pending/sent, and no real request left this process
+    expect(store._debug.attempts).toHaveLength(1);
+    expect(store._debug.attempts[0].status).toBe(ATTEMPT_STATUS.ERROR);
+  });
+
+  it('fails closed when the template renders to a JSON array or scalar rather than an object', async () => {
+    const r1 = await deliverDirectPost(cfg({
+      targetUrl: `${base}/echo`, payloadTemplate: '["{{first_name}}"]', leadData: { first_name: 'Jane' },
+    }), ctx(makeInMemoryAttemptStore()));
+    expect(r1.status).toBe(ATTEMPT_STATUS.ERROR);
+    expect(r1.code).toBe('INVALID_PAYLOAD_TEMPLATE');
+
+    const r2 = await deliverDirectPost(cfg({
+      targetUrl: `${base}/echo`, payloadTemplate: '"{{first_name}}"', leadData: { first_name: 'Jane' },
+    }), ctx(makeInMemoryAttemptStore()));
+    expect(r2.status).toBe(ATTEMPT_STATUS.ERROR);
+    expect(r2.code).toBe('INVALID_PAYLOAD_TEMPLATE');
+  });
+
+  it('rendered template body is not stored with unresolved secret-shaped tokens (structured JSON preserved)', async () => {
+    const store = makeInMemoryAttemptStore();
+    const r = await deliverDirectPost(cfg({
+      targetUrl: `${base}/echo`,
+      payloadTemplate: '{"email_hash":"{{email|sha256}}","zip":"{{zip}}"}',
+      leadData: { email: 'a@b.com', zip: '90210' },
+    }), ctx(store));
+    expect(r.status).toBe(ATTEMPT_STATUS.ACCEPTED);
+    const stored = JSON.stringify(store._debug.attempts[0].request_meta);
+    expect(stored).not.toContain('a@b.com');
+  });
+});

@@ -1,11 +1,12 @@
 import { requireUser } from './_runtime.js';
-import { buildPayloadFromTemplate } from '../lib/payloadTemplate.js';
+import { buildPayloadFromTemplate } from './routingEngine.generated.js';
 
 // ── Handler ───────────────────────────────────────────────────────────────
-// The {{token|transform}} resolver used below lives in lib/payloadTemplate.js,
-// shared with the native Delivery/SubDelivery dry-run/mock-send functions
-// (deliveryPayloadPreview.js, deliveryMockSend.js) so both resolve tokens
-// identically to the live pipeline rather than carrying separate copies.
+// The {{token|transform}} resolver used below lives in
+// client/src/lib/distribution/payloadTemplate.js, reached here through the
+// generated engine bundle, shared with the native Delivery/SubDelivery
+// dry-run/mock-send/real-send functions so all of them resolve tokens
+// identically rather than carrying separate copies.
 
 // Caller model: operator-only. Fires an outbound POST to an operator-configured
 // LeadByte destination using operator credentials, so it is gated to operators

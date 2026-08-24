@@ -5,6 +5,14 @@
 // path resolves tokens identically rather than carrying a second, silently
 // diverging copy of the same ~130 lines. Pure refactor: behavior is
 // unchanged, callers just import from here now.
+//
+// Moved from server/src/lib/payloadTemplate.js into the canonical isomorphic
+// engine source (Stage 3): directPost.js's real native send path renders
+// SubDelivery.payload_template through this exact module too, via the
+// generated bundle, so preview, mock send, and the real send path can never
+// resolve a token differently from one another. Re-exported from
+// backend-entry.js as `applyTemplateTransform` to avoid a name collision with
+// transforms.js's field-map applyTransform, which is a distinct function.
 
 export async function sha256Hex(message) {
   const buf = new TextEncoder().encode(message);

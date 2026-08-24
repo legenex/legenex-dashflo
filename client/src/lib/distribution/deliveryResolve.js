@@ -83,6 +83,8 @@ export function resolveSubDeliveryCfg(sd) {
     headers: parseJson(sd.headers) || {}, // NON-secret headers only (schema forbids secrets here)
     credentialRef: sd.credential_ref || null, // opaque reference; resolved at send time
     fieldMap: toFieldMap(parseJson(sd.field_map)),
+    // Authoritative over fieldMap when non-empty; see directPost.js.
+    payloadTemplate: typeof sd.payload_template === 'string' ? sd.payload_template : '',
     transforms: parseJson(sd.transforms) || [],
     responseMapping: toResponseMapping(parseJson(sd.response_mapping)),
     timeoutMs: Number(sd.timeout_ms) || 10000,

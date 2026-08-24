@@ -303,10 +303,10 @@ export default function DeliveryEditorDialog({ open, onOpenChange, buyerId, buye
           <Section title="Headers &amp; credential">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <Field label="Headers (JSON)" hint="Non-secret headers only." error={!headersValid ? 'Invalid JSON' : null}>
-                <Textarea value={headers} onChange={(e) => setHeaders(e.target.value)} rows={2} className="bg-background text-xs font-mono" placeholder='{"X-Env":"prod"}' />
+                <Textarea value={headers} onChange={(e) => setHeaders(e.target.value)} rows={2} className="bg-background text-xs font-mono" placeholder='{"X-Env":"production"}' />
               </Field>
               <Field label="Credential reference" hint="Opaque reference to a secret resolved server-side at send time. Never the secret value itself.">
-                <Input value={credentialRef} onChange={(e) => setCredentialRef(e.target.value)} placeholder="e.g. walker_advertising_auth" className="h-9 bg-background font-mono text-[12px]" />
+                <Input value={credentialRef} onChange={(e) => setCredentialRef(e.target.value)} placeholder="e.g. acme_auth" className="h-9 bg-background font-mono text-[12px]" />
               </Field>
             </div>
             <Field label="Timeout (ms)">

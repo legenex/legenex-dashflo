@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { resolveTokenValue, applyTransform, resolveTemplate, buildPayloadFromTemplate } from '../src/lib/payloadTemplate.js';
+import { resolveTokenValue, applyTransform, resolveTemplate, buildPayloadFromTemplate } from './payloadTemplate.js';
 
 // Pure extraction from testWebhookDelivery.js - behavior must be unchanged.
 describe('payloadTemplate resolver', () => {

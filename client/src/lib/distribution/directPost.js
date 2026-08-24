@@ -9,6 +9,7 @@
 
 import { classifyResponse, buildAttemptRecord, ATTEMPT_STATUS } from './deliveryAttempt.js';
 import { applyTransform } from './transforms.js';
+import { buildPayloadFromTemplate } from './payloadTemplate.js';
 
 function getPath(obj, path) {
   if (!path) return undefined;
@@ -33,9 +34,10 @@ function buildPayload(leadData, fieldMap) {
   return out;
 }
 
-// cfg: { destinationId, targetUrl, method, encoding, headers, fieldMap, timeoutMs,
+// cfg: { destinationId, targetUrl, method, encoding, headers, fieldMap, payloadTemplate, timeoutMs,
 //        responseMapping:{acceptRe,rejectRe,duplicateRe,queueRe,revenuePath,leadIdPath},
 //        idempotencyKey, leadData, leadId, attemptNumber, isPrimary, trigger, retryOpts }
+// payloadTemplate, when a non-empty string, is authoritative over fieldMap.
 // ctx: { store, nowMs, fetchImpl, testMode, allowlistHosts }
 export async function deliverDirectPost(cfg, ctx) {
   const nowMs = ctx.nowMs ?? 0;
@@ -54,7 +56,29 @@ export async function deliverDirectPost(cfg, ctx) {
     }
   }
 
-  const payload = buildPayload(cfg.leadData || {}, cfg.fieldMap);
+  // Payload: SubDelivery.payload_template is authoritative when configured
+  // (same generic {{token|transform}} renderer as Dry Run and Mock Send, via
+  // payloadTemplate.js), otherwise fall back to the structured field_map, for
+  // backward compatibility with SubDeliveries that only ever configured that.
+  let payload;
+  if (cfg.payloadTemplate && String(cfg.payloadTemplate).trim() !== '') {
+    let rendered;
+    try {
+      rendered = await buildPayloadFromTemplate(cfg.payloadTemplate, cfg.leadData || {});
+    } catch {
+      return failClosed(ctx, cfg, nowMs, 'invalid_payload_template', 'INVALID_PAYLOAD_TEMPLATE');
+    }
+    // buildPayloadFromTemplate falls back to the raw resolved STRING when the
+    // rendered text is not valid JSON (useful for a preview showing the
+    // operator what broke). The real send path must never silently POST that
+    // string as if it were the payload: fail closed instead.
+    if (rendered === null || typeof rendered !== 'object' || Array.isArray(rendered)) {
+      return failClosed(ctx, cfg, nowMs, 'invalid_payload_template', 'INVALID_PAYLOAD_TEMPLATE');
+    }
+    payload = rendered;
+  } else {
+    payload = buildPayload(cfg.leadData || {}, cfg.fieldMap);
+  }
   const encoding = cfg.encoding === 'form' ? 'form' : 'json';
   const headers = { ...(cfg.headers || {}) }; // NON-secret headers only (never carries a stored key)
   // CREDENTIAL HARD RULE: resolve the opaque credential_ref to real secret headers

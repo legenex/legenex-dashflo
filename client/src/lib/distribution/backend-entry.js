@@ -47,3 +47,7 @@ export {
   ATTEMPT_STATUS, computeBackoffMs, nextRetryAtIso, shouldRetry, classifyResponse,
   buildAttemptRecord,
 } from './deliveryAttempt.js';
+export {
+  sha256Hex, phoneUs, escapeJsonString, resolveTokenValue, resolveTemplate,
+  buildPayloadFromTemplate, applyTransform as applyTemplateTransform,
+} from './payloadTemplate.js';
