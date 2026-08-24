@@ -1,7 +1,7 @@
 // GENERATED FILE - DO NOT EDIT BY HAND.
 // Source of truth: src/lib/distribution/backend-entry.js and its imports.
 // Regenerate: node scripts/generate-backend-engine.mjs
-// canonical-engine-sha256: 7a15136977878e7d3afbd52a6b9b349cbee38aa5b74c7232ff49cd7ff1419440
+// canonical-engine-sha256: 5ab02e66bc290974deb7790a297b6227e53f7e5a0c9fc2463f0924cd48e6bb69
 // src/lib/distribution/engine.js
 var REASON = {
   ELIGIBLE: "ELIGIBLE",
@@ -445,6 +445,118 @@ function isWithinSchedule(nowMs, schedule, fallbackTz) {
   });
 }
 
+// src/lib/distribution/deliveryAttempt.js
+var ATTEMPT_STATUS = {
+  PENDING: "pending",
+  SENT: "sent",
+  ACCEPTED: "accepted",
+  REJECTED: "rejected",
+  DUPLICATE: "duplicate",
+  QUEUED: "queued",
+  ERROR: "error",
+  DEAD_LETTER: "dead_letter"
+};
+var TERMINAL = /* @__PURE__ */ new Set([
+  ATTEMPT_STATUS.ACCEPTED,
+  ATTEMPT_STATUS.REJECTED,
+  ATTEMPT_STATUS.DUPLICATE,
+  ATTEMPT_STATUS.DEAD_LETTER
+]);
+function computeBackoffMs(attemptNumber, opts = {}) {
+  const base = opts.baseMs ?? 1e3;
+  const factor = opts.factor ?? 2;
+  const max = opts.maxMs ?? 60 * 60 * 1e3;
+  const n = Math.max(1, attemptNumber);
+  return Math.min(max, base * Math.pow(factor, n - 1));
+}
+function nextRetryAtIso(nowMs, attemptNumber, opts = {}) {
+  return new Date(nowMs + computeBackoffMs(attemptNumber, opts)).toISOString();
+}
+function shouldRetry(status, attemptNumber, maxAttempts = 5) {
+  if (TERMINAL.has(status)) return false;
+  if (status === ATTEMPT_STATUS.ACCEPTED) return false;
+  const retryable = status === ATTEMPT_STATUS.ERROR || status === ATTEMPT_STATUS.QUEUED;
+  return retryable && attemptNumber < maxAttempts;
+}
+function classifyResponse({ httpStatus, body, error, mapping = {} } = {}) {
+  if (error) return ATTEMPT_STATUS.ERROR;
+  const text = typeof body === "string" ? body : JSON.stringify(body ?? {});
+  const test = (re) => {
+    try {
+      return re && new RegExp(re, "i").test(text);
+    } catch {
+      return false;
+    }
+  };
+  if (mapping.duplicate && test(mapping.duplicate)) return ATTEMPT_STATUS.DUPLICATE;
+  if (mapping.reject && test(mapping.reject)) return ATTEMPT_STATUS.REJECTED;
+  if (mapping.queue && test(mapping.queue)) return ATTEMPT_STATUS.QUEUED;
+  if (mapping.accept && test(mapping.accept)) return ATTEMPT_STATUS.ACCEPTED;
+  if (httpStatus == null) return ATTEMPT_STATUS.ERROR;
+  if (httpStatus >= 200 && httpStatus < 300) {
+    if (mapping.requireAccept && mapping.accept) return ATTEMPT_STATUS.REJECTED;
+    return ATTEMPT_STATUS.ACCEPTED;
+  }
+  if (httpStatus === 409) return ATTEMPT_STATUS.DUPLICATE;
+  if (httpStatus === 408 || httpStatus === 429 || httpStatus >= 500) return ATTEMPT_STATUS.ERROR;
+  if (httpStatus >= 400) return ATTEMPT_STATUS.REJECTED;
+  return ATTEMPT_STATUS.ERROR;
+}
+function toClassifyResponseMapping(rm) {
+  if (!rm || typeof rm !== "object") return {};
+  return {
+    accept: rm.accepted || null,
+    reject: rm.rejected || null,
+    duplicate: rm.duplicate || null,
+    queue: rm.queued || null,
+    requireAccept: rm.require_accept === true,
+    revenuePath: rm.revenue || null,
+    leadIdPath: rm.buyer_lead_id || null
+  };
+}
+function buildAttemptRecord({
+  leadId,
+  destinationId,
+  trigger,
+  attemptNumber = 1,
+  idempotencyKey: idempotencyKey2,
+  isPrimary = false,
+  status,
+  request = {},
+  response = {},
+  httpStatus = null,
+  latencyMs = null,
+  errorClass = null,
+  nowMs = 0,
+  retryOpts = {}
+}) {
+  const willRetry = shouldRetry(status, attemptNumber, retryOpts.maxAttempts ?? 5);
+  const finalStatus = !willRetry && (status === ATTEMPT_STATUS.ERROR || status === ATTEMPT_STATUS.QUEUED) && attemptNumber >= (retryOpts.maxAttempts ?? 5) ? ATTEMPT_STATUS.DEAD_LETTER : status;
+  return {
+    lead_id: leadId,
+    destination_id: destinationId,
+    trigger: trigger ?? null,
+    attempt_number: attemptNumber,
+    idempotency_key: idempotencyKey2 ?? null,
+    is_primary: !!isPrimary,
+    status: finalStatus,
+    request_meta: JSON.stringify(redact(minimizeRequest(request))),
+    response_meta: JSON.stringify(minimizeResponse(response)),
+    http_status: httpStatus,
+    latency_ms: latencyMs,
+    error_class: errorClass,
+    next_retry_at: willRetry ? nextRetryAtIso(nowMs, attemptNumber, retryOpts) : null,
+    completed_at: new Date(nowMs).toISOString()
+  };
+}
+function minimizeRequest(req) {
+  return { method: req.method, url: req.url, headers: req.headers, body_present: req.body != null };
+}
+function minimizeResponse(res) {
+  const text = typeof res.body === "string" ? res.body : JSON.stringify(res.body ?? {});
+  return { status: res.status ?? null, body_excerpt: text.slice(0, 500) };
+}
+
 // src/lib/distribution/deliveryResolve.js
 function parseJson(raw) {
   if (raw == null || raw === "") return null;
@@ -454,20 +566,6 @@ function parseJson(raw) {
   } catch {
     return null;
   }
-}
-function toResponseMapping(rm) {
-  if (!rm || typeof rm !== "object") return {};
-  return {
-    acceptRe: rm.accepted || rm.acceptRe || null,
-    rejectRe: rm.rejected || rm.rejectRe || null,
-    duplicateRe: rm.duplicate || rm.duplicateRe || null,
-    queueRe: rm.queued || rm.queueRe || null,
-    revenuePath: rm.revenue || rm.revenuePath || null,
-    leadIdPath: rm.buyer_lead_id || rm.leadIdPath || null,
-    // When true, acceptance is authoritative: a 2xx that does not match acceptRe
-    // is treated as a rejection rather than a false Sold.
-    requireAccept: rm.require_accept === true || rm.requireAccept === true
-  };
 }
 function toFieldMap(fm) {
   if (Array.isArray(fm)) return fm;
@@ -518,7 +616,7 @@ function resolveSubDeliveryCfg(sd) {
     // Authoritative over fieldMap when non-empty; see directPost.js.
     payloadTemplate: typeof sd.payload_template === "string" ? sd.payload_template : "",
     transforms: parseJson(sd.transforms) || [],
-    responseMapping: toResponseMapping(parseJson(sd.response_mapping)),
+    responseMapping: toClassifyResponseMapping(parseJson(sd.response_mapping)),
     timeoutMs: Number(sd.timeout_ms) || 1e4,
     retryOpts: retry
   };
@@ -1206,106 +1304,6 @@ function round22(n) {
   return Math.round((Number(n) + Number.EPSILON) * 100) / 100;
 }
 
-// src/lib/distribution/deliveryAttempt.js
-var ATTEMPT_STATUS = {
-  PENDING: "pending",
-  SENT: "sent",
-  ACCEPTED: "accepted",
-  REJECTED: "rejected",
-  DUPLICATE: "duplicate",
-  QUEUED: "queued",
-  ERROR: "error",
-  DEAD_LETTER: "dead_letter"
-};
-var TERMINAL = /* @__PURE__ */ new Set([
-  ATTEMPT_STATUS.ACCEPTED,
-  ATTEMPT_STATUS.REJECTED,
-  ATTEMPT_STATUS.DUPLICATE,
-  ATTEMPT_STATUS.DEAD_LETTER
-]);
-function computeBackoffMs(attemptNumber, opts = {}) {
-  const base = opts.baseMs ?? 1e3;
-  const factor = opts.factor ?? 2;
-  const max = opts.maxMs ?? 60 * 60 * 1e3;
-  const n = Math.max(1, attemptNumber);
-  return Math.min(max, base * Math.pow(factor, n - 1));
-}
-function nextRetryAtIso(nowMs, attemptNumber, opts = {}) {
-  return new Date(nowMs + computeBackoffMs(attemptNumber, opts)).toISOString();
-}
-function shouldRetry(status, attemptNumber, maxAttempts = 5) {
-  if (TERMINAL.has(status)) return false;
-  if (status === ATTEMPT_STATUS.ACCEPTED) return false;
-  const retryable = status === ATTEMPT_STATUS.ERROR || status === ATTEMPT_STATUS.QUEUED;
-  return retryable && attemptNumber < maxAttempts;
-}
-function classifyResponse({ httpStatus, body, error, mapping = {} } = {}) {
-  if (error) return ATTEMPT_STATUS.ERROR;
-  const text = typeof body === "string" ? body : JSON.stringify(body ?? {});
-  const test = (re) => {
-    try {
-      return re && new RegExp(re, "i").test(text);
-    } catch {
-      return false;
-    }
-  };
-  if (mapping.duplicate && test(mapping.duplicate)) return ATTEMPT_STATUS.DUPLICATE;
-  if (mapping.reject && test(mapping.reject)) return ATTEMPT_STATUS.REJECTED;
-  if (mapping.queue && test(mapping.queue)) return ATTEMPT_STATUS.QUEUED;
-  if (mapping.accept && test(mapping.accept)) return ATTEMPT_STATUS.ACCEPTED;
-  if (httpStatus == null) return ATTEMPT_STATUS.ERROR;
-  if (httpStatus >= 200 && httpStatus < 300) {
-    if (mapping.requireAccept && mapping.accept) return ATTEMPT_STATUS.REJECTED;
-    return ATTEMPT_STATUS.ACCEPTED;
-  }
-  if (httpStatus === 409) return ATTEMPT_STATUS.DUPLICATE;
-  if (httpStatus === 408 || httpStatus === 429 || httpStatus >= 500) return ATTEMPT_STATUS.ERROR;
-  if (httpStatus >= 400) return ATTEMPT_STATUS.REJECTED;
-  return ATTEMPT_STATUS.ERROR;
-}
-function buildAttemptRecord({
-  leadId,
-  destinationId,
-  trigger,
-  attemptNumber = 1,
-  idempotencyKey: idempotencyKey2,
-  isPrimary = false,
-  status,
-  request = {},
-  response = {},
-  httpStatus = null,
-  latencyMs = null,
-  errorClass = null,
-  nowMs = 0,
-  retryOpts = {}
-}) {
-  const willRetry = shouldRetry(status, attemptNumber, retryOpts.maxAttempts ?? 5);
-  const finalStatus = !willRetry && (status === ATTEMPT_STATUS.ERROR || status === ATTEMPT_STATUS.QUEUED) && attemptNumber >= (retryOpts.maxAttempts ?? 5) ? ATTEMPT_STATUS.DEAD_LETTER : status;
-  return {
-    lead_id: leadId,
-    destination_id: destinationId,
-    trigger: trigger ?? null,
-    attempt_number: attemptNumber,
-    idempotency_key: idempotencyKey2 ?? null,
-    is_primary: !!isPrimary,
-    status: finalStatus,
-    request_meta: JSON.stringify(redact(minimizeRequest(request))),
-    response_meta: JSON.stringify(minimizeResponse(response)),
-    http_status: httpStatus,
-    latency_ms: latencyMs,
-    error_class: errorClass,
-    next_retry_at: willRetry ? nextRetryAtIso(nowMs, attemptNumber, retryOpts) : null,
-    completed_at: new Date(nowMs).toISOString()
-  };
-}
-function minimizeRequest(req) {
-  return { method: req.method, url: req.url, headers: req.headers, body_present: req.body != null };
-}
-function minimizeResponse(res) {
-  const text = typeof res.body === "string" ? res.body : JSON.stringify(res.body ?? {});
-  return { status: res.status ?? null, body_excerpt: text.slice(0, 500) };
-}
-
 // src/lib/distribution/transforms.js
 function applyTransform(value, transform) {
   const s = value == null ? "" : String(value);
@@ -1566,13 +1564,7 @@ async function deliverDirectPost(cfg, ctx) {
     clearTimeout(timer);
   }
   const mapping = cfg.responseMapping || {};
-  const status = errorClass ? ATTEMPT_STATUS.ERROR : classifyResponse({ httpStatus, body: bodyText, mapping: {
-    accept: mapping.acceptRe,
-    reject: mapping.rejectRe,
-    duplicate: mapping.duplicateRe,
-    queue: mapping.queueRe,
-    requireAccept: mapping.requireAccept
-  } });
+  const status = errorClass ? ATTEMPT_STATUS.ERROR : classifyResponse({ httpStatus, body: bodyText, mapping });
   let parsed = null;
   try {
     parsed = JSON.parse(bodyText);
@@ -2704,6 +2696,7 @@ export {
   shouldFallback,
   shouldRetry,
   summarizeComparisons,
+  toClassifyResponseMapping,
   validateConfigForPublish,
   validateModeTransition,
   wallClock,

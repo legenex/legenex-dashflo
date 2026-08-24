@@ -44,7 +44,7 @@ function cfg(over) {
   return {
     destinationId: 'd1', targetUrl: `${base}/accepted`, method: 'POST', encoding: 'json',
     idempotencyKey: 'lead1:d1', leadId: 'L1', leadData: { email: 'a@b.com', mobile: '5551234567' },
-    responseMapping: { rejectRe: 'rejected', duplicateRe: 'duplicate', revenuePath: 'revenue', leadIdPath: 'buyer_lead_id' },
+    responseMapping: { reject: 'rejected', duplicate: 'duplicate', revenuePath: 'revenue', leadIdPath: 'buyer_lead_id' },
     retryOpts: { maxAttempts: 3, baseMs: 1000 }, ...over,
   };
 }

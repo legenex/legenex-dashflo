@@ -14,7 +14,7 @@ describe('resolveSubDeliveryCfg', () => {
     expect(cfg.targetUrl).toBe('https://b.example/api');
     expect(cfg.encoding).toBe('form');
     expect(cfg.credentialRef).toBe('ref-1');
-    expect(cfg.responseMapping.acceptRe).toBe('ok');
+    expect(cfg.responseMapping.accept).toBe('ok');
     expect(cfg.responseMapping.revenuePath).toBe('price');
     expect(cfg.responseMapping.leadIdPath).toBe('id');
     expect(cfg.fieldMap).toEqual([{ src: 'email', dest: 'Email' }]);

@@ -47,10 +47,7 @@ export function classifySampleResponse(subDelivery, sample) {
   const mapping = cfg.responseMapping || {};
   const httpStatus = Number(sample?.httpStatus) || 200;
   const bodyText = String(sample?.body ?? '');
-  const status = classifyResponse({
-    httpStatus, body: bodyText,
-    mapping: { accept: mapping.acceptRe, reject: mapping.rejectRe, duplicate: mapping.duplicateRe, queue: mapping.queueRe },
-  });
+  const status = classifyResponse({ httpStatus, body: bodyText, mapping });
   let parsed = null;
   try { parsed = JSON.parse(bodyText); } catch { parsed = null; }
   const get = (path) => (path ? String(path).split('.').reduce((o, k) => (o == null ? undefined : o[k]), parsed) : undefined);

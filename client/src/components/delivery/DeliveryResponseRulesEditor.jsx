@@ -5,21 +5,23 @@ import { Switch } from '@/components/ui/switch';
 import { Textarea } from '@/components/ui/textarea';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { classifyResponse, ATTEMPT_STATUS } from '@/lib/distribution/deliveryAttempt.js';
+import { classifyResponse, toClassifyResponseMapping, ATTEMPT_STATUS } from '@/lib/distribution/deliveryAttempt.js';
 import { parseResponseMapping, getResponsePath as getPath } from '@/lib/deliveryResponseMapping';
 
 // Response Handling editor bound to SubDelivery.response_mapping, the exact
-// shape deliveryResolve.js's toResponseMapping() normalizes and directPost.js
-// hands to classifyResponse(): regex patterns matched against the response
-// body (accepted/rejected/duplicate/queued), a "require accept" toggle, and
-// JSON dot-paths for revenue and the buyer's own lead id. This is the ONE
-// generic response evaluator the native engine uses - see deliveryAttempt.js.
-// It does not read anything LeadByte-shaped; the legacy ResponseMapping
-// entity and its operator/lb_status rows are a separate mechanism that only
-// the legacy LeadByteConnector send path in processLead.js reads, and stays
-// untouched so it keeps interpreting real live traffic correctly. Parsing
-// lives in lib/deliveryResponseMapping.js so it can be unit tested without a
-// DOM environment.
+// storage shape toClassifyResponseMapping() (deliveryAttempt.js) normalizes
+// into what classifyResponse() reads: regex patterns matched against the
+// response body (accepted/rejected/duplicate/queued), a "require accept"
+// toggle, and JSON dot-paths for revenue and the buyer's own lead id. This
+// preview calls the exact same two functions deliveryResolve.js's
+// resolveSubDeliveryCfg calls for the real native send path and
+// deliveryMockSend.js calls for Mock Send - one evaluator, one translation,
+// three callers. It does not read anything LeadByte-shaped; the legacy
+// ResponseMapping entity and its operator/lb_status rows are a separate
+// mechanism that only the legacy LeadByteConnector send path in
+// processLead.js reads, and stays untouched so it keeps interpreting real
+// live traffic correctly. Parsing lives in lib/deliveryResponseMapping.js so
+// it can be unit tested without a DOM environment.
 export { parseResponseMapping };
 
 const STATUS_LABEL = {
@@ -43,17 +45,12 @@ export default function DeliveryResponseRulesEditor({ value, onChange }) {
 
   const preview = useMemo(() => {
     const httpStatus = Number(sampleStatus) || null;
-    const status = classifyResponse({
-      httpStatus, body: sampleBody,
-      mapping: {
-        accept: mapping.accepted, reject: mapping.rejected, duplicate: mapping.duplicate, queue: mapping.queued,
-        requireAccept: mapping.require_accept === true,
-      },
-    });
+    const evalMapping = toClassifyResponseMapping(mapping);
+    const status = classifyResponse({ httpStatus, body: sampleBody, mapping: evalMapping });
     let parsed = null;
     try { parsed = JSON.parse(sampleBody); } catch { /* not JSON, paths just miss */ }
-    const revenue = status === ATTEMPT_STATUS.ACCEPTED && parsed ? getPath(parsed, mapping.revenue) : undefined;
-    const buyerLeadId = parsed ? getPath(parsed, mapping.buyer_lead_id) : undefined;
+    const revenue = status === ATTEMPT_STATUS.ACCEPTED && parsed ? getPath(parsed, evalMapping.revenuePath) : undefined;
+    const buyerLeadId = parsed ? getPath(parsed, evalMapping.leadIdPath) : undefined;
     return { status, revenue, buyerLeadId };
   }, [mapping, sampleStatus, sampleBody]);
 

@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   ATTEMPT_STATUS, computeBackoffMs, nextRetryAtIso, shouldRetry, classifyResponse, buildAttemptRecord,
+  toClassifyResponseMapping,
 } from './deliveryAttempt.js';
 
 describe('computeBackoffMs (bounded exponential)', () => {
@@ -74,5 +75,43 @@ describe('buildAttemptRecord', () => {
 describe('nextRetryAtIso', () => {
   it('returns an ISO timestamp offset by the backoff', () => {
     expect(nextRetryAtIso(0, 1, { baseMs: 1000, factor: 2 })).toBe('1970-01-01T00:00:01.000Z');
+  });
+});
+
+// Stage 3: the one shared storage-shape -> evaluator-shape translation, used
+// by deliveryResolve.js (real send path), the editor's live preview, and
+// deliveryMockSend.js, so all three can never classify a response
+// differently because one hand-written copy drifted from the others.
+describe('toClassifyResponseMapping', () => {
+  it('maps the persisted SubDelivery.response_mapping storage shape to classifyResponse\'s param shape', () => {
+    const mapped = toClassifyResponseMapping({
+      accepted: 'ok', rejected: 'no', duplicate: 'dup', queued: 'q',
+      revenue: 'price', buyer_lead_id: 'ext_id', require_accept: true,
+    });
+    expect(mapped).toEqual({
+      accept: 'ok', reject: 'no', duplicate: 'dup', queue: 'q',
+      requireAccept: true, revenuePath: 'price', leadIdPath: 'ext_id',
+    });
+  });
+
+  it('the output classifies identically through classifyResponse regardless of caller', () => {
+    const mapped = toClassifyResponseMapping({ accepted: 'result.*accepted', require_accept: true });
+    const status = classifyResponse({ httpStatus: 200, body: '{"result":"accepted"}', mapping: mapped });
+    expect(status).toBe(ATTEMPT_STATUS.ACCEPTED);
+  });
+
+  it('a 2xx with requireAccept set but no accept-pattern match is a rejection, not a silent Sold', () => {
+    const mapped = toClassifyResponseMapping({ accepted: 'result.*accepted', require_accept: true });
+    const status = classifyResponse({ httpStatus: 200, body: '{"result":"pending"}', mapping: mapped });
+    expect(status).toBe(ATTEMPT_STATUS.REJECTED);
+  });
+
+  it('handles missing/empty config without throwing', () => {
+    expect(toClassifyResponseMapping(null)).toEqual({});
+    expect(toClassifyResponseMapping(undefined)).toEqual({});
+    expect(toClassifyResponseMapping({})).toEqual({
+      accept: null, reject: null, duplicate: null, queue: null,
+      requireAccept: false, revenuePath: null, leadIdPath: null,
+    });
   });
 });

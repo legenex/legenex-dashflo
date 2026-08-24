@@ -28,7 +28,7 @@ function makeNativeDeliver(path) {
     const r = await deliverDirectPost({
       destinationId: 'd1', targetUrl: path === 'refused' ? 'http://127.0.0.1:1/x' : `${base}${path}`,
       method: 'POST', encoding: 'json', idempotencyKey: `${lead.id}:d1`, leadId: lead.id, leadData: lead,
-      responseMapping: { rejectRe: 'rejected' }, attemptNumber: 1, isPrimary: true,
+      responseMapping: { reject: 'rejected' }, attemptNumber: 1, isPrimary: true,
     }, { store, nowMs: 0, testMode: true, fetchImpl: globalThis.fetch });
     let status = r.status;
     if (r.status === ATTEMPT_STATUS.ERROR) status = /refused|ECONNREFUSED/i.test(String(r.errorClass)) ? 'error_clean' : 'ambiguous';

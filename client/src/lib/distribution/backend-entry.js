@@ -45,7 +45,7 @@ export {
 } from './modeControl.js';
 export {
   ATTEMPT_STATUS, computeBackoffMs, nextRetryAtIso, shouldRetry, classifyResponse,
-  buildAttemptRecord,
+  buildAttemptRecord, toClassifyResponseMapping,
 } from './deliveryAttempt.js';
 export {
   sha256Hex, phoneUs, escapeJsonString, resolveTokenValue, resolveTemplate,

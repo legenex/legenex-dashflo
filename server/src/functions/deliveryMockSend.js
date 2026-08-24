@@ -66,23 +66,20 @@ export default async function deliveryMockSend(ctx) {
   // real response. `error` (e.g. "timeout") short-circuits to ERROR exactly
   // as a real network failure would.
   const sim = simulated && typeof simulated === 'object' ? simulated : {};
-  const mapping = parseJson(sd.response_mapping);
+  const evalMapping = engine.toClassifyResponseMapping(parseJson(sd.response_mapping));
   const classification = sim.error
     ? { status: engine.ATTEMPT_STATUS.ERROR }
     : { status: engine.classifyResponse({
         httpStatus: sim.http_status != null ? Number(sim.http_status) : null,
         body: sim.body ?? '',
-        mapping: {
-          accept: mapping.accepted, reject: mapping.rejected, duplicate: mapping.duplicate, queue: mapping.queued,
-          requireAccept: mapping.require_accept === true,
-        },
+        mapping: evalMapping,
       }) };
 
   let parsedResponse = null;
   try { parsedResponse = JSON.parse(sim.body ?? ''); } catch { /* not JSON */ }
   const revenue = classification.status === engine.ATTEMPT_STATUS.ACCEPTED && parsedResponse
-    ? getPath(parsedResponse, mapping.revenue) : undefined;
-  const buyerLeadId = parsedResponse ? getPath(parsedResponse, mapping.buyer_lead_id) : undefined;
+    ? getPath(parsedResponse, evalMapping.revenuePath) : undefined;
+  const buyerLeadId = parsedResponse ? getPath(parsedResponse, evalMapping.leadIdPath) : undefined;
 
   const renderedText = renderedPayload != null
     ? (typeof renderedPayload === 'string' ? renderedPayload : JSON.stringify(renderedPayload, null, 2))

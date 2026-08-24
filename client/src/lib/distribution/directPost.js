@@ -35,7 +35,7 @@ function buildPayload(leadData, fieldMap) {
 }
 
 // cfg: { destinationId, targetUrl, method, encoding, headers, fieldMap, payloadTemplate, timeoutMs,
-//        responseMapping:{acceptRe,rejectRe,duplicateRe,queueRe,revenuePath,leadIdPath},
+//        responseMapping:{accept,reject,duplicate,queue,requireAccept,revenuePath,leadIdPath},
 //        idempotencyKey, leadData, leadId, attemptNumber, isPrimary, trigger, retryOpts }
 // payloadTemplate, when a non-empty string, is authoritative over fieldMap.
 // ctx: { store, nowMs, fetchImpl, testMode, allowlistHosts }
@@ -124,13 +124,15 @@ export async function deliverDirectPost(cfg, ctx) {
     clearTimeout(timer);
   }
 
+  // cfg.responseMapping already arrives in classifyResponse's own shape
+  // (accept/reject/duplicate/queue/requireAccept/revenuePath/leadIdPath):
+  // deliveryResolve.js's resolveSubDeliveryCfg produces it via the same
+  // toClassifyResponseMapping the editor preview and Mock Send use, so there
+  // is no second, call-site-local translation left to drift from those.
   const mapping = cfg.responseMapping || {};
   const status = errorClass
     ? ATTEMPT_STATUS.ERROR
-    : classifyResponse({ httpStatus, body: bodyText, mapping: {
-        accept: mapping.acceptRe, reject: mapping.rejectRe, duplicate: mapping.duplicateRe, queue: mapping.queueRe,
-        requireAccept: mapping.requireAccept,
-      } });
+    : classifyResponse({ httpStatus, body: bodyText, mapping });
 
   let parsed = null;
   try { parsed = JSON.parse(bodyText); } catch { parsed = null; }

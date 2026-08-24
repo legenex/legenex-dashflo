@@ -284,7 +284,7 @@ describe('MVA distribution workflow', () => {
 
   it('14. invalid response (requireAccept)', async () => {
     const fetchImpl = mockFetch({ '/ok200': () => httpRes(200, 'garbled-not-json') });
-    const m1 = member('D1', { _dest: { targetUrl: 'http://localhost/ok200', responseMapping: { acceptRe: '"accepted":true', requireAccept: true } } });
+    const m1 = member('D1', { _dest: { targetUrl: 'http://localhost/ok200', responseMapping: { accept: '"accepted":true', requireAccept: true } } });
     const input = mvaLead();
     const result = await distributeLead(base({ campaign: { active: true }, groups: [group('priority', [m1])], lead: input, deliver: realDeliver(fetchImpl) }));
     expect(result.attempts[0].status).toBe(ATTEMPT_STATUS.REJECTED); // 200 but did not confirm acceptance
@@ -327,7 +327,7 @@ describe('MVA distribution workflow', () => {
     const store = { ...makeInMemoryAttemptStore(), createBid: async (b) => ({ id: 'bid1', ...b }) };
     const cfg = {
       leadId: 'LP1', leadData: mvaLead(), idempotencyKey: 'idem-17',
-      bidders: [{ memberId: 'D1', destinationId: 'D1', pingUrl: 'http://localhost/ping', postUrl: 'http://localhost/post', reservePrice: 10, timeoutMs: 50, responseMapping: { acceptRe: '"accepted":true', revenuePath: 'revenue' }, fieldMap: [{ src: 'email', dest: 'email' }] }],
+      bidders: [{ memberId: 'D1', destinationId: 'D1', pingUrl: 'http://localhost/ping', postUrl: 'http://localhost/post', reservePrice: 10, timeoutMs: 50, responseMapping: { accept: '"accepted":true', revenuePath: 'revenue' }, fieldMap: [{ src: 'email', dest: 'email' }] }],
     };
     const out = await runPingPost(cfg, { store, nowMs: NOW, fetchImpl, testMode: true, allowlistHosts: [] });
     expect(out.won).toBe(true);

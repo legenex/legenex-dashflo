@@ -33,7 +33,7 @@ function member(id, over = {}) {
       fieldMap: [{ src: 'email', dest: 'email' }],
       // requireAccept mirrors the production rule: a bare 2xx is NOT a sale unless
       // the buyer's accept pattern matches, so a polite 200 never books revenue.
-      responseMapping: { acceptRe: 'accepted', revenuePath: 'price', requireAccept: true }, timeoutMs: 5000,
+      responseMapping: { accept: 'accepted', revenuePath: 'price', requireAccept: true }, timeoutMs: 5000,
     },
     subDeliveryId: `sd-${id}`,
     destinationId: null,

@@ -62,6 +62,33 @@ export function classifyResponse({ httpStatus, body, error, mapping = {} } = {})
   return ATTEMPT_STATUS.ERROR;
 }
 
+// Normalizes a persisted SubDelivery.response_mapping object (the generic
+// editor's storage shape: accepted/rejected/duplicate/queued/revenue/
+// buyer_lead_id/require_accept) into the exact shape classifyResponse reads,
+// plus the two JSON dot-paths callers extract separately (revenuePath,
+// leadIdPath - classifyResponse itself ignores these, they are extracted by
+// the caller via getPath against the parsed response body).
+//
+// This is the ONE place the storage shape becomes the evaluator shape.
+// Before Stage 3 this translation was inlined three times (directPost.js via
+// deliveryResolve.js's toResponseMapping, the editor's live preview, and
+// deliveryMockSend.js), each hand-written and free to drift from the others
+// even though they currently agreed. Centralizing it here removes that risk:
+// Dry Run, Mock Send, and the real native send path all call this same
+// function, reached through the generated bundle server-side.
+export function toClassifyResponseMapping(rm) {
+  if (!rm || typeof rm !== 'object') return {};
+  return {
+    accept: rm.accepted || null,
+    reject: rm.rejected || null,
+    duplicate: rm.duplicate || null,
+    queue: rm.queued || null,
+    requireAccept: rm.require_accept === true,
+    revenuePath: rm.revenue || null,
+    leadIdPath: rm.buyer_lead_id || null,
+  };
+}
+
 // Build a persisted attempt record with secrets redacted and PII minimized.
 export function buildAttemptRecord({
   leadId, destinationId, trigger, attemptNumber = 1, idempotencyKey, isPrimary = false,

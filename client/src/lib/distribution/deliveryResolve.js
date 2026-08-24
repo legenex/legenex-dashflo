@@ -8,26 +8,12 @@
 // injected `resolveCredential(ref)` (see directPost). A secret must never appear
 // in a snapshot object, an operator response, or anything sent to the browser.
 
+import { toClassifyResponseMapping } from './deliveryAttempt.js';
+
 function parseJson(raw) {
   if (raw == null || raw === '') return null;
   if (typeof raw === 'object') return raw;
   try { return JSON.parse(raw); } catch { return null; }
-}
-
-// Normalize a response_mapping config into the shape directPost expects.
-function toResponseMapping(rm) {
-  if (!rm || typeof rm !== 'object') return {};
-  return {
-    acceptRe: rm.accepted || rm.acceptRe || null,
-    rejectRe: rm.rejected || rm.rejectRe || null,
-    duplicateRe: rm.duplicate || rm.duplicateRe || null,
-    queueRe: rm.queued || rm.queueRe || null,
-    revenuePath: rm.revenue || rm.revenuePath || null,
-    leadIdPath: rm.buyer_lead_id || rm.leadIdPath || null,
-    // When true, acceptance is authoritative: a 2xx that does not match acceptRe
-    // is treated as a rejection rather than a false Sold.
-    requireAccept: rm.require_accept === true || rm.requireAccept === true,
-  };
 }
 
 // Map [{ src/dest }] field_map config; accepts object form { dest: src } too.
@@ -86,7 +72,7 @@ export function resolveSubDeliveryCfg(sd) {
     // Authoritative over fieldMap when non-empty; see directPost.js.
     payloadTemplate: typeof sd.payload_template === 'string' ? sd.payload_template : '',
     transforms: parseJson(sd.transforms) || [],
-    responseMapping: toResponseMapping(parseJson(sd.response_mapping)),
+    responseMapping: toClassifyResponseMapping(parseJson(sd.response_mapping)),
     timeoutMs: Number(sd.timeout_ms) || 10000,
     retryOpts: retry,
   };
