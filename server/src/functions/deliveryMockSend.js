@@ -8,8 +8,8 @@ const { buildPayloadFromTemplate } = engine;
 // an operator can see exactly what DashFlo would conclude - accepted,
 // rejected, duplicate, queued, or error - without ever making a real network
 // call. This is deliberately NOT deliverDirectPost: no fetch, no target host
-// is ever contacted, so this is safe to run against Walker's real target_url
-// with zero risk of a live commercial side effect.
+// is ever contacted, so this is safe to run against any buyer's real
+// target_url with zero risk of a live commercial side effect.
 //
 // Caller model: operator-only, mirrors testWebhookDelivery.js's gate.
 const OPERATOR_PERMISSION_KEYS = ['leads', 'reports', 'overview', 'finances', 'distribution', 'operations'];
