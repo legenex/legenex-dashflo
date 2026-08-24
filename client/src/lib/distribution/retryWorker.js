@@ -41,7 +41,7 @@ export async function runRetryWorker(store, deliverFn, ctx) {
     }
 
     if (success || res.status === ATTEMPT_STATUS.REJECTED || res.status === ATTEMPT_STATUS.DUPLICATE) {
-      await store.updateAttempt(a.id, { status: res.status, next_retry_at: null, lease_until: null });
+      await store.updateAttempt(a.id, { status: res.status, next_retry_at: null, lease_until: null, attempt_number: nextAttemptNum });
     } else if (nextAttemptNum >= maxAttempts) {
       await store.updateAttempt(a.id, { status: ATTEMPT_STATUS.DEAD_LETTER, next_retry_at: null, lease_until: null, attempt_number: nextAttemptNum });
     } else {
@@ -63,9 +63,10 @@ export async function manualRetry(store, attemptId, deliverFn, ctx) {
   if (!a) return { ok: false, reason: 'not_found' };
   const won = await store.claimLease(attemptId, ctx.workerId || 'manual', ctx.nowMs, ctx.leaseMs || 30000);
   if (!won) return { ok: false, reason: 'leased' };
-  const res = await deliverFn({ ...a, attempt_number: (a.attempt_number || 1) + 1 });
+  const nextAttemptNum = (a.attempt_number || 1) + 1;
+  const res = await deliverFn({ ...a, attempt_number: nextAttemptNum });
   await store.updateAttempt(attemptId, {
-    status: res.status, lease_until: null,
+    status: res.status, lease_until: null, attempt_number: nextAttemptNum,
     next_retry_at: res.status === ATTEMPT_STATUS.ERROR ? new Date(ctx.nowMs).toISOString() : null,
   });
   if (ctx.healthStore) {

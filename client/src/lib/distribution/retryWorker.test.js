@@ -49,6 +49,20 @@ describe('retry worker (atomic lease, no double-send)', () => {
     expect((await store.getAttempt(a.id)).status).toBe(ATTEMPT_STATUS.DEAD_LETTER);
   });
 
+  it('persists the incremented attempt_number on a successful retry, not just on dead-letter/reschedule', async () => {
+    const store = makeInMemoryAttemptStore();
+    const [a] = await seedDue(store, 1, { attempt_number: 2 });
+    await runRetryWorker(store, async () => ({ status: ATTEMPT_STATUS.ACCEPTED }), { nowMs: 1000, workerId: 'A' });
+    expect((await store.getAttempt(a.id)).attempt_number).toBe(3);
+  });
+
+  it('persists the incremented attempt_number on a rejected/duplicate retry too', async () => {
+    const store = makeInMemoryAttemptStore();
+    const [a] = await seedDue(store, 1, { attempt_number: 1 });
+    await runRetryWorker(store, async () => ({ status: ATTEMPT_STATUS.REJECTED }), { nowMs: 1000, workerId: 'A' });
+    expect((await store.getAttempt(a.id)).attempt_number).toBe(2);
+  });
+
   it('reschedules a transient error with a future next_retry_at', async () => {
     const store = makeInMemoryAttemptStore();
     const [a] = await seedDue(store, 1, { attempt_number: 1 });
@@ -66,7 +80,9 @@ describe('retry worker (atomic lease, no double-send)', () => {
     const out = await manualRetry(store, a.id, async () => ({ status: ATTEMPT_STATUS.ACCEPTED }), { nowMs: 2000, healthStore: health });
     expect(out.ok).toBe(true);
     expect(out.status).toBe(ATTEMPT_STATUS.ACCEPTED);
-    expect((await store.getAttempt(a.id)).status).toBe(ATTEMPT_STATUS.ACCEPTED);
+    const row = await store.getAttempt(a.id);
+    expect(row.status).toBe(ATTEMPT_STATUS.ACCEPTED);
+    expect(row.attempt_number).toBe(6); // was 5, manualRetry increments and persists it
   });
 
   it('updates the circuit breaker on repeated failures', async () => {

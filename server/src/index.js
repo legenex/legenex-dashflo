@@ -10,6 +10,8 @@ import { attachUser } from './middleware/auth.js';
 import { csrfGuard, allowedOrigins } from './middleware/csrf.js';
 import { assertStartupConfig } from './lib/startupChecks.js';
 import { loadFunctions } from './functions/index.js';
+import { createServerClient } from './lib/serverClient.js';
+import { startNativeRetryScheduler } from './lib/nativeRetryScheduler.js';
 
 import authRoutes from './routes/auth.js';
 import entityRoutes from './routes/entities.js';
@@ -124,6 +126,10 @@ async function main() {
   app.listen(config.port, () => {
     console.log(`[dashos] server listening on http://localhost:${config.port} (${config.env})`);
   });
+
+  // No-op unless NATIVE_RETRY_WORKER_ENABLED=true, which is unset in every
+  // environment today. See server/src/lib/nativeRetryScheduler.js.
+  startNativeRetryScheduler(createServerClient());
 }
 
 main().catch((err) => {

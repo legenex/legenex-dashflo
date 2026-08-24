@@ -1,7 +1,7 @@
 // GENERATED FILE - DO NOT EDIT BY HAND.
 // Source of truth: src/lib/distribution/backend-entry.js and its imports.
 // Regenerate: node scripts/generate-backend-engine.mjs
-// canonical-engine-sha256: 548959a4885df4399d069ba35167a40f2e3a81b9c65ad2cfe0dfd11622a60c21
+// canonical-engine-sha256: 55f6dcb004b9ff27875ddb1f16f30d9594205b605557a50c71ee886fb9dd1779
 // src/lib/distribution/engine.js
 var REASON = {
   ELIGIBLE: "ELIGIBLE",
@@ -2351,7 +2351,7 @@ async function runRetryWorker(store, deliverFn, ctx) {
       );
     }
     if (success || res.status === ATTEMPT_STATUS.REJECTED || res.status === ATTEMPT_STATUS.DUPLICATE) {
-      await store.updateAttempt(a.id, { status: res.status, next_retry_at: null, lease_until: null });
+      await store.updateAttempt(a.id, { status: res.status, next_retry_at: null, lease_until: null, attempt_number: nextAttemptNum });
     } else if (nextAttemptNum >= maxAttempts) {
       await store.updateAttempt(a.id, { status: ATTEMPT_STATUS.DEAD_LETTER, next_retry_at: null, lease_until: null, attempt_number: nextAttemptNum });
     } else {
@@ -2372,10 +2372,12 @@ async function manualRetry(store, attemptId, deliverFn, ctx) {
   if (!a) return { ok: false, reason: "not_found" };
   const won = await store.claimLease(attemptId, ctx.workerId || "manual", ctx.nowMs, ctx.leaseMs || 3e4);
   if (!won) return { ok: false, reason: "leased" };
-  const res = await deliverFn({ ...a, attempt_number: (a.attempt_number || 1) + 1 });
+  const nextAttemptNum = (a.attempt_number || 1) + 1;
+  const res = await deliverFn({ ...a, attempt_number: nextAttemptNum });
   await store.updateAttempt(attemptId, {
     status: res.status,
     lease_until: null,
+    attempt_number: nextAttemptNum,
     next_retry_at: res.status === ATTEMPT_STATUS.ERROR ? new Date(ctx.nowMs).toISOString() : null
   });
   if (ctx.healthStore) {
