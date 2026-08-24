@@ -172,8 +172,12 @@ export function evaluateMember(member, lead, opts = {}) {
     }
   }
 
-  // 8. destination health (circuit breaker).
-  if (m.health && m.health.state === 'open') return fail(REASON.DESTINATION_UNHEALTHY);
+  // 8. destination health (circuit breaker). `blocked` is pre-resolved
+  // upstream (snapshot.js, via destinationHealth.js's isBlocked) against
+  // nowMs and disabled_until, not a raw `state === 'open'` check: an open
+  // circuit past its cooldown must allow a trial send through, or nothing
+  // could ever record the recovery that would close it again.
+  if (m.health && m.health.blocked) return fail(REASON.DESTINATION_UNHEALTHY);
 
   // 9. auction reserve (only meaningful for auction groups).
   if (opts.enforceReserve && m.reservePrice != null && price < Number(m.reservePrice)) {

@@ -14,6 +14,7 @@
 import { OPERATORS } from './conditions.js';
 import { isWithinSchedule } from './schedule.js';
 import { resolveSubDeliveryCfg } from './deliveryResolve.js';
+import { isBlocked } from './destinationHealth.js';
 
 const KNOWN_OPS = new Set(OPERATORS);
 
@@ -158,7 +159,7 @@ function buildMember(m, { buyersById, destById, subDeliveriesById, deliveriesByI
     : { active: false, status: 'missing' };
 
   const healthKey = endpoint ? endpoint.healthKey : m.destination_id;
-  const healthState = (healthBySubDelivery[healthKey]?.state) || (healthByDest[healthKey]?.state) || 'closed';
+  const healthRecord = healthBySubDelivery[healthKey] || healthByDest[healthKey] || null;
 
   return {
     id: m.id,
@@ -185,7 +186,10 @@ function buildMember(m, { buyersById, destById, subDeliveriesById, deliveriesByI
     caps: caps || {},
     buyer: buyerSnap,
     wallet: buildWallet(buyer),
-    health: { state: healthState },
+    // Pre-resolved the same way withinSchedule is: engine.js stays pure of
+    // ambient time, reading only the boolean. `state` is retained for
+    // logging/debugging, not for the eligibility decision itself.
+    health: { state: healthRecord?.state || 'closed', blocked: isBlocked(healthRecord, nowMs ?? 0) },
   };
 }
 

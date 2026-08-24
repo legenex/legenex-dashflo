@@ -23,6 +23,7 @@ import { deliverDirectPost } from './directPost.js';
 import { makeEntityAttemptStore } from './deliveryStore.js';
 import { makeEntityCapStore } from './capStore.js';
 import { makeEntityWalletStore } from './walletStore.js';
+import { makeEntityHealthStore } from './destinationHealth.js';
 import { walletDebit } from './walletLedger.js';
 import { reserve, finalize, release, RESERVE } from './reservation.js';
 import { ATTEMPT_STATUS } from './deliveryAttempt.js';
@@ -138,7 +139,22 @@ function makeDeliver({ db, stores, ctx, sink }) {
       };
     }
 
-    // 3. Settle the reservation on the real outcome.
+    // 3. Circuit breaker bookkeeping: record this real outcome. A
+    // persistently failing destination opens; a destination given a trial
+    // send while open (see snapshot.js/isBlocked) closes again on success.
+    // Matches the retry worker's own success definition (ACCEPTED only) so
+    // both writers agree on what "healthy" means. Never blocks or fails the
+    // delivery itself - health bookkeeping is best-effort.
+    if (ctx.healthStore) {
+      try {
+        await ctx.healthStore.recordResult(
+          { subDeliveryId: member.subDeliveryId || null, destinationId: member.destinationId || null },
+          out.status === ATTEMPT_STATUS.ACCEPTED, nowMs, ctx.healthOpts,
+        );
+      } catch { /* health bookkeeping must never break delivery */ }
+    }
+
+    // 4. Settle the reservation on the real outcome.
     if (out.status === ATTEMPT_STATUS.ACCEPTED) {
       if (reservation) await finalize(capStore, reservation);
       const policy = walletPolicyFor(member);
@@ -228,6 +244,9 @@ export async function runDistribution(db, ctx) {
       capStore: makeEntityCapStore(db),
       walletStore: makeEntityWalletStore(db),
     };
+    // healthStore defaults to the real per-endpoint circuit breaker unless a
+    // test injects its own (or explicitly passes null to opt out).
+    const healthStore = ctx.healthStore !== undefined ? ctx.healthStore : makeEntityHealthStore(db);
 
     const t0 = nowMs;
     const sink = {};
@@ -238,7 +257,7 @@ export async function runDistribution(db, ctx) {
       seed: { key: ctx.idempotencyKey || '' },
       nowMs,
       evalConditions: (t, d) => evalConditionTree(t, d, { nowMs }),
-      deliver: makeDeliver({ db, stores, ctx: { ...ctx, nowMs }, sink }),
+      deliver: makeDeliver({ db, stores, ctx: { ...ctx, nowMs, healthStore }, sink }),
       maxAttemptsPerDest: ctx.maxAttemptsPerDest || 1,
     });
 

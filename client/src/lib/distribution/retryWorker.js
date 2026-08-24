@@ -33,7 +33,12 @@ export async function runRetryWorker(store, deliverFn, ctx) {
     const nextAttemptNum = (a.attempt_number || 1) + 1;
     const res = await deliverFn({ ...a, attempt_number: nextAttemptNum });
     const success = res.status === ATTEMPT_STATUS.ACCEPTED;
-    if (healthStore) await healthStore.recordResult(a.destination_id, success, nowMs, ctx.healthOpts);
+    if (healthStore) {
+      await healthStore.recordResult(
+        { subDeliveryId: a.sub_delivery_id || null, destinationId: a.destination_id || null },
+        success, nowMs, ctx.healthOpts,
+      );
+    }
 
     if (success || res.status === ATTEMPT_STATUS.REJECTED || res.status === ATTEMPT_STATUS.DUPLICATE) {
       await store.updateAttempt(a.id, { status: res.status, next_retry_at: null, lease_until: null });
@@ -63,6 +68,11 @@ export async function manualRetry(store, attemptId, deliverFn, ctx) {
     status: res.status, lease_until: null,
     next_retry_at: res.status === ATTEMPT_STATUS.ERROR ? new Date(ctx.nowMs).toISOString() : null,
   });
-  if (ctx.healthStore) await ctx.healthStore.recordResult(a.destination_id, res.status === ATTEMPT_STATUS.ACCEPTED, ctx.nowMs, ctx.healthOpts);
+  if (ctx.healthStore) {
+    await ctx.healthStore.recordResult(
+      { subDeliveryId: a.sub_delivery_id || null, destinationId: a.destination_id || null },
+      res.status === ATTEMPT_STATUS.ACCEPTED, ctx.nowMs, ctx.healthOpts,
+    );
+  }
   return { ok: true, status: res.status };
 }

@@ -1,7 +1,7 @@
 // GENERATED FILE - DO NOT EDIT BY HAND.
 // Source of truth: src/lib/distribution/backend-entry.js and its imports.
 // Regenerate: node scripts/generate-backend-engine.mjs
-// canonical-engine-sha256: 5ab02e66bc290974deb7790a297b6227e53f7e5a0c9fc2463f0924cd48e6bb69
+// canonical-engine-sha256: 548959a4885df4399d069ba35167a40f2e3a81b9c65ad2cfe0dfd11622a60c21
 // src/lib/distribution/engine.js
 var REASON = {
   ELIGIBLE: "ELIGIBLE",
@@ -115,7 +115,7 @@ function evaluateMember(member, lead, opts = {}) {
       }
     }
   }
-  if (m.health && m.health.state === "open") return fail(REASON.DESTINATION_UNHEALTHY);
+  if (m.health && m.health.blocked) return fail(REASON.DESTINATION_UNHEALTHY);
   if (opts.enforceReserve && m.reservePrice != null && price < Number(m.reservePrice)) {
     return fail(REASON.BELOW_RESERVE);
   }
@@ -622,6 +622,89 @@ function resolveSubDeliveryCfg(sd) {
   };
 }
 
+// src/lib/distribution/destinationHealth.js
+var CIRCUIT = { CLOSED: "closed", OPEN: "open", HALF_OPEN: "half_open" };
+function nextHealth(cur, success, nowMs, opts = {}) {
+  const threshold = opts.failureThreshold ?? 5;
+  const cooldownMs = opts.cooldownMs ?? 6e4;
+  const h = cur || { state: CIRCUIT.CLOSED, consecutive_failures: 0 };
+  if (success) {
+    return { state: CIRCUIT.CLOSED, consecutive_failures: 0, last_success_at: new Date(nowMs).toISOString(), disabled_until: null };
+  }
+  const failures = (h.consecutive_failures || 0) + 1;
+  const open = failures >= threshold;
+  return {
+    state: open ? CIRCUIT.OPEN : h.state === CIRCUIT.HALF_OPEN ? CIRCUIT.OPEN : CIRCUIT.CLOSED,
+    consecutive_failures: failures,
+    last_failure_at: new Date(nowMs).toISOString(),
+    disabled_until: open ? new Date(nowMs + cooldownMs).toISOString() : h.disabled_until || null
+  };
+}
+function isBlocked(h, nowMs) {
+  if (!h || h.state === CIRCUIT.CLOSED) return false;
+  if (h.state === CIRCUIT.OPEN) {
+    if (h.disabled_until && Date.parse(h.disabled_until) > nowMs) return true;
+    return false;
+  }
+  return false;
+}
+function normalizeKey(key) {
+  if (key && typeof key === "object") {
+    return { subDeliveryId: key.subDeliveryId || null, destinationId: key.destinationId || null };
+  }
+  return { subDeliveryId: null, destinationId: key || null };
+}
+function makeInMemoryHealthStore() {
+  const map = /* @__PURE__ */ new Map();
+  const mapKey = ({ subDeliveryId, destinationId }) => `sd:${subDeliveryId || ""}|d:${destinationId || ""}`;
+  return {
+    async get(key) {
+      return map.get(mapKey(normalizeKey(key))) || null;
+    },
+    async set(key, h) {
+      map.set(mapKey(normalizeKey(key)), h);
+      return h;
+    },
+    async recordResult(key, success, nowMs, opts) {
+      const k = mapKey(normalizeKey(key));
+      const next = nextHealth(map.get(k), success, nowMs, opts);
+      map.set(k, next);
+      return next;
+    },
+    _debug: { map }
+  };
+}
+function makeEntityHealthStore(db) {
+  async function get(rawKey) {
+    const { subDeliveryId, destinationId } = normalizeKey(rawKey);
+    if (subDeliveryId) {
+      const rows = await db.entities.DestinationHealth.filter({ sub_delivery_id: subDeliveryId });
+      if (rows[0]) return rows[0];
+    }
+    if (destinationId) {
+      const rows = await db.entities.DestinationHealth.filter({ destination_id: destinationId });
+      if (rows[0]) return rows[0];
+    }
+    return null;
+  }
+  return {
+    get,
+    async set(rawKey, h) {
+      const { subDeliveryId, destinationId } = normalizeKey(rawKey);
+      const cur = await get(rawKey);
+      const patch = { ...h, sub_delivery_id: subDeliveryId || null, destination_id: destinationId || subDeliveryId || null };
+      if (cur) return db.entities.DestinationHealth.update(cur.id, patch);
+      return db.entities.DestinationHealth.create(patch);
+    },
+    async recordResult(rawKey, success, nowMs, opts) {
+      const cur = await get(rawKey);
+      const next = nextHealth(cur, success, nowMs, opts);
+      await this.set(rawKey, next);
+      return next;
+    }
+  };
+}
+
 // src/lib/distribution/snapshot.js
 var KNOWN_OPS = new Set(OPERATORS);
 function strictJson(raw, onError) {
@@ -755,7 +838,7 @@ function buildMember(m, { buyersById, destById, subDeliveriesById, deliveriesByI
   if (priceMode === "fixed" && (fixedPrice == null || fixedPrice < 0)) err("CONFIG_INVALID", "invalid price");
   const buyerSnap = buyer ? { active: buyer.active, status: buyer.status } : { active: false, status: "missing" };
   const healthKey = endpoint ? endpoint.healthKey : m.destination_id;
-  const healthState = healthBySubDelivery[healthKey]?.state || healthByDest[healthKey]?.state || "closed";
+  const healthRecord = healthBySubDelivery[healthKey] || healthByDest[healthKey] || null;
   return {
     id: m.id,
     buyerId: m.buyer_id,
@@ -781,7 +864,10 @@ function buildMember(m, { buyersById, destById, subDeliveriesById, deliveriesByI
     caps: caps || {},
     buyer: buyerSnap,
     wallet: buildWallet(buyer),
-    health: { state: healthState }
+    // Pre-resolved the same way withinSchedule is: engine.js stays pure of
+    // ambient time, reading only the boolean. `state` is retained for
+    // logging/debugging, not for the eligibility decision itself.
+    health: { state: healthRecord?.state || "closed", blocked: isBlocked(healthRecord, nowMs ?? 0) }
   };
 }
 function indexBy(arr, key) {
@@ -2039,6 +2125,17 @@ function makeDeliver({ db, stores, ctx, sink }) {
         retryable: false
       };
     }
+    if (ctx.healthStore) {
+      try {
+        await ctx.healthStore.recordResult(
+          { subDeliveryId: member.subDeliveryId || null, destinationId: member.destinationId || null },
+          out.status === ATTEMPT_STATUS.ACCEPTED,
+          nowMs,
+          ctx.healthOpts
+        );
+      } catch {
+      }
+    }
     if (out.status === ATTEMPT_STATUS.ACCEPTED) {
       if (reservation) await finalize(capStore, reservation);
       const policy = walletPolicyFor(member);
@@ -2123,6 +2220,7 @@ async function runDistribution(db, ctx) {
       capStore: makeEntityCapStore(db),
       walletStore: makeEntityWalletStore(db)
     };
+    const healthStore = ctx.healthStore !== void 0 ? ctx.healthStore : makeEntityHealthStore(db);
     const t0 = nowMs;
     const sink = {};
     const result = await distributeLead({
@@ -2132,7 +2230,7 @@ async function runDistribution(db, ctx) {
       seed: { key: ctx.idempotencyKey || "" },
       nowMs,
       evalConditions: (t, d) => evalConditionTree(t, d, { nowMs }),
-      deliver: makeDeliver({ db, stores, ctx: { ...ctx, nowMs }, sink }),
+      deliver: makeDeliver({ db, stores, ctx: { ...ctx, nowMs, healthStore }, sink }),
       maxAttemptsPerDest: ctx.maxAttemptsPerDest || 1
     });
     const status = toRunStatus(result);
@@ -2244,7 +2342,14 @@ async function runRetryWorker(store, deliverFn, ctx) {
     const nextAttemptNum = (a.attempt_number || 1) + 1;
     const res = await deliverFn({ ...a, attempt_number: nextAttemptNum });
     const success = res.status === ATTEMPT_STATUS.ACCEPTED;
-    if (healthStore) await healthStore.recordResult(a.destination_id, success, nowMs, ctx.healthOpts);
+    if (healthStore) {
+      await healthStore.recordResult(
+        { subDeliveryId: a.sub_delivery_id || null, destinationId: a.destination_id || null },
+        success,
+        nowMs,
+        ctx.healthOpts
+      );
+    }
     if (success || res.status === ATTEMPT_STATUS.REJECTED || res.status === ATTEMPT_STATUS.DUPLICATE) {
       await store.updateAttempt(a.id, { status: res.status, next_retry_at: null, lease_until: null });
     } else if (nextAttemptNum >= maxAttempts) {
@@ -2273,73 +2378,15 @@ async function manualRetry(store, attemptId, deliverFn, ctx) {
     lease_until: null,
     next_retry_at: res.status === ATTEMPT_STATUS.ERROR ? new Date(ctx.nowMs).toISOString() : null
   });
-  if (ctx.healthStore) await ctx.healthStore.recordResult(a.destination_id, res.status === ATTEMPT_STATUS.ACCEPTED, ctx.nowMs, ctx.healthOpts);
+  if (ctx.healthStore) {
+    await ctx.healthStore.recordResult(
+      { subDeliveryId: a.sub_delivery_id || null, destinationId: a.destination_id || null },
+      res.status === ATTEMPT_STATUS.ACCEPTED,
+      ctx.nowMs,
+      ctx.healthOpts
+    );
+  }
   return { ok: true, status: res.status };
-}
-
-// src/lib/distribution/destinationHealth.js
-var CIRCUIT = { CLOSED: "closed", OPEN: "open", HALF_OPEN: "half_open" };
-function nextHealth(cur, success, nowMs, opts = {}) {
-  const threshold = opts.failureThreshold ?? 5;
-  const cooldownMs = opts.cooldownMs ?? 6e4;
-  const h = cur || { state: CIRCUIT.CLOSED, consecutive_failures: 0 };
-  if (success) {
-    return { state: CIRCUIT.CLOSED, consecutive_failures: 0, last_success_at: new Date(nowMs).toISOString(), disabled_until: null };
-  }
-  const failures = (h.consecutive_failures || 0) + 1;
-  const open = failures >= threshold;
-  return {
-    state: open ? CIRCUIT.OPEN : h.state === CIRCUIT.HALF_OPEN ? CIRCUIT.OPEN : CIRCUIT.CLOSED,
-    consecutive_failures: failures,
-    last_failure_at: new Date(nowMs).toISOString(),
-    disabled_until: open ? new Date(nowMs + cooldownMs).toISOString() : h.disabled_until || null
-  };
-}
-function isBlocked(h, nowMs) {
-  if (!h || h.state === CIRCUIT.CLOSED) return false;
-  if (h.state === CIRCUIT.OPEN) {
-    if (h.disabled_until && Date.parse(h.disabled_until) > nowMs) return true;
-    return false;
-  }
-  return false;
-}
-function makeInMemoryHealthStore() {
-  const map = /* @__PURE__ */ new Map();
-  return {
-    async get(destId) {
-      return map.get(destId) || null;
-    },
-    async set(destId, h) {
-      map.set(destId, h);
-      return h;
-    },
-    async recordResult(destId, success, nowMs, opts) {
-      const next = nextHealth(map.get(destId), success, nowMs, opts);
-      map.set(destId, next);
-      return next;
-    },
-    _debug: { map }
-  };
-}
-function makeEntityHealthStore(db) {
-  async function get(destId) {
-    const rows = await db.entities.DestinationHealth.filter({ destination_id: destId });
-    return rows[0] || null;
-  }
-  return {
-    get,
-    async set(destId, h) {
-      const rows = await db.entities.DestinationHealth.filter({ destination_id: destId });
-      if (rows[0]) return db.entities.DestinationHealth.update(rows[0].id, h);
-      return db.entities.DestinationHealth.create({ destination_id: destId, ...h });
-    },
-    async recordResult(destId, success, nowMs, opts) {
-      const cur = await get(destId);
-      const next = nextHealth(cur, success, nowMs, opts);
-      await this.set(destId, next);
-      return next;
-    }
-  };
 }
 
 // src/lib/distribution/pingpost.js

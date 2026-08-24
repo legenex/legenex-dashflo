@@ -8,6 +8,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { runDistribution, capScopesFor, RUN } from './distributeRun.js';
 import { makeInMemoryCasStore } from './capStore.js';
 import { makeInMemoryAttemptStore } from './deliveryStore.js';
+import { makeInMemoryHealthStore, CIRCUIT } from './destinationHealth.js';
 
 const NOW = Date.parse('2026-08-12T15:00:00Z');
 
@@ -200,5 +201,58 @@ describe('runDistribution', () => {
     });
     expect(out.ran).toBe(false);
     expect([RUN.ERROR_CLEAN, RUN.NO_ELIGIBLE]).toContain(out.status);
+  });
+
+  // Stage 3: circuit breaker write-side wiring. distributeRun.js records every
+  // real outcome so a persistently failing destination opens, and (per
+  // engine.js/snapshot.js's cooldown-aware read side) can recover.
+  describe('circuit breaker bookkeeping', () => {
+    it('records a real ACCEPTED outcome as a success, keyed by sub_delivery_id', async () => {
+      const healthStore = makeInMemoryHealthStore();
+      const { ctx } = ctxFor([member('m1')], { 'buyer-m1': { status: 200, body: '{"result":"accepted","price":25}' } }, { ctx: { healthStore } });
+      await runDistribution(db, ctx);
+      const h = await healthStore.get({ subDeliveryId: 'sd-m1' });
+      expect(h.state).toBe(CIRCUIT.CLOSED);
+      expect(h.consecutive_failures).toBe(0);
+    });
+
+    it('records a real failure and opens the circuit at the failure threshold', async () => {
+      const healthStore = makeInMemoryHealthStore();
+      for (let i = 0; i < 5; i++) {
+        const { ctx } = ctxFor([member('m1')], { 'buyer-m1': { status: 500, body: 'boom' } }, {
+          ctx: { healthStore, healthOpts: { failureThreshold: 5, cooldownMs: 60000 }, idempotencyKey: `idem-${i}` },
+        });
+        await runDistribution(db, ctx);
+      }
+      const h = await healthStore.get({ subDeliveryId: 'sd-m1' });
+      expect(h.state).toBe(CIRCUIT.OPEN);
+      expect(h.consecutive_failures).toBe(5);
+      expect(h.disabled_until).toBeTruthy();
+    });
+
+    it('a rejection (destination reachable, business decision) does not count as an ACCEPTED success but is still recorded', async () => {
+      const healthStore = makeInMemoryHealthStore();
+      const { ctx } = ctxFor([member('m1')], { 'buyer-m1': { status: 200, body: '{"result":"no thanks"}' } }, { ctx: { healthStore } });
+      await runDistribution(db, ctx);
+      const h = await healthStore.get({ subDeliveryId: 'sd-m1' });
+      expect(h).not.toBe(null);
+      expect(h.consecutive_failures).toBe(1); // matches the retry worker's own ACCEPTED-only success definition
+    });
+
+    it('health bookkeeping failure never breaks the delivery itself', async () => {
+      const throwingStore = { recordResult: async () => { throw new Error('boom'); } };
+      const { ctx } = ctxFor([member('m1')], { 'buyer-m1': { status: 200, body: '{"result":"accepted","price":25}' } }, { ctx: { healthStore: throwingStore } });
+      const out = await runDistribution(db, ctx);
+      expect(out.status).toBe(RUN.ACCEPTED);
+    });
+
+    it('defaults to a real health store when none is injected, without throwing even if the entity is unavailable', async () => {
+      // db here (makeDb()) has no entities.DestinationHealth at all; the
+      // default makeEntityHealthStore(db) must fail closed (best-effort),
+      // never break the sale.
+      const { ctx } = ctxFor([member('m1')], { 'buyer-m1': { status: 200, body: '{"result":"accepted","price":25}' } });
+      const out = await runDistribution(db, ctx);
+      expect(out.status).toBe(RUN.ACCEPTED);
+    });
   });
 });

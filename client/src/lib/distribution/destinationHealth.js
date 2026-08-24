@@ -1,6 +1,16 @@
 // Destination circuit breaker. Opens after N consecutive failures, stays open for
 // a cooldown, then half-opens; a success closes it. Pure decision logic over an
 // injected health store (in-memory mock or the backend adapter).
+//
+// Stage 3: wired into the live path both ways. snapshot.js reads via
+// isBlocked (below) to decide member eligibility (REASON.DESTINATION_UNHEALTHY
+// in engine.js), pre-resolved to a boolean the same way withinSchedule
+// already is, so a destination given a trial send during its half-open
+// window is not permanently excluded from ever being retried - a plain
+// `state === 'open'` check, which this replaces, could never observe a
+// recovery because routing would exclude the destination before a result
+// could ever be recorded again. distributeRun.js's real send path writes via
+// recordResult after every real attempt.
 
 export const CIRCUIT = { CLOSED: 'closed', OPEN: 'open', HALF_OPEN: 'half_open' };
 
@@ -32,14 +42,28 @@ export function isBlocked(h, nowMs) {
   return false;
 }
 
+// A health key identifies one endpoint. Per the DestinationHealth schema,
+// sub_delivery_id is the canonical key (the breaker is per endpoint, i.e. per
+// SubDelivery, not per buyer); destination_id is retained for the legacy
+// (non-native) path only. Accepts either a bare string (treated as
+// destination_id, for legacy callers) or { subDeliveryId, destinationId }.
+function normalizeKey(key) {
+  if (key && typeof key === 'object') {
+    return { subDeliveryId: key.subDeliveryId || null, destinationId: key.destinationId || null };
+  }
+  return { subDeliveryId: null, destinationId: key || null };
+}
+
 export function makeInMemoryHealthStore() {
   const map = new Map();
+  const mapKey = ({ subDeliveryId, destinationId }) => `sd:${subDeliveryId || ''}|d:${destinationId || ''}`;
   return {
-    async get(destId) { return map.get(destId) || null; },
-    async set(destId, h) { map.set(destId, h); return h; },
-    async recordResult(destId, success, nowMs, opts) {
-      const next = nextHealth(map.get(destId), success, nowMs, opts);
-      map.set(destId, next);
+    async get(key) { return map.get(mapKey(normalizeKey(key))) || null; },
+    async set(key, h) { map.set(mapKey(normalizeKey(key)), h); return h; },
+    async recordResult(key, success, nowMs, opts) {
+      const k = mapKey(normalizeKey(key));
+      const next = nextHealth(map.get(k), success, nowMs, opts);
+      map.set(k, next);
       return next;
     },
     _debug: { map },
@@ -47,21 +71,34 @@ export function makeInMemoryHealthStore() {
 }
 
 export function makeEntityHealthStore(db) {
-  async function get(destId) {
-    const rows = await db.entities.DestinationHealth.filter({ destination_id: destId });
-    return rows[0] || null;
+  async function get(rawKey) {
+    const { subDeliveryId, destinationId } = normalizeKey(rawKey);
+    if (subDeliveryId) {
+      const rows = await db.entities.DestinationHealth.filter({ sub_delivery_id: subDeliveryId });
+      if (rows[0]) return rows[0];
+    }
+    if (destinationId) {
+      const rows = await db.entities.DestinationHealth.filter({ destination_id: destinationId });
+      if (rows[0]) return rows[0];
+    }
+    return null;
   }
   return {
     get,
-    async set(destId, h) {
-      const rows = await db.entities.DestinationHealth.filter({ destination_id: destId });
-      if (rows[0]) return db.entities.DestinationHealth.update(rows[0].id, h);
-      return db.entities.DestinationHealth.create({ destination_id: destId, ...h });
+    async set(rawKey, h) {
+      const { subDeliveryId, destinationId } = normalizeKey(rawKey);
+      const cur = await get(rawKey);
+      // destination_id is a required legacy column; when only a native
+      // sub_delivery_id is known, carry it there too so the row still
+      // satisfies the schema without inventing a second identity.
+      const patch = { ...h, sub_delivery_id: subDeliveryId || null, destination_id: destinationId || subDeliveryId || null };
+      if (cur) return db.entities.DestinationHealth.update(cur.id, patch);
+      return db.entities.DestinationHealth.create(patch);
     },
-    async recordResult(destId, success, nowMs, opts) {
-      const cur = await get(destId);
+    async recordResult(rawKey, success, nowMs, opts) {
+      const cur = await get(rawKey);
       const next = nextHealth(cur, success, nowMs, opts);
-      await this.set(destId, next);
+      await this.set(rawKey, next);
       return next;
     },
   };

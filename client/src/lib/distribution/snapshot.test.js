@@ -110,9 +110,27 @@ describe('buildRoutingSnapshot -> engine (Phase 3 required fixtures)', () => {
     expect(decide(s).trace[0].candidates[0].reason).toBe(REASON.OVER_CREDIT_LIMIT);
   });
 
-  it('destination circuit open -> DESTINATION_UNHEALTHY', () => {
-    const s = snap({ health: [{ destination_id: 'd1', state: 'open' }] });
+  it('destination circuit open and still within cooldown -> DESTINATION_UNHEALTHY', () => {
+    const s = snap({
+      health: [{ destination_id: 'd1', state: 'open', disabled_until: new Date(NOW + 60000).toISOString() }],
+    });
     expect(decide(s).trace[0].candidates[0].reason).toBe(REASON.DESTINATION_UNHEALTHY);
+  });
+
+  it('destination circuit open but cooldown elapsed -> half-open trial allowed (ELIGIBLE)', () => {
+    // A raw `state === 'open'` check would exclude this destination forever,
+    // since nothing would ever call recordResult again to close it. Stage 3
+    // wires the read side through isBlocked(record, nowMs) precisely so an
+    // elapsed cooldown lets one trial send through.
+    const s = snap({
+      health: [{ destination_id: 'd1', state: 'open', disabled_until: new Date(NOW - 1000).toISOString() }],
+    });
+    expect(decide(s).trace[0].candidates[0].reason).toBe(REASON.ELIGIBLE);
+  });
+
+  it('destination circuit open with no disabled_until recorded -> treated as elapsed, not blocked forever', () => {
+    const s = snap({ health: [{ destination_id: 'd1', state: 'open' }] });
+    expect(decide(s).trace[0].candidates[0].reason).toBe(REASON.ELIGIBLE);
   });
 
   it('maps many members (pagination-scale) deterministically', () => {
@@ -197,7 +215,16 @@ describe('buildRoutingSnapshot -> SubDelivery destination (fail-closed)', () => 
   });
 
   it('circuit breaker keys on sub_delivery_id (per endpoint)', () => {
-    const s = snapSub({ health: [{ sub_delivery_id: 'sd1', state: 'open' }] });
+    const s = snapSub({
+      health: [{ sub_delivery_id: 'sd1', state: 'open', disabled_until: new Date(NOW + 60000).toISOString() }],
+    });
     expect(decide(s).trace[0].candidates[0].reason).toBe(REASON.DESTINATION_UNHEALTHY);
+  });
+
+  it('sub_delivery circuit open past cooldown -> half-open trial allowed', () => {
+    const s = snapSub({
+      health: [{ sub_delivery_id: 'sd1', state: 'open', disabled_until: new Date(NOW - 1000).toISOString() }],
+    });
+    expect(decide(s).trace[0].candidates[0].reason).toBe(REASON.ELIGIBLE);
   });
 });

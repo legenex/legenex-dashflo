@@ -106,9 +106,16 @@ describe('evaluateMember eligibility (fixed order + reason codes)', () => {
     const m = { ...base, price: 25, wallet: { mode: 'postpaid', outstanding: 90, creditLimit: 100 } };
     expect(evaluateMember(m, lead).reason).toBe(REASON.OVER_CREDIT_LIMIT);
   });
-  it('respects destination health circuit breaker', () => {
-    expect(evaluateMember({ ...base, health: { state: 'open' } }, lead).reason)
+  it('respects destination health circuit breaker (pre-resolved blocked flag)', () => {
+    expect(evaluateMember({ ...base, health: { state: 'open', blocked: true } }, lead).reason)
       .toBe(REASON.DESTINATION_UNHEALTHY);
+  });
+  it('trusts the pre-resolved blocked flag, not the raw state string (cooldown elapsed case)', () => {
+    // snapshot.js pre-resolves blocked via isBlocked(record, nowMs); engine.js
+    // must not re-derive it from `state` alone, or an open circuit past its
+    // cooldown could never be given a trial send to recover from.
+    expect(evaluateMember({ ...base, health: { state: 'open', blocked: false } }, lead).reason)
+      .toBe(REASON.ELIGIBLE);
   });
   it('enforces auction reserve only when asked', () => {
     const m = { ...base, priceMode: 'auction', bid: 5, reservePrice: 8 };
