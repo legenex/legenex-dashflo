@@ -128,9 +128,21 @@ jobs:
           # printing any part of it. Output goes to /dev/null deliberately.
           ssh-keygen -y -P "" -f "$RUNNER_TEMP/deploy_key" > /dev/null \
             || { echo "::error::DEPLOY_SSH_KEY is not a usable unencrypted private key"; exit 1; }
-          ssh-keyscan -T 15 -t rsa,ecdsa,ed25519 "$DEPLOY_HOST" > "$RUNNER_TEMP/known_hosts" 2>/dev/null || true
+          # A single ssh-keyscan attempt observed real, non-code-caused
+          # failures (25 August 2026: 2 of 3 deploy runs in one session hit
+          # this, each succeeding on an unmodified retry) - a transient
+          # network hiccup between the runner and the VPS on port 22, not a
+          # host outage (the same host answered ssh-keyscan immediately from
+          # elsewhere each time). Retry a few times before failing the step,
+          # rather than failing the whole deploy on one dropped attempt.
+          for attempt in 1 2 3; do
+            ssh-keyscan -T 15 -t rsa,ecdsa,ed25519 "$DEPLOY_HOST" > "$RUNNER_TEMP/known_hosts" 2>/dev/null || true
+            [ -s "$RUNNER_TEMP/known_hosts" ] && break
+            echo "ssh-keyscan attempt $attempt found no host key yet, retrying..."
+            sleep 5
+          done
           if [ ! -s "$RUNNER_TEMP/known_hosts" ]; then
-            echo "::error::Could not read a host key from $DEPLOY_HOST on port 22"
+            echo "::error::Could not read a host key from $DEPLOY_HOST on port 22 after 3 attempts"
             exit 1
           fi
           chmod 600 "$RUNNER_TEMP/known_hosts"
