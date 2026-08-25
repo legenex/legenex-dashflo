@@ -33,11 +33,18 @@ function validConditionTree(node) {
   return false; // unknown shape
 }
 
-function num(v) { const n = Number(v); return Number.isFinite(n) ? n : null; }
+// Number(null) is 0 in plain JS, not NaN, so a naive Number()+isFinite() guard
+// would silently turn an absent/null value (no price configured, no reserve
+// configured, no cap limit configured) into a real 0 instead of "missing".
+// For fixed_price specifically that is a real pricing bug, not a cosmetic
+// one: a fixed-price member with no price set would resolve to price 0 (a
+// free lead) instead of failing CONFIG_INVALID as PB-017 requires. Treat
+// null/undefined as absent explicitly, before the numeric coercion.
+function num(v) { if (v == null) return null; const n = Number(v); return Number.isFinite(n) ? n : null; }
 
 // Map a caps config {daily:{limit}} merged with current counts from capCounters.
 // capCountsFor(memberId, window) -> current count number.
-function buildCaps(capsCfg, memberId, capCountsFor, onError) {
+export function buildCaps(capsCfg, memberId, capCountsFor, onError) {
   if (capsCfg == null || capsCfg === '') return {};
   const parsed = strictJson(capsCfg, onError);
   if (parsed === null) return null; // invalid
@@ -56,7 +63,7 @@ function buildCaps(capsCfg, memberId, capCountsFor, onError) {
 // With no credit_limit the lead is delivered and billed downstream, so an
 // unfunded prepay balance never silently stops distribution. The ledger still
 // records the movement either way; enforce controls blocking, not accounting.
-function buildWallet(buyer) {
+export function buildWallet(buyer) {
   if (!buyer) return null;
   const mode = String(buyer.billing_type || buyer.billing_mode || '').toLowerCase().startsWith('prepay')
     ? 'prepaid' : (String(buyer.billing_type || '').toLowerCase().startsWith('invoice') ? 'postpaid' : null);
@@ -76,8 +83,9 @@ function buildWallet(buyer) {
 // Main builder. Inputs are already-fetched arrays/maps (loader does the reads).
 // ctx: { campaignId, nowMs, capCountsFor(memberId, window), configVersionId }
 export function buildRoutingSnapshot(records, ctx = {}) {
-  const { campaignId, configVersionId } = ctx;
+  const { campaignId, configVersionId, leadState } = ctx;
   const capCountsFor = ctx.capCountsFor || (() => 0);
+  const stateCplFor = ctx.stateCplFor || (() => null);
   const buyersById = indexBy(records.buyers, 'id');
   const destById = indexBy(records.destinations, 'id');
   const subDeliveriesById = indexBy(records.subDeliveries, 'id');
@@ -102,7 +110,10 @@ export function buildRoutingSnapshot(records, ctx = {}) {
       members: (records.members || [])
         .filter((m) => String(m.route_group_id) === String(g.id))
         .sort((a, b) => (a.priority || 0) - (b.priority || 0))
-        .map((m) => buildMember(m, { buyersById, destById, subDeliveriesById, deliveriesById, healthByDest, healthBySubDelivery, capCountsFor, configErrors, nowMs: ctx.nowMs })),
+        .map((m) => buildMember(m, {
+          buyersById, destById, subDeliveriesById, deliveriesById, healthByDest, healthBySubDelivery,
+          capCountsFor, configErrors, nowMs: ctx.nowMs, leadState, stateCplFor,
+        })),
     }));
 
   return { groups, configVersionId: configVersionId || null, configErrors, configHash: hashConfig(records) };
@@ -133,7 +144,7 @@ function resolveEndpoint(m, { destById, subDeliveriesById, deliveriesById, err }
   return null;
 }
 
-function buildMember(m, { buyersById, destById, subDeliveriesById, deliveriesById, healthByDest, healthBySubDelivery, capCountsFor, configErrors, nowMs }) {
+function buildMember(m, { buyersById, destById, subDeliveriesById, deliveriesById, healthByDest, healthBySubDelivery, capCountsFor, configErrors, nowMs, leadState, stateCplFor }) {
   let invalid = false;
   const err = (code, detail) => { invalid = true; configErrors.push({ member_id: m.id, code: code || 'CONFIG_INVALID', detail }); };
 
@@ -149,9 +160,23 @@ function buildMember(m, { buyersById, destById, subDeliveriesById, deliveriesByI
   const caps = buildCaps(m.caps, m.id, capCountsFor, () => err('CONFIG_INVALID', 'bad caps'));
 
   const priceMode = ['fixed', 'rule', 'auction'].includes(m.price_mode) ? m.price_mode : 'fixed';
-  const fixedPrice = num(m.fixed_price);
   const reservePrice = num(m.reserve_price);
+  let fixedPrice = num(m.fixed_price);
   if (priceMode === 'fixed' && (fixedPrice == null || fixedPrice < 0)) err('CONFIG_INVALID', 'invalid price');
+  // 'rule' mode resolves price from BuyerStateCpl (lead state -> buyer's
+  // active per-state price), not a value stored on the member itself. Price
+  // is inherently lead-dependent, so it is resolved here ONLY when a
+  // specific lead's state was actually supplied (leadState !== undefined -
+  // a real routing evaluation, runDistribution). A structural build with no
+  // lead in view (publish validation, the simulator run without one) leaves
+  // price unresolved rather than wrongly failing every rule-mode member
+  // closed; validateConfigForPublish checks buyer coverage existence
+  // separately instead (see configPublish.js).
+  if (priceMode === 'rule' && leadState !== undefined) {
+    const rulePrice = num(stateCplFor(m.buyer_id, leadState));
+    if (rulePrice == null || rulePrice < 0) err('CONFIG_INVALID', 'no active BuyerStateCpl price for this buyer/state');
+    fixedPrice = rulePrice;
+  }
 
   // PB-002: real buyer lifecycle snapshot; fail closed when missing.
   const buyerSnap = buyer
@@ -197,6 +222,47 @@ function indexBy(arr, key) {
   const out = {};
   for (const r of arr || []) out[String(r[key])] = r;
   return out;
+}
+
+// Minimal member shape for an ASYNC RETRY: re-sends an already-selected
+// destination, so it does not repeat eligibility (filters/schedule/
+// conditions/buyer-lifecycle - buildMember's job) - only the fields
+// reserveAndDeliver (distributeRun.js) actually reads to reserve cap, price
+// the sale, and resolve the wallet policy. Reuses buildCaps/buildWallet so
+// there remains exactly one place either is computed, matching PB-005's "one
+// mapper" rule for eligibility snapshots. rm: a raw RouteMember row (retry's
+// caller loads it fresh by attempt.route_member_id); deliveryCfg: the
+// resolveSubDeliveryCfg(sd) result for the SAME SubDelivery the original
+// attempt targeted.
+//
+// price_mode:'rule' is deliberately NOT resolved here: a state-based price
+// needs the lead's state AND the campaign's vertical, neither of which a
+// bare retry attempt (keyed only by lead_id/sub_delivery_id) carries without
+// a second lookup this module has no evidence is safe to guess at. Returns
+// null (fail closed - the retry becomes a permanent, non-retryable error
+// rather than a silent wrong price) until a real rule-mode retry case exists
+// to design against. No production RouteMember uses rule mode today.
+export function buildMemberForRetry(rm, buyer, deliveryCfg) {
+  if (!rm) return null;
+  const priceMode = ['fixed', 'rule', 'auction'].includes(rm.price_mode) ? rm.price_mode : 'fixed';
+  if (priceMode === 'rule') return null;
+  let capsInvalid = false;
+  const caps = buildCaps(rm.caps, rm.id, () => 0, () => { capsInvalid = true; });
+  if (capsInvalid) return null;
+  const fixedPrice = num(rm.fixed_price);
+  if (priceMode === 'fixed' && (fixedPrice == null || fixedPrice < 0)) return null;
+  return {
+    id: rm.id,
+    buyerId: rm.buyer_id,
+    destinationId: rm.destination_id || null,
+    subDeliveryId: deliveryCfg ? deliveryCfg.subDeliveryId : null,
+    delivery: deliveryCfg,
+    priceMode,
+    fixedPrice: fixedPrice ?? 0,
+    price: fixedPrice ?? 0,
+    caps: caps || {},
+    wallet: buildWallet(buyer),
+  };
 }
 
 // Stable, cheap config hash for RouteDecisionTrace referencing the exact config.

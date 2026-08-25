@@ -56,6 +56,15 @@ export function projectSubDeliveryForClient(sd) {
   };
 }
 
+// A single send must never be allowed to run longer than the retry worker's
+// lease can safely outlast (retryWorker.js's DEFAULT_LEASE_MS is set well
+// above this bound with margin). Without a ceiling, an operator-configured
+// timeout_ms could legitimately exceed any lease duration, and a second
+// worker would then be able to reclaim and re-send an attempt whose first
+// send is still genuinely in flight - a real double-send, not a hypothetical
+// one. 20s is generous for any legitimate destination.
+const MAX_SEND_TIMEOUT_MS = 20000;
+
 // sd: a SubDelivery record (snake_case). Returns a directPost cfg fragment.
 // Never includes a resolved secret; only credentialRef + non-secret headers.
 export function resolveSubDeliveryCfg(sd) {
@@ -73,7 +82,7 @@ export function resolveSubDeliveryCfg(sd) {
     payloadTemplate: typeof sd.payload_template === 'string' ? sd.payload_template : '',
     transforms: parseJson(sd.transforms) || [],
     responseMapping: toClassifyResponseMapping(parseJson(sd.response_mapping)),
-    timeoutMs: Number(sd.timeout_ms) || 10000,
+    timeoutMs: Math.min(Number(sd.timeout_ms) || 10000, MAX_SEND_TIMEOUT_MS),
     retryOpts: retry,
   };
 }

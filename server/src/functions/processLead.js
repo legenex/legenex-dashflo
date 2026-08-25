@@ -6,6 +6,12 @@ import { captureAndScreen, mayProcess, INTAKE_OUTCOME } from '../lib/intake.js';
 import { completeReceipt } from '../lib/receipts.js';
 import { pool as receiptPool } from '../db/pool.js';
 import { ensureReceiptSchema } from '../db/receiptSchema.js';
+import { makeTargetValidator } from '../lib/ssrfGuard.js';
+
+// SSRF guard for the real native send path: an operator-configured
+// SubDelivery.target_url must resolve only to a public address, checked
+// fresh (real DNS lookup) at send time, not only validated as a string.
+const validateNativeSendTarget = makeTargetValidator();
 
 // Resolve phone_verified value from HLR result based on configured source
 function resolvePhoneVerified(hlrResult, source) {
@@ -2410,6 +2416,7 @@ export default async function processLead(ctx) {
             leadData: enrichedData,
             nowMs: Date.now(),
             resolveCredential: (ref) => resolveSubDeliveryCredential(db, ref),
+            validateTarget: validateNativeSendTarget,
           });
         }
       } catch (nativeErr) {

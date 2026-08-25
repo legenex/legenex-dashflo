@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildRoutingSnapshot } from './snapshot.js';
+import { buildRoutingSnapshot, buildMemberForRetry } from './snapshot.js';
 import { routeWaterfall, REASON } from './engine.js';
 import { evalConditionTree } from './conditions.js';
 
@@ -53,6 +53,19 @@ describe('buildRoutingSnapshot -> engine (Phase 3 required fixtures)', () => {
     const s = snap({ destinations: [] });
     expect(s.configErrors.some((e) => e.detail === 'missing destination')).toBe(true);
     expect(decide(s).winner).toBe(null);
+  });
+
+  // Regression: Number(null) is 0 in plain JS, not NaN. A naive Number() +
+  // isFinite() guard on fixed_price would silently resolve an explicit
+  // database null to price 0 (a free lead) instead of CONFIG_INVALID - this
+  // is exactly the real production shape (a fixed-price member whose
+  // fixed_price was never set reads back as null, not undefined).
+  it('explicit null fixed_price (not merely absent) -> CONFIG_INVALID, never price 0', () => {
+    const s = snap({ members: [member({ fixed_price: null })] });
+    expect(s.configErrors.some((e) => e.detail === 'invalid price')).toBe(true);
+    expect(decide(s).winner).toBe(null);
+    expect(s.groups[0].members[0].price).toBe(0);
+    expect(s.groups[0].members[0].active).toBe(false); // CONFIG_INVALID makes it ineligible, not free
   });
 
   it('draft group with active=true is excluded (PB-003)', () => {
@@ -226,5 +239,39 @@ describe('buildRoutingSnapshot -> SubDelivery destination (fail-closed)', () => 
       health: [{ sub_delivery_id: 'sd1', state: 'open', disabled_until: new Date(NOW - 1000).toISOString() }],
     });
     expect(decide(s).trace[0].candidates[0].reason).toBe(REASON.ELIGIBLE);
+  });
+});
+
+describe('buildMemberForRetry (minimal member shape for the async retry path)', () => {
+  const deliveryCfg = { subDeliveryId: 'sd1', targetUrl: 'https://buyer.test/api', timeoutMs: 5000 };
+
+  it('builds a fixed-price member with caps and wallet resolved', () => {
+    const rm = { id: 'm1', buyer_id: 'b1', fixed_price: 42, price_mode: 'fixed', caps: JSON.stringify({ daily: { limit: 10 } }) };
+    const buyer = { billing_type: 'prepay', prepay_balance: 500, credit_limit: 100 };
+    const m = buildMemberForRetry(rm, buyer, deliveryCfg);
+    expect(m).not.toBeNull();
+    expect(m.price).toBe(42);
+    expect(m.caps.daily.limit).toBe(10);
+    expect(m.wallet.mode).toBe('prepaid');
+    expect(m.delivery).toBe(deliveryCfg);
+  });
+
+  it('returns null for a missing RouteMember', () => {
+    expect(buildMemberForRetry(null, {}, deliveryCfg)).toBeNull();
+  });
+
+  it('fails closed for a fixed-price member with no price set', () => {
+    const rm = { id: 'm1', buyer_id: 'b1', price_mode: 'fixed', fixed_price: null };
+    expect(buildMemberForRetry(rm, {}, deliveryCfg)).toBeNull();
+  });
+
+  it('fails closed for malformed caps json', () => {
+    const rm = { id: 'm1', buyer_id: 'b1', price_mode: 'fixed', fixed_price: 10, caps: '{not json' };
+    expect(buildMemberForRetry(rm, {}, deliveryCfg)).toBeNull();
+  });
+
+  it('fails closed for rule-mode price (not resolvable without lead/vertical context on a bare retry)', () => {
+    const rm = { id: 'm1', buyer_id: 'b1', price_mode: 'rule' };
+    expect(buildMemberForRetry(rm, {}, deliveryCfg)).toBeNull();
   });
 });

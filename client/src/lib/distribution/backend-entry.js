@@ -8,24 +8,25 @@
 export {
   REASON, isValidTrustedForm, missingRequiredFields, exhaustedCap, evaluateMember,
   resolvePrice, selectPriority, selectWeighted, selectRoundRobin, selectAuction,
-  selectHybrid, routeWaterfall, capWindowStart, idempotencyKey, redact,
+  selectHybrid, routeWaterfall, capWindowStart, capScopeKey, idempotencyKey, redact,
 } from './engine.js';
 
 export { evalLeaf, evalConditionTree, OPERATORS } from './conditions.js';
-export { buildRoutingSnapshot } from './snapshot.js';
+export { buildRoutingSnapshot, buildCaps, buildWallet, buildMemberForRetry } from './snapshot.js';
+export { isSafeRegexPattern, safeTest } from './regexSafety.js';
 export { runShadow } from './shadowHook.js';
 export { runSimulation } from './simulateReport.js';
 export { loadRoutingSnapshot, hasActiveRouteGroup, _clearActiveGroupCache } from './snapshotLoader.js';
-export { makeEntityCapStore } from './capStore.js';
+export { makeEntityCapStore, makeInMemoryCasStore } from './capStore.js';
 export { reserve, finalize, release, RESERVE } from './reservation.js';
-export { makeEntityWalletStore } from './walletStore.js';
+export { makeEntityWalletStore, makeInMemoryWalletStore } from './walletStore.js';
 export { walletDebit, walletCredit, walletCreditReturn, WALLET } from './walletLedger.js';
 export { computeBillingLines, applyReturnAdjustment } from './billing.js';
 export { deliverDirectPost } from './directPost.js';
 export { resolveSubDeliveryCfg, projectSubDeliveryForClient } from './deliveryResolve.js';
 export { runPingPost, buildPingPayload, PING_ALLOWLIST } from './pingpostFlow.js';
 export { distributeLead, orderEligible } from './distribute.js';
-export { runDistribution, capScopesFor, RUN } from './distributeRun.js';
+export { runDistribution, capScopesFor, reserveAndDeliver, isLeadAlreadySold, RUN } from './distributeRun.js';
 export { resolveCampaign, CAMPAIGN_MATCH } from './campaignResolve.js';
 export { makeEntityAttemptStore, makeInMemoryAttemptStore } from './deliveryStore.js';
 export { applyTransform } from './transforms.js';

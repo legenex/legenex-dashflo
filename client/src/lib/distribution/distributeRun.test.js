@@ -5,10 +5,11 @@
 // the wallet is only debited when the buyer actually runs on a balance.
 
 import { describe, it, expect, beforeEach } from 'vitest';
-import { runDistribution, capScopesFor, RUN } from './distributeRun.js';
+import { runDistribution, capScopesFor, reserveAndDeliver, isLeadAlreadySold, RUN } from './distributeRun.js';
 import { makeInMemoryCasStore } from './capStore.js';
 import { makeInMemoryAttemptStore } from './deliveryStore.js';
 import { makeInMemoryHealthStore, CIRCUIT } from './destinationHealth.js';
+import { ATTEMPT_STATUS } from './deliveryAttempt.js';
 
 const NOW = Date.parse('2026-08-12T15:00:00Z');
 
@@ -143,6 +144,37 @@ describe('runDistribution', () => {
     expect(await rejected.capStore.getCount(rejKey)).toBe(0); // given back
   });
 
+  it('maxAttemptsPerDest > 1: an in-run retry of the SAME destination reserves cap correctly and finalizes exactly once', async () => {
+    // Regression: reservation.js's claim key used to be keyed only on
+    // (idempotencyKey, memberId) with no attempt number, so attempt 1's
+    // claim (won, then released on the transient 500) permanently occupied
+    // that key - attempt 2's own reserve() call would see ALREADY_RESERVED
+    // and be rejected without ever posting, even though maxAttemptsPerDest
+    // explicitly permits retrying the same destination.
+    let calls = 0;
+    const fetchImpl = async () => {
+      calls += 1;
+      if (calls === 1) return { status: 500, text: async () => 'boom' };
+      return { status: 200, text: async () => '{"result":"accepted","price":10}' };
+    };
+    const capStore = makeInMemoryCasStore();
+    const attemptStore = makeInMemoryAttemptStore();
+    const m = member('m1', { caps: { daily: { limit: 5, count: 0 } } });
+    const ctx = {
+      leadId: 'lead-1', campaignId: 'camp-1', idempotencyKey: 'idem-1',
+      leadData: { email: 'a@b.com', state: 'TX' }, nowMs: NOW, distributionMode: 'new_only',
+      fetchImpl, snapshot: snapshotOf([m]),
+      stores: { capStore, attemptStore, walletStore: null },
+      maxAttemptsPerDest: 2,
+    };
+    const out = await runDistribution(db, ctx);
+    expect(calls).toBe(2); // attempt 1 failed, attempt 2 (same destination) was actually sent
+    expect(out.status).toBe(RUN.ACCEPTED);
+    expect(out.winnerMemberId).toBe('m1');
+    const capKey = capScopesFor(m, NOW)[0].key;
+    expect(await capStore.getCount(capKey)).toBe(1); // finalized exactly once, not double-consumed
+  });
+
   it('skips a destination whose cap is already exhausted', async () => {
     const caps = { daily: { limit: 1, count: 0 } };
     const { ctx, capStore, calls } = ctxFor(
@@ -254,5 +286,150 @@ describe('runDistribution', () => {
       const out = await runDistribution(db, ctx);
       expect(out.status).toBe(RUN.ACCEPTED);
     });
+  });
+});
+
+// reserveAndDeliver is the shared primitive the async native retry worker
+// (server/src/lib/nativeRetryRunner.js) calls too, so a retried send is
+// governed by the identical cap/wallet/winner rules as a primary send. These
+// tests exercise it directly to prove the cross-destination double-sale
+// protections that only matter once two SEPARATE destinations (as opposed to
+// one destination's own in-run waterfall, already covered above) can both
+// reach an ACCEPTED outcome for the same lead - exactly the shape of an
+// async retry racing a different destination's own eventual sale.
+describe('reserveAndDeliver: cross-destination double-sale protection', () => {
+  function ctxWith(fetchImpl, over = {}) {
+    const capStore = makeInMemoryCasStore();
+    const attemptStore = makeInMemoryAttemptStore();
+    return {
+      capStore, attemptStore,
+      stores: { attemptStore, capStore, walletStore: null },
+      ctx: { leadId: 'lead-X', idempotencyKey: 'idem-X', leadData: { email: 'a@b.com' }, nowMs: NOW, fetchImpl, ...over },
+    };
+  }
+
+  it('A fails, B accepts and wins; A later becomes retry-due and MUST NOT SEND', async () => {
+    const { fetchImpl, calls } = makeFetch({
+      'buyer-mB': { status: 200, body: '{"result":"accepted","price":40}' },
+    });
+    const { stores, ctx } = ctxWith(fetchImpl);
+
+    const winB = await reserveAndDeliver({ member: member('mB'), meta: { attemptNumber: 1, trigger: 'primary' }, stores, ctx });
+    expect(winB.status).toBe(ATTEMPT_STATUS.ACCEPTED);
+    expect(winB.wonLead).toBe(true);
+
+    expect(await isLeadAlreadySold(stores.capStore, 'lead-X')).toBe(true);
+
+    // A's async retry fires later, for a DIFFERENT member/destination.
+    const retryA = await reserveAndDeliver({ member: member('mA'), meta: { attemptNumber: 2, trigger: 'retry' }, stores, ctx });
+    // SUPERSEDED, not REJECTED: a plain REJECTED is fallback-eligible
+    // (shouldFallback/processLead.js treat it as a safe clean miss), and
+    // "another destination already sold this lead" must never be.
+    expect(retryA.status).toBe(ATTEMPT_STATUS.SUPERSEDED);
+    expect(retryA.reason).toBe('LEAD_ALREADY_SOLD');
+    // Only B was ever actually contacted; A's retry never sent.
+    expect(calls.length).toBe(1);
+    expect(calls.some((u) => String(u).includes('buyer-mA'))).toBe(false);
+  });
+
+  it('concurrent winner race: exactly one of two simultaneous accepts becomes the real winner', async () => {
+    const { fetchImpl } = makeFetch({
+      'buyer-mA': { status: 200, body: '{"result":"accepted","price":40}' },
+      'buyer-mB': { status: 200, body: '{"result":"accepted","price":40}' },
+    });
+    const { stores, ctx } = ctxWith(fetchImpl);
+
+    const [outA, outB] = await Promise.all([
+      reserveAndDeliver({ member: member('mA'), meta: { attemptNumber: 1, trigger: 'retry' }, stores, ctx }),
+      reserveAndDeliver({ member: member('mB'), meta: { attemptNumber: 1, trigger: 'retry' }, stores, ctx }),
+    ]);
+
+    const winners = [outA, outB].filter((o) => o.wonLead === true);
+    const superseded = [outA, outB].filter((o) => o.status === ATTEMPT_STATUS.SUPERSEDED);
+    expect(winners).toHaveLength(1);
+    expect(superseded).toHaveLength(1);
+    // Both destinations genuinely said accepted at the HTTP level; only one
+    // carries real business effect.
+    expect(superseded[0].balanceDecision).toBe('superseded_duplicate_sale');
+  });
+
+  it('a retry accepted as the sole winner still finalizes cap and debits the wallet exactly once', async () => {
+    const { fetchImpl } = makeFetch({ 'buyer-mA': { status: 200, body: '{"result":"accepted","price":40}' } });
+    const capStore = makeInMemoryCasStore();
+    const attemptStore = makeInMemoryAttemptStore();
+    const debits = [];
+    const walletStore = {
+      claimTxn: async () => true,
+      getBalance: async () => ({ balance: 1000, version: 0 }),
+      casAdjustBalance: async () => true,
+      appendTxn: async (t) => { debits.push(t); return { ...t, id: 't1' }; },
+      awaitTxnByKey: async () => null,
+    };
+    const caps = { daily: { limit: 5, count: 0 } };
+    const m = member('mA', { price: 40, wallet: { mode: 'prepaid', balance: 1000, minBalance: 0 }, caps });
+    const out = await reserveAndDeliver({
+      member: m, meta: { attemptNumber: 3, trigger: 'retry' },
+      stores: { attemptStore, capStore, walletStore },
+      ctx: { leadId: 'lead-Y', idempotencyKey: 'idem-Y', leadData: {}, nowMs: NOW, fetchImpl },
+    });
+    expect(out.status).toBe(ATTEMPT_STATUS.ACCEPTED);
+    expect(debits).toHaveLength(1);
+    expect(debits[0].amount).toBe(40);
+    const capKey = capScopesFor(m, NOW)[0].key;
+    expect(await capStore.getCount(capKey)).toBe(1); // finalized once, not double-consumed
+  });
+
+  it('attempt-numbered reservation: a same-destination retry is not rejected merely because an earlier attempt already held (and released) the slot', async () => {
+    const { fetchImpl } = makeFetch({ 'buyer-mA': { status: 500, body: 'boom' } });
+    const capStore = makeInMemoryCasStore();
+    const attemptStore = makeInMemoryAttemptStore();
+    const stores = { attemptStore, capStore, walletStore: null };
+    const ctx = { leadId: 'lead-Z', idempotencyKey: 'idem-Z', leadData: {}, nowMs: NOW, fetchImpl };
+    const m = member('mA', { caps: { daily: { limit: 5, count: 0 } } });
+
+    const attempt1 = await reserveAndDeliver({ member: m, meta: { attemptNumber: 1, trigger: 'primary' }, stores, ctx });
+    expect(attempt1.status).toBe(ATTEMPT_STATUS.ERROR); // reserved, sent, released on the 500
+
+    const attempt2 = await reserveAndDeliver({ member: m, meta: { attemptNumber: 2, trigger: 'retry' }, stores, ctx });
+    // Must reach a real send outcome (ERROR from the same scripted 500), not
+    // be short-circuited as ALREADY_RESERVED by attempt 1's own claim key.
+    expect(attempt2.status).toBe(ATTEMPT_STATUS.ERROR);
+    expect(attempt2.reason).not.toBe('ALREADY_RESERVED');
+  });
+});
+
+// Regression (found by adversarial review): a whole runDistribution() run
+// whose only real attempt comes back SUPERSEDED (this destination genuinely
+// accepted, but lost the cross-run winner claim to a concurrent duplicate
+// submission that already sold the same lead) must NEVER report a
+// fallback-eligible clean outcome - the caller (processLead.js) reads
+// RUN.AMBIGUOUS/RUN.ACCEPTED/RUN.DUPLICATE as "never re-send through legacy"
+// and everything else as fair game, so this run's overall status is exactly
+// what decides whether the lead gets sold a second time through the legacy
+// relay. The first version of this fix classified the pre-send "already
+// sold" guard as REJECTED (a status legacy fallback DOES treat as safe),
+// which silently reintroduced the double-sale the whole change exists to
+// close.
+describe('runDistribution: a run superseded by a concurrent winner never reports a fallback-eligible outcome', () => {
+  it('reports AMBIGUOUS, not REJECTED/ERROR_CLEAN, when this run\'s only candidate is superseded', async () => {
+    const capStore = makeInMemoryCasStore();
+    const attemptStore = makeInMemoryAttemptStore();
+    // Simulate a concurrent duplicate submission of the same lead that has
+    // already won the lead-level claim before this run's own candidate ever
+    // gets to send.
+    await capStore.claim('winner:lead-1');
+
+    const { fetchImpl, calls } = makeFetch({ 'buyer-m1': { status: 200, body: '{"result":"accepted","price":25}' } });
+    const ctx = {
+      leadId: 'lead-1', campaignId: 'camp-1', idempotencyKey: 'idem-1',
+      leadData: { email: 'a@b.com', state: 'TX' }, nowMs: NOW, distributionMode: 'new_only',
+      fetchImpl, snapshot: snapshotOf([member('m1')]),
+      stores: { capStore, attemptStore, walletStore: null },
+    };
+    const out = await runDistribution(makeDb(), ctx);
+    expect(out.status).toBe(RUN.AMBIGUOUS);
+    expect(out.status).not.toBe(RUN.REJECTED);
+    expect(out.status).not.toBe(RUN.ERROR_CLEAN);
+    expect(calls.length).toBe(0); // never sent - caught by the pre-send guard
   });
 });

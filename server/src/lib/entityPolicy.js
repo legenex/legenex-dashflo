@@ -229,6 +229,37 @@ export const READ_DENY_FIELDS = {
   DncEntry: ['contact_hash'],
 };
 
+// Fields whose VALUE must be redacted (not deleted outright) before leaving
+// the server: the field is legitimately needed by the UI (an operator edits
+// their own delivery's headers), but a HISTORICAL row could carry a real
+// secret typed into it by mistake, since the contract (credential_ref stays
+// server-side, resolved only at send time) is a convention, not a runtime
+// guarantee for rows written before it existed. This is a defense-in-depth
+// backstop, not the primary control - the primary control is that a
+// credential never has a reason to be typed into a header in the first
+// place - so it deliberately errs toward over-redacting a plausible secret
+// key name rather than under-redacting one.
+const HEADER_SECRET_KEYS = ['authorization', 'api_key', 'apikey', 'x-api-key', 'password', 'secret', 'token', 'bearer', 'cookie'];
+function redactHeaderSecrets(raw) {
+  if (raw == null || raw === '') return raw;
+  let parsed;
+  // A malformed (non-JSON) string is exactly the historical-row case this
+  // function exists to guard: fail CLOSED (a safe placeholder), not open
+  // (the original, unexamined string) - the whole point is that this value
+  // cannot be trusted to be free of secret material.
+  try { parsed = typeof raw === 'string' ? JSON.parse(raw) : raw; } catch { return '[unreadable, redacted for safety]'; }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return '[unreadable, redacted for safety]';
+  const out = {};
+  for (const [k, v] of Object.entries(parsed)) {
+    out[k] = HEADER_SECRET_KEYS.some((s) => k.toLowerCase().includes(s)) ? '[redacted]' : v;
+  }
+  return typeof raw === 'string' ? JSON.stringify(out) : out;
+}
+
+export const READ_TRANSFORM_FIELDS = {
+  SubDelivery: { headers: redactHeaderSecrets },
+};
+
 // Fields that cannot be set or changed through the generic route, because
 // doing so would let a caller escalate their own privileges or rewrite an
 // audit trail.
@@ -281,14 +312,22 @@ export function authorizeEntity(user, entityName, action) {
   return { allowed: true, roleClass };
 }
 
-// Strip fields that must not leave the server. Accepts a record or an array.
+// Strip fields that must not leave the server, and redact fields whose value
+// (not the whole field) must never carry a secret. Accepts a record or array.
 export function projectRead(entityName, payload) {
   const denied = READ_DENY_FIELDS[entityName];
-  if (!denied || payload == null) return payload;
+  const transforms = READ_TRANSFORM_FIELDS[entityName];
+  if (!denied && !transforms) return payload;
+  if (payload == null) return payload;
   if (Array.isArray(payload)) return payload.map((row) => projectRead(entityName, row));
   if (typeof payload !== 'object') return payload;
   const out = { ...payload };
-  for (const field of denied) delete out[field];
+  if (denied) for (const field of denied) delete out[field];
+  if (transforms) {
+    for (const [field, transform] of Object.entries(transforms)) {
+      if (Object.prototype.hasOwnProperty.call(out, field)) out[field] = transform(out[field]);
+    }
+  }
   return out;
 }
 
@@ -308,6 +347,7 @@ export default {
   resolveRoleClass,
   ENTITY_POLICY,
   READ_DENY_FIELDS,
+  READ_TRANSFORM_FIELDS,
   WRITE_DENY_FIELDS,
   authorizeEntity,
   projectRead,

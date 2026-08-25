@@ -64,6 +64,44 @@ describe('validateConfigForPublish (canonical sub-delivery, fail closed)', () =>
   });
 });
 
+describe('validateConfigForPublish (price_mode:rule buyer-coverage check)', () => {
+  const delivery = { id: 'del1', buyer_id: 'b1', status: 'active' };
+  const sub = { id: 'sd1', delivery_id: 'del1', active: true, target_url: 'https://buyer.example/api', response_mapping: '{"accepted":"ok"}' };
+  const ruleMember = { ...member, price_mode: 'rule', fixed_price: undefined, destination_id: undefined, sub_delivery_id: 'sd1' };
+
+  it('fails when a rule-mode member has no active BuyerStateCpl coverage', () => {
+    const r = validateConfigForPublish({
+      group, members: [ruleMember], buyers: [buyer], destinations: [], deliveries: [delivery], subDeliveries: [sub],
+      buyerStateCpls: [],
+    }, 0);
+    expect(r.valid).toBe(false);
+    expect(r.errors.some((e) => /BuyerStateCpl coverage/i.test(e.detail))).toBe(true);
+  });
+
+  it('passes when the buyer has at least one active BuyerStateCpl row', () => {
+    const r = validateConfigForPublish({
+      group, members: [ruleMember], buyers: [buyer], destinations: [], deliveries: [delivery], subDeliveries: [sub],
+      buyerStateCpls: [{ buyer_id: 'b1', vertical: 'MVA', state: 'TX', active: true, cpl: 50 }],
+    }, 0);
+    expect(r.valid).toBe(true);
+  });
+
+  it('does not fail a rule-mode member merely because a DIFFERENT buyer has coverage', () => {
+    const r = validateConfigForPublish({
+      group, members: [ruleMember], buyers: [buyer], destinations: [], deliveries: [delivery], subDeliveries: [sub],
+      buyerStateCpls: [{ buyer_id: 'OTHER_BUYER', vertical: 'MVA', state: 'TX', active: true, cpl: 50 }],
+    }, 0);
+    expect(r.valid).toBe(false);
+  });
+
+  it('is skipped entirely (backward compatible) when buyerStateCpls is not supplied', () => {
+    const r = validateConfigForPublish({
+      group, members: [ruleMember], buyers: [buyer], destinations: [], deliveries: [delivery], subDeliveries: [sub],
+    }, 0);
+    expect(r.errors.some((e) => /BuyerStateCpl coverage/i.test(e.detail))).toBe(false);
+  });
+});
+
 describe('computeConfigHash + diff + version resolution', () => {
   it('hash is stable and changes when config changes', () => {
     const h1 = computeConfigHash(group, [member]);
@@ -78,6 +116,23 @@ describe('computeConfigHash + diff + version resolution', () => {
     expect(changes.find((c) => c.field === 'method')).toBeTruthy();
     expect(changes.find((c) => c.scope === 'member' && c.field === 'fixed_price')).toBeTruthy();
     expect(changes.find((c) => c.change === 'added')).toBeTruthy();
+  });
+
+  // Regression: repointing a RouteMember from one SubDelivery to another
+  // under the same buyer used to produce no hash change and no diff entry,
+  // since sub_delivery_id (the canonical destination pointer) was omitted
+  // from both computeConfigHash and diffConfig - a real gap against
+  // RouteConfigVersion's own explainability guarantee.
+  it('hash changes and diff reports a change when sub_delivery_id is repointed', () => {
+    const subMember = { ...member, destination_id: undefined, sub_delivery_id: 'sdA' };
+    const h1 = computeConfigHash(group, [subMember]);
+    const h2 = computeConfigHash(group, [{ ...subMember, sub_delivery_id: 'sdB' }]);
+    expect(h2).not.toBe(h1);
+    const changes = diffConfig({ group, members: [subMember] }, { group, members: [{ ...subMember, sub_delivery_id: 'sdB' }] });
+    const change = changes.find((c) => c.scope === 'member' && c.field === 'sub_delivery_id');
+    expect(change).toBeTruthy();
+    expect(change.from).toBe('sdA');
+    expect(change.to).toBe('sdB');
   });
   it('a historical trace resolves to its exact published version by config hash', () => {
     const hash = computeConfigHash(group, [member]);

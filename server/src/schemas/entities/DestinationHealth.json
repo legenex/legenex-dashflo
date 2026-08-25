@@ -2,6 +2,14 @@
   // Additive (lead distribution platform). Circuit breaker health state per endpoint (sub-delivery).
   // Uniqueness (sub_delivery_id). destination_id retained additively for legacy records.
   // Caller model: processLead + worker.
+  // Neither identifier field is schema-required: a native-only row carries
+  // sub_delivery_id (its canonical identity) and a legacy-only row carries
+  // destination_id, so requiring either unconditionally would be wrong for
+  // the other. This was previously backwards - destination_id (deprecated)
+  // was the only required field, which understated migration-tooling
+  // severity for a dangling CANONICAL sub_delivery_id reference (WARNING)
+  // relative to a dangling deprecated destination_id (would have been a
+  // BLOCKER) - see server/src/lib/migrationPlan.js's requiredFields().
   "name": "DestinationHealth",
   "type": "object",
   "properties": {
@@ -18,5 +26,5 @@
     "last_success_at": { "type": "string", "format": "date-time" },
     "last_failure_at": { "type": "string", "format": "date-time" }
   },
-  "required": ["destination_id"]
+  "required": []
 }

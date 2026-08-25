@@ -1,5 +1,8 @@
 import { requireUser } from './_runtime.js';
 import * as engine from './routingEngine.generated.js';
+import { makeTargetValidator } from '../lib/ssrfGuard.js';
+
+const validateTarget = makeTargetValidator();
 
 // Caller model: OPERATOR-ONLY. Live outbound test of a single SubDelivery endpoint.
 //
@@ -74,11 +77,23 @@ export default async function campaignDeliveryTest(ctx) {
         isPrimary: false, trigger: 'operator_test',
       },
       {
+        // Fixed: engine.makeDbAttemptStore does not exist (the real export
+        // is makeEntityAttemptStore) - this made every live delivery test
+        // throw and return a 500 whenever db.entities.DeliveryAttempt
+        // exists, which is always true in a real deployment.
         store: db.entities.DeliveryAttempt
-          ? engine.makeDbAttemptStore(db)
+          ? engine.makeEntityAttemptStore(db)
           : engine.makeInMemoryAttemptStore(),
         nowMs: Date.parse(nowIso), fetchImpl: globalThis.fetch, testMode: false,
         resolveCredential: (ref) => resolveCredential(db, ref),
+        // SSRF guard: this is a REAL outbound send (an operator-confirmed
+        // live test), not testMode, so it must carry the same production
+        // target validation as processLead.js/nativeRetryRunner.js - this
+        // call site was the one real gap an adversarial review found: an
+        // operator-editable SubDelivery.target_url could be pointed at an
+        // internal host or the cloud metadata endpoint and reached through
+        // this confirmed-test path with zero validation.
+        validateTarget,
       },
     );
 

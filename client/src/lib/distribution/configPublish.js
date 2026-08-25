@@ -10,7 +10,12 @@ export function computeConfigHash(group, members) {
   const material = JSON.stringify({
     g: [group.id, group.method, group.order_index, group.price_weight, group.priority_weight],
     m: (members || []).map((m) => [
-      m.id, m.buyer_id, m.destination_id, m.active, m.priority, m.weight, m.reserve_price,
+      // sub_delivery_id is the CANONICAL destination pointer; destination_id
+      // is deprecated compatibility only (see RouteMember.json). Omitting it
+      // meant repointing a member from one SubDelivery to another under the
+      // same buyer produced no diff and an unchanged hash - a real gap
+      // against RouteConfigVersion's own explainability guarantee.
+      m.id, m.buyer_id, m.destination_id, m.sub_delivery_id, m.active, m.priority, m.weight, m.reserve_price,
       m.price_mode, m.fixed_price, m.filters, m.conditions, m.caps, m.schedule,
     ]),
   });
@@ -23,12 +28,20 @@ export function computeConfigHash(group, members) {
 // unless the whole group is routable: config parses, every member has an existing
 // eligible buyer and an existing destination, caps/pricing/schedule are valid.
 // Reuses buildRoutingSnapshot so validation matches routing exactly.
-export function validateConfigForPublish({ group, members, buyers, destinations, subDeliveries, deliveries }, nowMs) {
+// buyerStateCpls: optional, active BuyerStateCpl rows for this campaign's
+// vertical (any buyer). Only used to validate price_mode:'rule' members -
+// see below. Omitting it (existing callers) simply skips that one check,
+// same as before this parameter existed.
+export function validateConfigForPublish({ group, members, buyers, destinations, subDeliveries, deliveries, buyerStateCpls }, nowMs) {
   const errors = [];
   if (!group || !group.campaign_id) errors.push({ code: 'CONFIG_INVALID', detail: 'group missing campaign' });
   if (!members || members.length === 0) errors.push({ code: 'CONFIG_INVALID', detail: 'group has no members' });
 
   // Force the group active so the mapper evaluates it, then read configErrors.
+  // leadState is deliberately NOT supplied: publish validates STRUCTURE, not
+  // one specific lead, and price_mode:'rule' price resolution is inherently
+  // lead-dependent (see snapshot.js's buildMember) - the rule-mode coverage
+  // check just below covers this case instead.
   const snap = buildRoutingSnapshot(
     { groups: [{ ...group, active: true, lifecycle: 'active' }], members, buyers, destinations, subDeliveries, deliveries, health: [] },
     { campaignId: group && group.campaign_id, nowMs: nowMs ?? 0 },
@@ -45,6 +58,17 @@ export function validateConfigForPublish({ group, members, buyers, destinations,
     if (!b) errors.push({ member_id: m.id, code: 'CONFIG_INVALID', detail: 'buyer not found' });
     else if (!(String(b.status).toLowerCase() === 'active' && b.active === true)) {
       errors.push({ member_id: m.id, code: 'BUYER_INELIGIBLE', detail: 'buyer not active' });
+    }
+    // price_mode:'rule' resolves its price from BuyerStateCpl at routing
+    // time (lead state -> this buyer's active per-state price), not from a
+    // value stored on the member. Publish cannot check a specific state, but
+    // it CAN and must check that the buyer has any active state pricing
+    // configured at all - a rule-mode member for a buyer with zero
+    // BuyerStateCpl coverage would otherwise publish successfully and then
+    // fail CONFIG_INVALID for every real lead with no warning beforehand.
+    if (m.price_mode === 'rule' && Array.isArray(buyerStateCpls)) {
+      const hasCoverage = buyerStateCpls.some((r) => String(r.buyer_id) === String(m.buyer_id) && r.active !== false);
+      if (!hasCoverage) errors.push({ member_id: m.id, code: 'CONFIG_INVALID', detail: 'rule-mode member: buyer has no active BuyerStateCpl coverage' });
     }
     // Canonical destination: publish fails closed unless the member's sub-delivery
     // exists, is active, belongs to the member's buyer, and has a target_url and
@@ -88,7 +112,7 @@ export function diffConfig(oldCfg, newCfg) {
   for (const id of new Set([...Object.keys(m0), ...Object.keys(m1)])) {
     if (!m0[id]) changes.push({ scope: 'member', id, change: 'added' });
     else if (!m1[id]) changes.push({ scope: 'member', id, change: 'removed' });
-    else for (const k of ['buyer_id', 'destination_id', 'active', 'priority', 'weight', 'fixed_price', 'reserve_price', 'filters', 'caps', 'schedule']) {
+    else for (const k of ['buyer_id', 'destination_id', 'sub_delivery_id', 'active', 'priority', 'weight', 'price_mode', 'fixed_price', 'reserve_price', 'conditions', 'filters', 'caps', 'schedule']) {
       if (JSON.stringify(m0[id][k]) !== JSON.stringify(m1[id][k])) changes.push({ scope: 'member', id, field: k, from: m0[id][k] ?? null, to: m1[id][k] ?? null });
     }
   }

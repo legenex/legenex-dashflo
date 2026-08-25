@@ -99,6 +99,46 @@ describe('retry worker (atomic lease, no double-send)', () => {
   });
 });
 
+describe('runRetryWorker: fresh per-attempt clock (ctx.now)', () => {
+  // Regression (adversarial review): a single ctx.nowMs read at the top of
+  // the pass was reused for EVERY claimLease call in the whole batch, so a
+  // slow send earlier in the SAME sequential pass silently ate into later
+  // attempts' lease safety margin - the margin the 90s DEFAULT_LEASE_MS
+  // exists to guarantee. ctx.now(), when supplied, is read fresh before
+  // every claim instead.
+  it('without ctx.now, every claim uses the same static nowMs (unchanged prior behavior)', async () => {
+    const store = makeInMemoryAttemptStore();
+    await seedDue(store, 2);
+    const claimTimes = [];
+    const realClaimLease = store.claimLease.bind(store);
+    store.claimLease = (id, workerId, nowMs, leaseMs, requiredStatus) => {
+      claimTimes.push(nowMs);
+      return realClaimLease(id, workerId, nowMs, leaseMs, requiredStatus);
+    };
+    await runRetryWorker(store, async () => ({ status: ATTEMPT_STATUS.ACCEPTED }), { nowMs: 1000, workerId: 'A' });
+    expect(claimTimes).toEqual([1000, 1000]);
+  });
+
+  it('with ctx.now supplied, each claim reads a fresh timestamp, advancing across a slow batch', async () => {
+    const store = makeInMemoryAttemptStore();
+    await seedDue(store, 3);
+    const claimTimes = [];
+    const realClaimLease = store.claimLease.bind(store);
+    store.claimLease = (id, workerId, nowMs, leaseMs, requiredStatus) => {
+      claimTimes.push(nowMs);
+      return realClaimLease(id, workerId, nowMs, leaseMs, requiredStatus);
+    };
+    let clock = 1000;
+    const deliverFn = async () => { clock += 20000; return { status: ATTEMPT_STATUS.ACCEPTED }; }; // a "slow" 20s send
+    await runRetryWorker(store, deliverFn, { nowMs: 1000, workerId: 'A', now: () => clock });
+    // Each successive claim reflects the time already spent on prior sends
+    // in the SAME pass, not the stale batch-start value.
+    expect(claimTimes[0]).toBe(1000);
+    expect(claimTimes[1]).toBeGreaterThan(claimTimes[0]);
+    expect(claimTimes[2]).toBeGreaterThan(claimTimes[1]);
+  });
+});
+
 describe('circuit breaker + jitter', () => {
   it('opens after threshold consecutive failures, closes on success', () => {
     let h = null;

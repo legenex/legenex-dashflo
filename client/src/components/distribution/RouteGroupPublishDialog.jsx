@@ -280,6 +280,32 @@ export default function RouteGroupPublishDialog({ open, onOpenChange, group, for
                   <p className="text-[11px] text-muted-foreground pt-1">Publishing with {memberCount} member{memberCount === 1 ? '' : 's'}.</p>
                 </div>
               )}
+              {/* Member-level changes since the last published version
+                  (destination repoints, price/cap/filter/schedule edits) -
+                  computed server-side (distributionConfig.js's validate
+                  action, via configPublish.js's diffConfig) against the
+                  actual last-published RouteConfigVersion snapshot. Absent
+                  on a first-ever publish (no prior version to diff against). */}
+              {Array.isArray(validation?.diff) && validation.diff.length > 0 && (
+                <div className="space-y-1.5 pt-2 border-t border-border/60">
+                  <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground/70">Member changes since last published version</p>
+                  {validation.diff.map((row, i) => (
+                    <div key={`${row.scope}-${row.id ?? i}-${row.field ?? row.change}`} className="flex items-center gap-2 text-[13px]">
+                      <span className="w-32 shrink-0 text-muted-foreground truncate" title={row.id}>{row.id ? `#${String(row.id).slice(-6)}` : row.scope}</span>
+                      {row.change ? (
+                        <Badge variant="outline" className="text-[10px] capitalize">{row.change}</Badge>
+                      ) : (
+                        <>
+                          <span className="text-muted-foreground/70">{row.field}</span>
+                          <span className="font-mono text-muted-foreground line-through">{fmt(row.from)}</span>
+                          <ArrowRight className="w-3.5 h-3.5 text-muted-foreground/60" />
+                          <span className="font-mono text-foreground">{fmt(row.to)}</span>
+                        </>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
             </section>
 
             {/* Step 4: Reason */}

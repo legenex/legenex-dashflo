@@ -332,6 +332,14 @@ export function routeWaterfall(groups, lead, ctx = {}) {
   return { winner: null, reason: REASON.NO_ELIGIBLE_MEMBER, rrCursors: rrOut, trace };
 }
 
+// --- Cap scope key (canonical, single lookup key for CapCounter rows) ---
+// The ONE key format both the write side (capScopesFor/reservation) and the
+// read side (snapshotLoader's eligibility pre-check) build, so the two can
+// never independently drift into different key shapes for the same scope.
+export function capScopeKey(memberId, window, windowStart) {
+  return `route_member:${memberId}:${window}:${window === 'total' ? 'all' : windowStart}`;
+}
+
 // --- Cap window start (UTC-based; tz offset in minutes optional) ---
 // Returns an ISO string for the start of the given window containing `nowMs`.
 export function capWindowStart(nowMs, window, tzOffsetMinutes = 0) {

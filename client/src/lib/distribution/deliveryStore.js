@@ -15,14 +15,25 @@ export function makeInMemoryAttemptStore({ yieldFn } = {}) {
       return attempts.filter((a) => a.status === 'error' && a.next_retry_at != null
         && Date.parse(a.next_retry_at) <= nowMs && (a.lease_until == null || Date.parse(a.lease_until) <= nowMs));
     },
-    // Atomic lease claim (honest CAS on lease_version). Exactly one concurrent
-    // worker wins an unleased (or expired-lease) attempt.
-    async claimLease(id, workerId, nowMs, leaseMs) {
+    // Atomic lease claim (honest CAS on lease_version, and on status when the
+    // caller supplies requiredStatus). Exactly one concurrent worker wins an
+    // unleased (or expired-lease) attempt. The optional status check closes a
+    // real gap a lease-only CAS leaves open: the automatic retry worker reads
+    // due attempts filtered to status:'error' (listDue) and must not resurrect
+    // one that a concurrent completion (a manual retry, or another worker)
+    // already moved to a different terminal status between that read and this
+    // claim - it passes requiredStatus:'error' so the claim itself fails
+    // atomically in that case. manualRetry intentionally omits it: an operator
+    // retrying a specific attempt by id may deliberately target one that is
+    // no longer 'error' (e.g. dead_letter), and the lease CAS alone still
+    // prevents two concurrent claims of the same row.
+    async claimLease(id, workerId, nowMs, leaseMs, requiredStatus) {
       const a = attempts.find((x) => x.id === id);
       if (!a) return false;
       const version = a.lease_version || 0;
       await microYield(); // race window
       const latest = attempts.find((x) => x.id === id);
+      if (requiredStatus && latest.status !== requiredStatus) return false; // already settled by someone
       const activeLease = latest.lease_until ? Date.parse(latest.lease_until) : 0;
       if (activeLease > nowMs) return false;                 // still leased by someone
       if ((latest.lease_version || 0) !== version) return false; // CAS lost
@@ -49,16 +60,21 @@ export function makeEntityAttemptStore(db) {
       return rows.filter((a) => a.next_retry_at && a.next_retry_at <= iso
         && (!a.lease_until || a.lease_until <= iso));
     },
-    async claimLease(id, workerId, nowMs, leaseMs) {
+    async claimLease(id, workerId, nowMs, leaseMs, requiredStatus) {
       const rows = await db.entities.DeliveryAttempt.filter({ id });
       const a = rows[0];
       if (!a) return false;
+      if (requiredStatus && a.status !== requiredStatus) return false;
       const activeLease = a.lease_until ? Date.parse(a.lease_until) : 0;
       if (activeLease > nowMs) return false;
       const version = a.lease_version || 0;
-      // CAS: only claim if lease_version is still what we read.
+      // CAS: only claim if lease_version (and, when required, status) is
+      // still what we read - a single atomic condition, not a separate
+      // check-then-update, so a concurrent completion between the read above
+      // and this call is what the match condition itself catches.
+      const match = requiredStatus ? { id, lease_version: version, status: requiredStatus } : { id, lease_version: version };
       const res = await db.entities.DeliveryAttempt.updateMany(
-        { id, lease_version: version },
+        match,
         { $set: { lease_until: new Date(nowMs + leaseMs).toISOString(), leased_by: workerId, lease_version: version + 1 } },
       );
       return !!(res && res.updated > 0);

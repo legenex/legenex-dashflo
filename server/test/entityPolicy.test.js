@@ -215,6 +215,50 @@ describe('secret material never leaves through the route', () => {
       expect(ENTITY_POLICY[entity], `${entity} is projected but not policied`).toBeDefined();
     }
   });
+
+  it('redacts a secret-shaped header key inside SubDelivery.headers, without deleting the whole field', () => {
+    const row = {
+      id: 'sd1', name: 'Tier 1', target_url: 'https://buyer.test/api',
+      headers: JSON.stringify({ 'X-Env': 'prod', Authorization: 'Bearer live-secret-value', 'X-Api-Key': 'live-key' }),
+      credential_ref: 'cred:sd1',
+    };
+    const projected = projectRead('SubDelivery', row);
+    const headers = JSON.parse(projected.headers);
+    expect(headers['X-Env']).toBe('prod'); // a real, non-secret header survives
+    expect(headers.Authorization).toBe('[redacted]');
+    expect(headers['X-Api-Key']).toBe('[redacted]');
+    expect(JSON.stringify(projected)).not.toContain('live-secret-value');
+    expect(JSON.stringify(projected)).not.toContain('live-key');
+    // credential_ref (an opaque pointer, never the secret itself) and
+    // everything else operators legitimately need to see is untouched.
+    expect(projected.credential_ref).toBe('cred:sd1');
+    expect(projected.target_url).toBe('https://buyer.test/api');
+  });
+
+  it('leaves normal SubDelivery headers with no secret-shaped keys untouched', () => {
+    const row = { id: 'sd1', headers: JSON.stringify({ 'X-Env': 'prod', Accept: 'application/json' }) };
+    const projected = projectRead('SubDelivery', row);
+    expect(JSON.parse(projected.headers)).toEqual({ 'X-Env': 'prod', Accept: 'application/json' });
+  });
+
+  it('does not choke on an absent headers value', () => {
+    expect(projectRead('SubDelivery', { id: 'sd1' }).headers).toBeUndefined();
+    expect(projectRead('SubDelivery', { id: 'sd1', headers: '' }).headers).toBe('');
+  });
+
+  // Regression: a malformed (non-JSON) headers value used to fail OPEN,
+  // returning the raw, unexamined string - exactly the historical-row case
+  // this function exists to guard, since it cannot be confirmed free of
+  // secret material. It must fail CLOSED instead.
+  it('fails closed (redacts entirely) rather than open for a malformed non-JSON headers value', () => {
+    const projected = projectRead('SubDelivery', { id: 'sd1', headers: 'not json, maybe a leaked raw secret: sk-live-abc123' });
+    expect(projected.headers).not.toContain('sk-live-abc123');
+  });
+
+  it('fails closed for a non-object JSON value (e.g. an array or a bare string)', () => {
+    expect(projectRead('SubDelivery', { id: 'sd1', headers: '"just a string"' }).headers).toBe('[unreadable, redacted for safety]');
+    expect(projectRead('SubDelivery', { id: 'sd1', headers: '["a","b"]' }).headers).toBe('[unreadable, redacted for safety]');
+  });
 });
 
 describe('privilege escalation through writes is blocked', () => {

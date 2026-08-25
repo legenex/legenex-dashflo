@@ -4,15 +4,23 @@
 // classifies responses, computes backoff, and builds redacted attempt records.
 
 import { redact } from './engine.js';
+import { safeTest } from './regexSafety.js';
 
 export const ATTEMPT_STATUS = {
   PENDING: 'pending', SENT: 'sent', ACCEPTED: 'accepted', REJECTED: 'rejected',
   DUPLICATE: 'duplicate', QUEUED: 'queued', ERROR: 'error', DEAD_LETTER: 'dead_letter',
+  // A destination genuinely accepted this attempt, but a DIFFERENT
+  // destination had already won the same lead by the time this one
+  // completed (a cross-destination retry race). No business effect (no cap
+  // finalize, no wallet debit) is applied for a superseded attempt; see
+  // reserveAndDeliver's lead-level winner claim in distributeRun.js.
+  SUPERSEDED: 'superseded',
 };
 
 // Statuses that represent a settled outcome (never retried).
 const TERMINAL = new Set([
-  ATTEMPT_STATUS.ACCEPTED, ATTEMPT_STATUS.REJECTED, ATTEMPT_STATUS.DUPLICATE, ATTEMPT_STATUS.DEAD_LETTER,
+  ATTEMPT_STATUS.ACCEPTED, ATTEMPT_STATUS.REJECTED, ATTEMPT_STATUS.DUPLICATE,
+  ATTEMPT_STATUS.DEAD_LETTER, ATTEMPT_STATUS.SUPERSEDED,
 ]);
 
 // Bounded exponential backoff (deterministic, no ambient time/jitter).
@@ -38,19 +46,19 @@ export function shouldRetry(status, attemptNumber, maxAttempts = 5) {
 
 // Response text is bounded before any operator-supplied regex runs against
 // it. mapping.duplicate/reject/queue/accept are free-text patterns an
-// operator enters in the delivery editor, matched with new RegExp(re, 'i')
-// against the destination's response body. This bound protects against a
-// large-but-otherwise-safe body making even a normal pattern slow to match
-// (linear-time cost against a multi-megabyte string). It is NOT a complete
-// defense against a deliberately pathological pattern (nested-quantifier
-// catastrophic backtracking, e.g. (a+)+b): that class of pattern is
-// exponential in the length of the matched run, so even this bound's 10,000
-// characters is nowhere near small enough to guarantee fast completion
-// against one. Full protection needs either a hard execution timeout on the
-// match (not available for a synchronous RegExp in plain Node without a
-// worker thread) or static rejection of dangerous pattern shapes at the
-// point an operator saves a response_mapping - neither is implemented here;
-// this bound is a real but partial mitigation, not a guarantee.
+// operator enters in the delivery editor, matched against the destination's
+// response body. This bound protects against a large-but-otherwise-safe body
+// making even a normal pattern slow to match (linear-time cost against a
+// multi-megabyte string).
+//
+// Full ReDoS protection - the catastrophic-backtracking case a length bound
+// alone cannot cover (nested-quantifier patterns like (a+)+b are exponential
+// in the matched run, not linear) - comes from `safeTest` (regexSafety.js):
+// every pattern is structurally analyzed before it is ever executed, and a
+// pattern shaped for catastrophic backtracking is never run at all (treated
+// as a non-match, fail-safe). This runs on every classification, not only at
+// save time, so the guarantee holds regardless of how a response_mapping
+// value reached storage.
 const MAX_CLASSIFY_TEXT_LENGTH = 10000;
 
 // Classify a destination response into an attempt status. `mapping` optionally
@@ -59,7 +67,7 @@ export function classifyResponse({ httpStatus, body, error, mapping = {} } = {})
   if (error) return ATTEMPT_STATUS.ERROR;
   const fullText = typeof body === 'string' ? body : JSON.stringify(body ?? {});
   const text = fullText.length > MAX_CLASSIFY_TEXT_LENGTH ? fullText.slice(0, MAX_CLASSIFY_TEXT_LENGTH) : fullText;
-  const test = (re) => { try { return re && new RegExp(re, 'i').test(text); } catch { return false; } };
+  const test = (re) => safeTest(re, text);
 
   if (mapping.duplicate && test(mapping.duplicate)) return ATTEMPT_STATUS.DUPLICATE;
   if (mapping.reject && test(mapping.reject)) return ATTEMPT_STATUS.REJECTED;

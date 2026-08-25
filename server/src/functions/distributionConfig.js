@@ -40,7 +40,17 @@ export default async function distributionConfig(ctx) {
       const subDeliveries = []; for (const id of subDeliveryIds) { const r = await svc.entities.SubDelivery.filter({ id }); if (r[0]) subDeliveries.push(r[0]); }
       const deliveryIds = [...new Set(subDeliveries.map((s) => s.delivery_id).filter(Boolean))];
       const deliveries = []; for (const id of deliveryIds) { const r = await svc.entities.Delivery.filter({ id }); if (r[0]) deliveries.push(r[0]); }
-      return { group, members, buyers, destinations, subDeliveries, deliveries };
+      // Needed only to validate a price_mode:'rule' member has any active
+      // per-state pricing configured at all (see configPublish.js). Loaded
+      // for exactly the referenced buyers, never a full-table read.
+      const buyerStateCpls = [];
+      if (svc.entities.BuyerStateCpl && members.some((m) => m.price_mode === 'rule')) {
+        for (const id of buyerIds) {
+          const r = await svc.entities.BuyerStateCpl.filter({ buyer_id: id });
+          buyerStateCpls.push(...(r || []));
+        }
+      }
+      return { group, members, buyers, destinations, subDeliveries, deliveries, buyerStateCpls };
     }
 
     if (action === 'create_draft') {
@@ -59,7 +69,26 @@ export default async function distributionConfig(ctx) {
     if (action === 'validate') {
       const cfg = await loadConfig(groupId);
       if (!cfg) return ctx.json({ error: 'not found' }, 404);
-      return engine.validateConfigForPublish(cfg, Date.now());
+      const result = engine.validateConfigForPublish(cfg, Date.now());
+      // Member-level diff against the last published version, for the
+      // operator confirmation dialog. Without this, the dialog could only
+      // ever show group-level field changes (its own local DIFF_FIELDS
+      // comparison) - a RouteMember repointed to a different SubDelivery, or
+      // any other member-level change, was published with no visible diff
+      // at all, even though computeConfigHash (used above) already reflects
+      // it. Absent when this is the first-ever publish (no prior version).
+      let diff = [];
+      if (cfg.group.config_version_id) {
+        const versions = await svc.entities.RouteConfigVersion.filter({ id: cfg.group.config_version_id });
+        const prior = versions[0];
+        if (prior && prior.snapshot) {
+          try {
+            const oldCfg = JSON.parse(prior.snapshot);
+            diff = engine.diffConfig(oldCfg, { group: cfg.group, members: cfg.members });
+          } catch { /* corrupt/legacy snapshot: no diff, not a validation failure */ }
+        }
+      }
+      return { ...result, diff };
     }
     if (action === 'publish') {
       const cfg = await loadConfig(groupId);

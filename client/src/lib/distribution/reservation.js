@@ -32,7 +32,13 @@ export async function reserve(store, { idempotencyKey, leadId, memberId, price =
   const incremented = [];
   for (const scope of scopes) {
     if (scope.limit == null) continue;
-    const ok = await store.incrementIfBelow(scope.key, Number(scope.limit));
+    // Reporting metadata only (never used for matching): populates
+    // CapCounter's descriptive columns on first creation of this scope_key.
+    const meta = scope.scopeType ? {
+      scope_type: scope.scopeType, scope_id: scope.memberId ?? null,
+      window: scope.window ?? null, window_start: scope.windowStart ?? null, limit: Number(scope.limit),
+    } : null;
+    const ok = await store.incrementIfBelow(scope.key, Number(scope.limit), meta);
     if (!ok) {
       for (const s of incremented) await store.decrement(s.key);
       // Record the failed outcome so concurrent duplicates see it (idempotent).

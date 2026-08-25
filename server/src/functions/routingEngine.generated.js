@@ -1,7 +1,7 @@
 // GENERATED FILE - DO NOT EDIT BY HAND.
 // Source of truth: src/lib/distribution/backend-entry.js and its imports.
 // Regenerate: node scripts/generate-backend-engine.mjs
-// canonical-engine-sha256: f20f89d472e72d3644347cfda847f382194398645fab5cd9b3fab3d0c6fdfc28
+// canonical-engine-sha256: adec7c58e5bf17fa8a4c24098eb02b73de9f994fb13f1a379a10fbf209ff61fa
 // src/lib/distribution/engine.js
 var REASON = {
   ELIGIBLE: "ELIGIBLE",
@@ -243,6 +243,9 @@ function routeWaterfall(groups, lead, ctx = {}) {
   }
   return { winner: null, reason: REASON.NO_ELIGIBLE_MEMBER, rrCursors: rrOut, trace };
 }
+function capScopeKey(memberId, window, windowStart) {
+  return `route_member:${memberId}:${window}:${window === "total" ? "all" : windowStart}`;
+}
 function capWindowStart(nowMs, window, tzOffsetMinutes = 0) {
   const local = new Date(nowMs + tzOffsetMinutes * 6e4);
   const y = local.getUTCFullYear();
@@ -445,6 +448,87 @@ function isWithinSchedule(nowMs, schedule, fallbackTz) {
   });
 }
 
+// src/lib/distribution/regexSafety.js
+var MAX_PATTERN_LENGTH = 200;
+var MAX_QUANTIFIERS = 12;
+function stripEscapes(src) {
+  return src.replace(/\\./g, "__");
+}
+function splitTopLevelAlternatives(body) {
+  const parts = [];
+  let depth = 0;
+  let start = 0;
+  for (let i = 0; i < body.length; i++) {
+    const c = body[i];
+    if (c === "(") depth += 1;
+    else if (c === ")") depth -= 1;
+    else if (c === "|" && depth === 0) {
+      parts.push(body.slice(start, i));
+      start = i + 1;
+    }
+  }
+  parts.push(body.slice(start));
+  return parts;
+}
+function hasAmbiguousAlternatives(alts) {
+  if (alts.length < 2) return false;
+  for (let i = 0; i < alts.length; i++) {
+    if (!alts[i]) continue;
+    for (let j = 0; j < alts.length; j++) {
+      if (i === j) continue;
+      if (alts[j].startsWith(alts[i])) return true;
+    }
+  }
+  return false;
+}
+function isSafeRegexPattern(pattern) {
+  const src = String(pattern ?? "");
+  if (!src) return { safe: true };
+  if (src.length > MAX_PATTERN_LENGTH) return { safe: false, reason: "pattern too long" };
+  const clean = stripEscapes(src);
+  const quantCount = (clean.match(/[+*]|\{\d+,?\d*\}/g) || []).length;
+  if (quantCount > MAX_QUANTIFIERS) return { safe: false, reason: "too many quantifiers" };
+  const stack = [];
+  let ambiguousAltGroups = 0;
+  for (let i = 0; i < clean.length; i++) {
+    const c = clean[i];
+    if (c === "(") {
+      stack.push({ start: i + 1 });
+      continue;
+    }
+    if (c === ")") {
+      const g = stack.pop();
+      if (!g) continue;
+      const body = clean.slice(g.start, i);
+      const rest = clean.slice(i + 1);
+      const quantified = rest[0] === "+" || rest[0] === "*" || rest[0] === "?" || /^\{\d+,?\d*\}/.test(rest);
+      const alts = splitTopLevelAlternatives(body);
+      if (quantified) {
+        const bodyHasQuantifier = /[+*]|\{\d+,?\d*\}/.test(body);
+        if (bodyHasQuantifier || alts.length > 1) {
+          return { safe: false, reason: "nested quantifier or quantified alternation" };
+        }
+      }
+      if (alts.length > 1 && hasAmbiguousAlternatives(alts)) {
+        ambiguousAltGroups += 1;
+        if (ambiguousAltGroups >= 2) {
+          return { safe: false, reason: "multiple ambiguous alternation groups" };
+        }
+      }
+    }
+  }
+  return { safe: true };
+}
+function safeTest(pattern, text) {
+  if (!pattern) return false;
+  if (!isSafeRegexPattern(pattern).safe) return false;
+  try {
+    return new RegExp(pattern, "i").test(text);
+  } catch {
+    return false;
+  }
+}
+
 // src/lib/distribution/deliveryAttempt.js
 var ATTEMPT_STATUS = {
   PENDING: "pending",
@@ -454,13 +538,20 @@ var ATTEMPT_STATUS = {
   DUPLICATE: "duplicate",
   QUEUED: "queued",
   ERROR: "error",
-  DEAD_LETTER: "dead_letter"
+  DEAD_LETTER: "dead_letter",
+  // A destination genuinely accepted this attempt, but a DIFFERENT
+  // destination had already won the same lead by the time this one
+  // completed (a cross-destination retry race). No business effect (no cap
+  // finalize, no wallet debit) is applied for a superseded attempt; see
+  // reserveAndDeliver's lead-level winner claim in distributeRun.js.
+  SUPERSEDED: "superseded"
 };
 var TERMINAL = /* @__PURE__ */ new Set([
   ATTEMPT_STATUS.ACCEPTED,
   ATTEMPT_STATUS.REJECTED,
   ATTEMPT_STATUS.DUPLICATE,
-  ATTEMPT_STATUS.DEAD_LETTER
+  ATTEMPT_STATUS.DEAD_LETTER,
+  ATTEMPT_STATUS.SUPERSEDED
 ]);
 function computeBackoffMs(attemptNumber, opts = {}) {
   const base = opts.baseMs ?? 1e3;
@@ -483,13 +574,7 @@ function classifyResponse({ httpStatus, body, error, mapping = {} } = {}) {
   if (error) return ATTEMPT_STATUS.ERROR;
   const fullText = typeof body === "string" ? body : JSON.stringify(body ?? {});
   const text = fullText.length > MAX_CLASSIFY_TEXT_LENGTH ? fullText.slice(0, MAX_CLASSIFY_TEXT_LENGTH) : fullText;
-  const test = (re) => {
-    try {
-      return re && new RegExp(re, "i").test(text);
-    } catch {
-      return false;
-    }
-  };
+  const test = (re) => safeTest(re, text);
   if (mapping.duplicate && test(mapping.duplicate)) return ATTEMPT_STATUS.DUPLICATE;
   if (mapping.reject && test(mapping.reject)) return ATTEMPT_STATUS.REJECTED;
   if (mapping.queue && test(mapping.queue)) return ATTEMPT_STATUS.QUEUED;
@@ -602,6 +687,7 @@ function projectSubDeliveryForClient(sd) {
     credential_updated_at: sd.credential_updated_at || null
   };
 }
+var MAX_SEND_TIMEOUT_MS = 2e4;
 function resolveSubDeliveryCfg(sd) {
   if (!sd) return null;
   const retry = parseJson(sd.retry_policy) || {};
@@ -619,7 +705,7 @@ function resolveSubDeliveryCfg(sd) {
     payloadTemplate: typeof sd.payload_template === "string" ? sd.payload_template : "",
     transforms: parseJson(sd.transforms) || [],
     responseMapping: toClassifyResponseMapping(parseJson(sd.response_mapping)),
-    timeoutMs: Number(sd.timeout_ms) || 1e4,
+    timeoutMs: Math.min(Number(sd.timeout_ms) || 1e4, MAX_SEND_TIMEOUT_MS),
     retryOpts: retry
   };
 }
@@ -727,6 +813,7 @@ function validConditionTree(node) {
   return false;
 }
 function num(v) {
+  if (v == null) return null;
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
 }
@@ -764,8 +851,9 @@ function buildWallet(buyer) {
   return { mode, enforce, outstanding: num(buyer.outstanding) ?? 0, creditLimit };
 }
 function buildRoutingSnapshot(records, ctx = {}) {
-  const { campaignId, configVersionId } = ctx;
+  const { campaignId, configVersionId, leadState } = ctx;
   const capCountsFor = ctx.capCountsFor || (() => 0);
+  const stateCplFor = ctx.stateCplFor || (() => null);
   const buyersById = indexBy(records.buyers, "id");
   const destById = indexBy(records.destinations, "id");
   const subDeliveriesById = indexBy(records.subDeliveries, "id");
@@ -779,7 +867,19 @@ function buildRoutingSnapshot(records, ctx = {}) {
     method: g.method || "priority",
     configHash: g.config_hash || null,
     weights: { price: num(g.price_weight) ?? 0.5, priority: num(g.priority_weight) ?? 0.5 },
-    members: (records.members || []).filter((m) => String(m.route_group_id) === String(g.id)).sort((a, b) => (a.priority || 0) - (b.priority || 0)).map((m) => buildMember(m, { buyersById, destById, subDeliveriesById, deliveriesById, healthByDest, healthBySubDelivery, capCountsFor, configErrors, nowMs: ctx.nowMs }))
+    members: (records.members || []).filter((m) => String(m.route_group_id) === String(g.id)).sort((a, b) => (a.priority || 0) - (b.priority || 0)).map((m) => buildMember(m, {
+      buyersById,
+      destById,
+      subDeliveriesById,
+      deliveriesById,
+      healthByDest,
+      healthBySubDelivery,
+      capCountsFor,
+      configErrors,
+      nowMs: ctx.nowMs,
+      leadState,
+      stateCplFor
+    }))
   }));
   return { groups, configVersionId: configVersionId || null, configErrors, configHash: hashConfig(records) };
 }
@@ -819,7 +919,7 @@ function resolveEndpoint(m, { destById, subDeliveriesById, deliveriesById, err }
   err("CONFIG_INVALID", m.destination_id ? "missing destination" : "missing sub_delivery_id");
   return null;
 }
-function buildMember(m, { buyersById, destById, subDeliveriesById, deliveriesById, healthByDest, healthBySubDelivery, capCountsFor, configErrors, nowMs }) {
+function buildMember(m, { buyersById, destById, subDeliveriesById, deliveriesById, healthByDest, healthBySubDelivery, capCountsFor, configErrors, nowMs, leadState, stateCplFor }) {
   let invalid = false;
   const err = (code, detail) => {
     invalid = true;
@@ -835,9 +935,14 @@ function buildMember(m, { buyersById, destById, subDeliveriesById, deliveriesByI
   const schedule = strictJson(m.schedule, () => err("CONFIG_INVALID", "bad schedule json"));
   const caps = buildCaps(m.caps, m.id, capCountsFor, () => err("CONFIG_INVALID", "bad caps"));
   const priceMode = ["fixed", "rule", "auction"].includes(m.price_mode) ? m.price_mode : "fixed";
-  const fixedPrice = num(m.fixed_price);
   const reservePrice = num(m.reserve_price);
+  let fixedPrice = num(m.fixed_price);
   if (priceMode === "fixed" && (fixedPrice == null || fixedPrice < 0)) err("CONFIG_INVALID", "invalid price");
+  if (priceMode === "rule" && leadState !== void 0) {
+    const rulePrice = num(stateCplFor(m.buyer_id, leadState));
+    if (rulePrice == null || rulePrice < 0) err("CONFIG_INVALID", "no active BuyerStateCpl price for this buyer/state");
+    fixedPrice = rulePrice;
+  }
   const buyerSnap = buyer ? { active: buyer.active, status: buyer.status } : { active: false, status: "missing" };
   const healthKey = endpoint ? endpoint.healthKey : m.destination_id;
   const healthRecord = healthBySubDelivery[healthKey] || healthByDest[healthKey] || null;
@@ -877,6 +982,30 @@ function indexBy(arr, key) {
   for (const r of arr || []) out[String(r[key])] = r;
   return out;
 }
+function buildMemberForRetry(rm, buyer, deliveryCfg) {
+  if (!rm) return null;
+  const priceMode = ["fixed", "rule", "auction"].includes(rm.price_mode) ? rm.price_mode : "fixed";
+  if (priceMode === "rule") return null;
+  let capsInvalid = false;
+  const caps = buildCaps(rm.caps, rm.id, () => 0, () => {
+    capsInvalid = true;
+  });
+  if (capsInvalid) return null;
+  const fixedPrice = num(rm.fixed_price);
+  if (priceMode === "fixed" && (fixedPrice == null || fixedPrice < 0)) return null;
+  return {
+    id: rm.id,
+    buyerId: rm.buyer_id,
+    destinationId: rm.destination_id || null,
+    subDeliveryId: deliveryCfg ? deliveryCfg.subDeliveryId : null,
+    delivery: deliveryCfg,
+    priceMode,
+    fixedPrice: fixedPrice ?? 0,
+    price: fixedPrice ?? 0,
+    caps: caps || {},
+    wallet: buildWallet(buyer)
+  };
+}
 function hashConfig(records) {
   const material = JSON.stringify({
     g: (records.groups || []).map((g) => [g.id, g.method, g.order_index, g.lifecycle, g.active]),
@@ -892,6 +1021,16 @@ function hashConfig(records) {
 
 // src/lib/distribution/snapshotLoader.js
 var PAGE = 200;
+var CAP_WINDOWS2 = ["total", "hourly", "daily", "weekly", "monthly"];
+function parseCapsJson(raw) {
+  if (raw == null || raw === "") return {};
+  if (typeof raw === "object") return raw;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return {};
+  }
+}
 var activeGroupCache = /* @__PURE__ */ new Map();
 async function loadAllFiltered(entity, query, { sort = "created_date", maxPages = 25 } = {}) {
   const out = [];
@@ -914,7 +1053,7 @@ async function hasActiveRouteGroup(db, campaignId, nowMs, ttlMs = 5e3) {
 function _clearActiveGroupCache() {
   activeGroupCache.clear();
 }
-async function loadRoutingSnapshot(db, { campaignId, nowMs, configVersionId }) {
+async function loadRoutingSnapshot(db, { campaignId, nowMs, configVersionId, leadState }) {
   const groups = await loadAllFiltered(db.entities.RouteGroup, { campaign_id: campaignId, active: true, lifecycle: "active" }, { sort: "order_index" });
   const groupIds = groups.map((g) => g.id);
   let members = [];
@@ -961,17 +1100,45 @@ async function loadRoutingSnapshot(db, { campaignId, nowMs, configVersionId }) {
   const capMap = {};
   if (db.entities.CapCounter) {
     for (const m of members) {
-      try {
-        const rows = await db.entities.CapCounter.filter({ scope_type: "route_member", scope_id: m.id });
-        for (const r of rows || []) if (r.window) capMap[`${m.id}:${r.window}`] = Number(r.count || 0);
-      } catch {
+      const parsedCaps = parseCapsJson(m.caps);
+      for (const w of CAP_WINDOWS2) {
+        if (parsedCaps[w] == null) continue;
+        const bucket = w === "total" ? "all" : capWindowStart(nowMs, w);
+        const key = capScopeKey(m.id, w, bucket);
+        try {
+          const rows = await db.entities.CapCounter.filter({ scope_key: key });
+          if (rows && rows[0]) capMap[`${m.id}:${w}`] = Number(rows[0].count || 0);
+        } catch {
+        }
       }
     }
   }
   const capCountsFor = (memberId, window) => capMap[`${memberId}:${window}`] || 0;
+  let vertical = null;
+  if (campaignId && db.entities.Campaign) {
+    try {
+      const rows = await db.entities.Campaign.filter({ id: campaignId });
+      vertical = rows && rows[0] && rows[0].vertical || null;
+    } catch {
+    }
+  }
+  const stateCplMap = {};
+  if (db.entities.BuyerStateCpl && vertical) {
+    for (const buyerId of buyerIds) {
+      try {
+        const rows = await db.entities.BuyerStateCpl.filter({ buyer_id: buyerId, vertical, active: true });
+        for (const r of rows || []) stateCplMap[`${buyerId}:${String(r.state || "").toUpperCase()}`] = Number(r.cpl);
+      } catch {
+      }
+    }
+  }
+  const stateCplFor = (buyerId, state) => {
+    const v = stateCplMap[`${buyerId}:${String(state || "").toUpperCase()}`];
+    return v == null ? null : v;
+  };
   return buildRoutingSnapshot(
     { groups, members, buyers, destinations, subDeliveries, deliveries, health },
-    { campaignId, nowMs, configVersionId, capCountsFor }
+    { campaignId, nowMs, configVersionId, capCountsFor, leadState, stateCplFor }
   );
 }
 
@@ -1105,19 +1272,102 @@ async function runSimulation(db, { campaignId, leadData, nowMs }) {
 }
 
 // src/lib/distribution/capStore.js
+function makeInMemoryCasStore({ yieldFn } = {}) {
+  const counters = /* @__PURE__ */ new Map();
+  const claims = /* @__PURE__ */ new Map();
+  const reservations = [];
+  let seq = 0;
+  const microYield = yieldFn || (() => new Promise((r) => setTimeout(r, 0)));
+  async function incrementIfBelow(key, limit, meta = null, maxRetry = 100) {
+    void meta;
+    for (let i = 0; i < maxRetry; i++) {
+      const cur = counters.get(key) || { value: 0, version: 0 };
+      const { value, version } = cur;
+      await microYield();
+      if (value >= limit) return false;
+      const latest = counters.get(key) || { value: 0, version: 0 };
+      if (latest.version !== version) continue;
+      counters.set(key, { value: value + 1, version: version + 1 });
+      return true;
+    }
+    return false;
+  }
+  async function decrement(key) {
+    for (let i = 0; i < 100; i++) {
+      const cur = counters.get(key) || { value: 0, version: 0 };
+      const { value, version } = cur;
+      await microYield();
+      const latest = counters.get(key) || { value: 0, version: 0 };
+      if (latest.version !== version) continue;
+      counters.set(key, { value: Math.max(0, value - 1), version: version + 1 });
+      return;
+    }
+  }
+  async function getCount(key) {
+    return (counters.get(key) || { value: 0 }).value;
+  }
+  async function claim(key) {
+    const cur = claims.get(key);
+    await microYield();
+    if (claims.get(key)) return false;
+    if (cur) return false;
+    claims.set(key, true);
+    return true;
+  }
+  async function isClaimed(key) {
+    return !!claims.get(key);
+  }
+  async function putReservation(rec) {
+    const row = { ...rec, id: "r" + ++seq };
+    reservations.push(row);
+    return row;
+  }
+  async function getReservation(idempotencyKey2, memberId) {
+    return reservations.find((r) => r.idempotency_key === idempotencyKey2 && r.route_member_id === memberId) || null;
+  }
+  async function awaitReservation(idempotencyKey2, memberId, tries = 1e3) {
+    for (let i = 0; i < tries; i++) {
+      const r = await getReservation(idempotencyKey2, memberId);
+      if (r) return r;
+      await microYield();
+    }
+    return null;
+  }
+  async function updateReservation(id, patch) {
+    const r = reservations.find((x) => x.id === id);
+    if (r) Object.assign(r, patch);
+  }
+  return {
+    incrementIfBelow,
+    decrement,
+    getCount,
+    claim,
+    isClaimed,
+    putReservation,
+    getReservation,
+    awaitReservation,
+    updateReservation,
+    _debug: { counters, reservations }
+  };
+}
 function makeEntityCapStore(db) {
-  async function ensureCounter(key) {
+  async function ensureCounter(key, meta) {
     let rows = await db.entities.CapCounter.filter({ scope_key: key });
     if (!rows.length) {
-      await db.entities.CapCounter.create({ scope_key: key, count: 0 });
-      rows = await db.entities.CapCounter.filter({ scope_key: key });
+      try {
+        await db.entities.CapCounter.create({ scope_key: key, count: 0, ...meta || {} });
+      } catch (err) {
+        rows = await db.entities.CapCounter.filter({ scope_key: key });
+        if (!rows.length) throw err;
+      }
+      if (!rows.length) rows = await db.entities.CapCounter.filter({ scope_key: key });
     }
     rows.sort((a, b) => String(a.id).localeCompare(String(b.id)));
     return rows[0];
   }
-  async function incrementIfBelow(key, limit, maxRetry = 25) {
+  async function incrementIfBelow(key, limit, meta = null, maxRetry = 25) {
     for (let i = 0; i < maxRetry; i++) {
-      const row = await ensureCounter(key);
+      const row = await ensureCounter(key, meta);
       const value = Number(row.count || 0);
       if (value >= limit) return false;
       const res = await db.entities.CapCounter.updateMany(
@@ -1147,6 +1397,10 @@ function makeEntityCapStore(db) {
   async function claim(key) {
     return incrementIfBelow(`claim:${key}`, 1);
   }
+  async function isClaimed(key) {
+    const rows = await db.entities.CapCounter.filter({ scope_key: `claim:${key}` });
+    return !!(rows && rows[0] && Number(rows[0].count || 0) >= 1);
+  }
   async function getReservation(idempotencyKey2, memberId) {
     const rows = await db.entities.CapReservation.filter({ idempotency_key: idempotencyKey2, route_member_id: memberId });
     return rows[0] || null;
@@ -1165,7 +1419,7 @@ function makeEntityCapStore(db) {
   async function updateReservation(id, patch) {
     return db.entities.CapReservation.update(id, patch);
   }
-  return { incrementIfBelow, decrement, getCount, claim, getReservation, awaitReservation, putReservation, updateReservation };
+  return { incrementIfBelow, decrement, getCount, claim, isClaimed, getReservation, awaitReservation, putReservation, updateReservation };
 }
 
 // src/lib/distribution/reservation.js
@@ -1190,7 +1444,14 @@ async function reserve(store, { idempotencyKey: idempotencyKey2, leadId, memberI
   const incremented = [];
   for (const scope of scopes) {
     if (scope.limit == null) continue;
-    const ok = await store.incrementIfBelow(scope.key, Number(scope.limit));
+    const meta = scope.scopeType ? {
+      scope_type: scope.scopeType,
+      scope_id: scope.memberId ?? null,
+      window: scope.window ?? null,
+      window_start: scope.windowStart ?? null,
+      limit: Number(scope.limit)
+    } : null;
+    const ok = await store.incrementIfBelow(scope.key, Number(scope.limit), meta);
     if (!ok) {
       for (const s of incremented) await store.decrement(s.key);
       const failed = await store.putReservation({
@@ -1229,6 +1490,57 @@ async function release(store, reservation) {
 }
 
 // src/lib/distribution/walletStore.js
+function makeInMemoryWalletStore({ initial = {}, yieldFn } = {}) {
+  const balances = /* @__PURE__ */ new Map();
+  for (const [b, v] of Object.entries(initial)) balances.set(b, { balance: v, version: 0 });
+  const claims = /* @__PURE__ */ new Map();
+  const txns = [];
+  let seq = 0;
+  const microYield = yieldFn || (() => new Promise((r) => setTimeout(r, 0)));
+  async function claimTxn(key) {
+    const cur = claims.get(key);
+    await microYield();
+    if (claims.get(key) || cur) return false;
+    claims.set(key, true);
+    return true;
+  }
+  async function getBalance(buyerId) {
+    return balances.get(buyerId) || { balance: 0, version: 0 };
+  }
+  async function casAdjustBalance(buyerId, expectedVersion, newBalance) {
+    const cur = balances.get(buyerId) || { balance: 0, version: 0 };
+    await microYield();
+    const latest = balances.get(buyerId) || { balance: 0, version: 0 };
+    if (latest.version !== expectedVersion) return false;
+    balances.set(buyerId, { balance: newBalance, version: expectedVersion + 1 });
+    return true;
+  }
+  async function appendTxn(txn) {
+    const row = { ...txn, id: "t" + ++seq };
+    txns.push(row);
+    return row;
+  }
+  async function getTxnByKey(key) {
+    return txns.find((t) => t.idempotency_key === key) || null;
+  }
+  async function awaitTxnByKey(key, tries = 1e3) {
+    for (let i = 0; i < tries; i++) {
+      const t = await getTxnByKey(key);
+      if (t) return t;
+      await microYield();
+    }
+    return null;
+  }
+  return {
+    claimTxn,
+    getBalance,
+    casAdjustBalance,
+    appendTxn,
+    getTxnByKey,
+    awaitTxnByKey,
+    _debug: { balances, txns }
+  };
+}
 function makeEntityWalletStore(db) {
   async function ensureWallet(buyerId) {
     let rows = await db.entities.BuyerWallet.filter({ buyer_id: buyerId });
@@ -1584,6 +1896,11 @@ async function deliverDirectPost(cfg, ctx) {
     if (!isLocalhost(url.hostname) && !allowed.includes(url.hostname)) {
       return failClosed(ctx, cfg, nowMs, "host_not_allowed", "HOST_NOT_ALLOWED");
     }
+  } else if (typeof ctx.validateTarget === "function") {
+    const check = await ctx.validateTarget(url);
+    if (!check || check.ok !== true) {
+      return failClosed(ctx, cfg, nowMs, check && check.reason ? check.reason : "target_not_allowed", "SSRF_BLOCKED");
+    }
   }
   let payload;
   if (cfg.payloadTemplate && String(cfg.payloadTemplate).trim() !== "") {
@@ -1623,9 +1940,11 @@ async function deliverDirectPost(cfg, ctx) {
     lead_id: cfg.leadId,
     sub_delivery_id: cfg.subDeliveryId || null,
     destination_id: cfg.destinationId,
+    route_member_id: cfg.routeMemberId || null,
     trigger: cfg.trigger || "primary",
     attempt_number: attemptNumber,
     idempotency_key: cfg.idempotencyKey,
+    run_idempotency_key: cfg.runIdempotencyKey || null,
     is_primary: !!cfg.isPrimary,
     status: ATTEMPT_STATUS.PENDING,
     started_at: new Date(nowMs).toISOString()
@@ -1693,8 +2012,10 @@ async function failClosed(ctx, cfg, nowMs, errorClass, code) {
   const rec = await ctx.store.createAttempt({
     lead_id: cfg.leadId,
     destination_id: cfg.destinationId,
+    route_member_id: cfg.routeMemberId || null,
     attempt_number: cfg.attemptNumber || 1,
     idempotency_key: cfg.idempotencyKey,
+    run_idempotency_key: cfg.runIdempotencyKey || null,
     is_primary: !!cfg.isPrimary,
     status: ATTEMPT_STATUS.ERROR,
     error_class: errorClass,
@@ -1966,14 +2287,25 @@ function makeInMemoryAttemptStore({ yieldFn } = {}) {
     async listDue(nowMs) {
       return attempts.filter((a) => a.status === "error" && a.next_retry_at != null && Date.parse(a.next_retry_at) <= nowMs && (a.lease_until == null || Date.parse(a.lease_until) <= nowMs));
     },
-    // Atomic lease claim (honest CAS on lease_version). Exactly one concurrent
-    // worker wins an unleased (or expired-lease) attempt.
-    async claimLease(id, workerId, nowMs, leaseMs) {
+    // Atomic lease claim (honest CAS on lease_version, and on status when the
+    // caller supplies requiredStatus). Exactly one concurrent worker wins an
+    // unleased (or expired-lease) attempt. The optional status check closes a
+    // real gap a lease-only CAS leaves open: the automatic retry worker reads
+    // due attempts filtered to status:'error' (listDue) and must not resurrect
+    // one that a concurrent completion (a manual retry, or another worker)
+    // already moved to a different terminal status between that read and this
+    // claim - it passes requiredStatus:'error' so the claim itself fails
+    // atomically in that case. manualRetry intentionally omits it: an operator
+    // retrying a specific attempt by id may deliberately target one that is
+    // no longer 'error' (e.g. dead_letter), and the lease CAS alone still
+    // prevents two concurrent claims of the same row.
+    async claimLease(id, workerId, nowMs, leaseMs, requiredStatus) {
       const a = attempts.find((x) => x.id === id);
       if (!a) return false;
       const version = a.lease_version || 0;
       await microYield();
       const latest = attempts.find((x) => x.id === id);
+      if (requiredStatus && latest.status !== requiredStatus) return false;
       const activeLease = latest.lease_until ? Date.parse(latest.lease_until) : 0;
       if (activeLease > nowMs) return false;
       if ((latest.lease_version || 0) !== version) return false;
@@ -2013,15 +2345,17 @@ function makeEntityAttemptStore(db) {
       const rows = await db.entities.DeliveryAttempt.filter({ status: "error" }, "next_retry_at", limit);
       return rows.filter((a) => a.next_retry_at && a.next_retry_at <= iso && (!a.lease_until || a.lease_until <= iso));
     },
-    async claimLease(id, workerId, nowMs, leaseMs) {
+    async claimLease(id, workerId, nowMs, leaseMs, requiredStatus) {
       const rows = await db.entities.DeliveryAttempt.filter({ id });
       const a = rows[0];
       if (!a) return false;
+      if (requiredStatus && a.status !== requiredStatus) return false;
       const activeLease = a.lease_until ? Date.parse(a.lease_until) : 0;
       if (activeLease > nowMs) return false;
       const version = a.lease_version || 0;
+      const match = requiredStatus ? { id, lease_version: version, status: requiredStatus } : { id, lease_version: version };
       const res = await db.entities.DeliveryAttempt.updateMany(
-        { id, lease_version: version },
+        match,
         { $set: { lease_until: new Date(nowMs + leaseMs).toISOString(), leased_by: workerId, lease_version: version + 1 } }
       );
       return !!(res && res.updated > 0);
@@ -2045,20 +2379,21 @@ var RUN = {
   AMBIGUOUS: "ambiguous",
   SKIPPED: "skipped"
 };
-var CAP_WINDOWS2 = ["total", "hourly", "daily", "weekly", "monthly"];
+var CAP_WINDOWS3 = ["total", "hourly", "daily", "weekly", "monthly"];
 function capScopesFor(member, nowMs, tzOffsetMinutes = 0) {
   const scopes = [];
   const caps = member.caps || {};
-  for (const w of CAP_WINDOWS2) {
+  for (const w of CAP_WINDOWS3) {
     const cfg = caps[w];
     if (!cfg || cfg.limit == null) continue;
     const bucket = w === "total" ? "all" : capWindowStart(nowMs, w, tzOffsetMinutes);
     scopes.push({
-      key: `route_member:${member.id}:${w}:${bucket}`,
+      key: capScopeKey(member.id, w, bucket),
       limit: Number(cfg.limit),
       window: w,
       windowStart: w === "total" ? null : bucket,
-      memberId: member.id
+      memberId: member.id,
+      scopeType: "route_member"
     });
   }
   return scopes;
@@ -2070,108 +2405,154 @@ function walletPolicyFor(member) {
   if (w.mode === "prepaid") return { creditLimit: Infinity };
   return null;
 }
-function makeDeliver({ db, stores, ctx, sink }) {
+async function isLeadAlreadySold(capStore, leadId) {
+  if (!leadId || !capStore) return false;
+  return capStore.isClaimed(winnerClaimKey(leadId));
+}
+function winnerClaimKey(leadId) {
+  return `winner:${leadId}`;
+}
+async function reserveAndDeliver({ member, meta, stores, ctx, sink }) {
   const { attemptStore, capStore, walletStore } = stores;
-  return async function deliver(member, meta) {
-    const nowMs = ctx.nowMs;
-    const price = resolvePrice(member);
-    const memberKey = `${ctx.idempotencyKey}:${member.id}`;
-    const scopes = capScopesFor(member, nowMs, ctx.tzOffsetMinutes || 0);
-    let reservation = null;
-    if (scopes.length) {
-      const res = await reserve(capStore, {
-        idempotencyKey: ctx.idempotencyKey,
-        leadId: ctx.leadId,
-        memberId: member.id,
-        price,
-        scopes
-      });
-      if (!res.ok) {
-        return { status: ATTEMPT_STATUS.REJECTED, reason: res.code || RESERVE.CAP_EXCEEDED, revenue: 0, retryable: false };
-      }
-      reservation = res.reservation;
-      if (res.code === RESERVE.ALREADY_RESERVED) {
-        return { status: ATTEMPT_STATUS.REJECTED, reason: "ALREADY_RESERVED", revenue: 0, retryable: false };
-      }
+  const nowMs = ctx.nowMs;
+  const price = resolvePrice(member);
+  const attemptNumber = meta && meta.attemptNumber || 1;
+  const trigger = meta && meta.trigger || "primary";
+  const memberKey = `${ctx.idempotencyKey}:${member.id}`;
+  if (await isLeadAlreadySold(capStore, ctx.leadId)) {
+    return { status: ATTEMPT_STATUS.SUPERSEDED, reason: "LEAD_ALREADY_SOLD", revenue: 0, retryable: false, wonLead: false };
+  }
+  const scopes = capScopesFor(member, nowMs, ctx.tzOffsetMinutes || 0);
+  let reservation = null;
+  if (scopes.length) {
+    const res = await reserve(capStore, {
+      idempotencyKey: `${ctx.idempotencyKey}:${attemptNumber}`,
+      leadId: ctx.leadId,
+      memberId: member.id,
+      price,
+      scopes
+    });
+    if (!res.ok) {
+      return { status: ATTEMPT_STATUS.REJECTED, reason: res.code || RESERVE.CAP_EXCEEDED, revenue: 0, retryable: false };
     }
-    const cfg = member.delivery;
-    if (!cfg || !cfg.targetUrl) {
-      if (reservation) await release(capStore, reservation);
-      return { status: ATTEMPT_STATUS.ERROR, errorClass: "no_endpoint", revenue: 0, retryable: false };
+    reservation = res.reservation;
+    if (res.code === RESERVE.ALREADY_RESERVED) {
+      return { status: ATTEMPT_STATUS.REJECTED, reason: "ALREADY_RESERVED", revenue: 0, retryable: false };
     }
-    let out;
+  }
+  const cfg = member.delivery;
+  if (!cfg || !cfg.targetUrl) {
+    if (reservation) await release(capStore, reservation);
+    return { status: ATTEMPT_STATUS.ERROR, errorClass: "no_endpoint", revenue: 0, retryable: false };
+  }
+  let out;
+  try {
+    out = await deliverDirectPost({
+      ...cfg,
+      destinationId: member.destinationId || null,
+      routeMemberId: member.id,
+      leadId: ctx.leadId,
+      leadData: ctx.leadData,
+      idempotencyKey: memberKey,
+      // The bare, non-member-scoped run key, persisted alongside the
+      // combined one so a LATER async retry (which only has the stored
+      // attempt row, not this closure's ctx) can pass it back in as its own
+      // ctx.idempotencyKey and reconstruct the IDENTICAL outbound
+      // Idempotency-Key header - never a different one for the same logical
+      // attempt, which would defeat the buyer's own dedup and increase,
+      // rather than close, the double-accept risk a retry already carries.
+      runIdempotencyKey: ctx.idempotencyKey,
+      attemptNumber,
+      isPrimary: trigger === "primary" && attemptNumber === 1,
+      trigger
+    }, {
+      store: attemptStore,
+      nowMs,
+      fetchImpl: ctx.fetchImpl,
+      testMode: !!ctx.testMode,
+      allowlistHosts: ctx.allowlistHosts || [],
+      resolveCredential: ctx.resolveCredential,
+      validateTarget: ctx.validateTarget
+    });
+  } catch (err) {
+    if (reservation) await release(capStore, reservation);
+    return {
+      status: ATTEMPT_STATUS.ERROR,
+      errorClass: String(err && err.message || err).slice(0, 60),
+      revenue: 0,
+      retryable: false
+    };
+  }
+  if (ctx.healthStore) {
     try {
-      out = await deliverDirectPost({
-        ...cfg,
-        destinationId: member.destinationId || null,
-        leadId: ctx.leadId,
-        leadData: ctx.leadData,
-        idempotencyKey: memberKey,
-        attemptNumber: meta.attemptNumber || 1,
-        isPrimary: (meta.attemptNumber || 1) === 1,
-        trigger: "primary"
-      }, {
-        store: attemptStore,
+      await ctx.healthStore.recordResult(
+        { subDeliveryId: member.subDeliveryId || null, destinationId: member.destinationId || null },
+        out.status === ATTEMPT_STATUS.ACCEPTED,
         nowMs,
-        fetchImpl: ctx.fetchImpl,
-        testMode: !!ctx.testMode,
-        allowlistHosts: ctx.allowlistHosts || [],
-        resolveCredential: ctx.resolveCredential
-      });
-    } catch (err) {
+        ctx.healthOpts
+      );
+    } catch {
+    }
+  }
+  if (out.status === ATTEMPT_STATUS.ACCEPTED) {
+    const won = await capStore.claim(winnerClaimKey(ctx.leadId));
+    if (!won) {
       if (reservation) await release(capStore, reservation);
+      if (out.attemptId) {
+        try {
+          await attemptStore.updateAttempt(out.attemptId, { status: ATTEMPT_STATUS.SUPERSEDED });
+        } catch {
+        }
+      }
+      if (sink) sink.balanceDecision = "superseded_duplicate_sale";
       return {
-        status: ATTEMPT_STATUS.ERROR,
-        errorClass: String(err && err.message || err).slice(0, 60),
+        status: ATTEMPT_STATUS.SUPERSEDED,
         revenue: 0,
-        retryable: false
+        httpStatus: out.httpStatus ?? null,
+        retryable: false,
+        attemptId: out.attemptId,
+        balanceDecision: "superseded_duplicate_sale",
+        wonLead: false
       };
     }
-    if (ctx.healthStore) {
+    if (reservation) await finalize(capStore, reservation);
+    const policy = walletPolicyFor(member);
+    if (policy && price > 0) {
       try {
-        await ctx.healthStore.recordResult(
-          { subDeliveryId: member.subDeliveryId || null, destinationId: member.destinationId || null },
-          out.status === ATTEMPT_STATUS.ACCEPTED,
-          nowMs,
-          ctx.healthOpts
-        );
+        const debit = await walletDebit(walletStore, {
+          buyerId: member.buyerId,
+          amount: price,
+          idempotencyKey: `sale:${memberKey}`,
+          creditLimit: policy.creditLimit,
+          type: "debit",
+          description: `lead ${ctx.leadId}`
+        });
+        out.balanceDecision = debit.applied ? "debited" : debit.duplicate ? "duplicate" : debit.code || "not_applied";
       } catch {
+        out.balanceDecision = "debit_error";
       }
+      if (sink) sink.balanceDecision = out.balanceDecision;
+    } else if (sink) {
+      sink.balanceDecision = "not_applicable";
     }
-    if (out.status === ATTEMPT_STATUS.ACCEPTED) {
-      if (reservation) await finalize(capStore, reservation);
-      const policy = walletPolicyFor(member);
-      if (policy && price > 0) {
-        try {
-          const debit = await walletDebit(walletStore, {
-            buyerId: member.buyerId,
-            amount: price,
-            idempotencyKey: `sale:${memberKey}`,
-            creditLimit: policy.creditLimit,
-            type: "debit",
-            description: `lead ${ctx.leadId}`
-          });
-          out.balanceDecision = debit.applied ? "debited" : debit.duplicate ? "duplicate" : debit.code || "not_applied";
-        } catch {
-          out.balanceDecision = "debit_error";
-        }
-        if (sink) sink.balanceDecision = out.balanceDecision;
-      } else if (sink) {
-        sink.balanceDecision = "not_applicable";
-      }
-    } else if (reservation) {
-      await release(capStore, reservation);
-    }
-    return {
-      status: out.status,
-      revenue: out.revenue || 0,
-      httpStatus: out.httpStatus ?? null,
-      errorClass: out.errorClass ?? null,
-      retryable: !!out.retryable,
-      attemptId: out.attemptId,
-      buyerLeadId: out.buyerLeadId ?? null,
-      balanceDecision: out.balanceDecision ?? null
-    };
+  } else if (reservation) {
+    await release(capStore, reservation);
+  }
+  return {
+    status: out.status,
+    revenue: out.revenue || 0,
+    httpStatus: out.httpStatus ?? null,
+    errorClass: out.errorClass ?? null,
+    retryable: !!out.retryable,
+    attemptId: out.attemptId,
+    buyerLeadId: out.buyerLeadId ?? null,
+    balanceDecision: out.balanceDecision ?? null,
+    wonLead: out.status === ATTEMPT_STATUS.ACCEPTED
+  };
+}
+function makeDeliver({ stores, ctx, sink }) {
+  return async function deliver(member, meta) {
+    return reserveAndDeliver({ member, meta, stores, ctx, sink });
   };
 }
 function toRunStatus(result) {
@@ -2186,7 +2567,7 @@ function toRunStatus(result) {
       return RUN.NO_ELIGIBLE;
     case "Exhausted": {
       const ambiguous = (result.attempts || []).some(
-        (a) => a.status === ATTEMPT_STATUS.ERROR && ["timeout", "network_error"].includes(String(a.error_class || ""))
+        (a) => a.status === ATTEMPT_STATUS.ERROR && ["timeout", "network_error"].includes(String(a.error_class || "")) || a.status === ATTEMPT_STATUS.QUEUED || a.status === ATTEMPT_STATUS.SUPERSEDED
       );
       if (ambiguous) return RUN.AMBIGUOUS;
       const anyDelivered = (result.attempts || []).some((a) => a.status === ATTEMPT_STATUS.REJECTED);
@@ -2216,7 +2597,11 @@ async function runDistribution(db, ctx) {
       await trace({ result: "no_route_config", winner_member_id: "", evaluated_candidates: "[]", fallthrough_path: "[]" });
       return { ran: false, status: RUN.NO_ELIGIBLE, reason: "no_route_config" };
     }
-    const snap = ctx.snapshot || await loadRoutingSnapshot(db, { campaignId: ctx.campaignId, nowMs });
+    const snap = ctx.snapshot || await loadRoutingSnapshot(db, {
+      campaignId: ctx.campaignId,
+      nowMs,
+      leadState: (ctx.leadData || {}).state
+    });
     const stores = ctx.stores || {
       attemptStore: makeEntityAttemptStore(db),
       capStore: makeEntityCapStore(db),
@@ -2334,34 +2719,43 @@ function backoffWithJitter(attemptNumber, seed, opts = {}) {
   const u = opts.rng ? opts.rng() : seededUnit(`${seed}:${attemptNumber}`);
   return Math.min(opts.maxMs ?? 36e5, Math.round(base * (0.5 + 0.5 * u)));
 }
+var DEFAULT_LEASE_MS = 9e4;
 async function runRetryWorker(store, deliverFn, ctx) {
-  const { nowMs, workerId, leaseMs = 3e4, healthStore, maxAttempts = 5, retryOpts = {} } = ctx;
+  const { nowMs, workerId, leaseMs = DEFAULT_LEASE_MS, healthStore, maxAttempts = 5, retryOpts = {}, isLeadSold, now } = ctx;
+  const clock = typeof now === "function" ? now : () => nowMs;
   const due = await store.listDue(nowMs);
   const processed = [];
   for (const a of due) {
-    const won = await store.claimLease(a.id, workerId, nowMs, leaseMs);
+    const claimNowMs = clock();
+    const won = await store.claimLease(a.id, workerId, claimNowMs, leaseMs, "error");
     if (!won) continue;
+    if (typeof isLeadSold === "function" && await isLeadSold(a.lead_id)) {
+      await store.updateAttempt(a.id, { status: ATTEMPT_STATUS.SUPERSEDED, next_retry_at: null, lease_until: null });
+      processed.push({ id: a.id, worker: workerId, status: ATTEMPT_STATUS.SUPERSEDED });
+      continue;
+    }
     const nextAttemptNum = (a.attempt_number || 1) + 1;
     const res = await deliverFn({ ...a, attempt_number: nextAttemptNum });
     const success = res.status === ATTEMPT_STATUS.ACCEPTED;
+    const settleNowMs = clock();
     if (healthStore) {
       await healthStore.recordResult(
         { subDeliveryId: a.sub_delivery_id || null, destinationId: a.destination_id || null },
         success,
-        nowMs,
+        settleNowMs,
         ctx.healthOpts
       );
     }
-    if (success || res.status === ATTEMPT_STATUS.REJECTED || res.status === ATTEMPT_STATUS.DUPLICATE) {
+    if (success || res.status === ATTEMPT_STATUS.REJECTED || res.status === ATTEMPT_STATUS.DUPLICATE || res.status === ATTEMPT_STATUS.SUPERSEDED) {
       await store.updateAttempt(a.id, { status: res.status, next_retry_at: null, lease_until: null, attempt_number: nextAttemptNum });
-    } else if (nextAttemptNum >= maxAttempts) {
+    } else if (nextAttemptNum >= maxAttempts || res.retryable === false) {
       await store.updateAttempt(a.id, { status: ATTEMPT_STATUS.DEAD_LETTER, next_retry_at: null, lease_until: null, attempt_number: nextAttemptNum });
     } else {
       const delay = backoffWithJitter(nextAttemptNum, a.id, retryOpts);
       await store.updateAttempt(a.id, {
         status: ATTEMPT_STATUS.ERROR,
         attempt_number: nextAttemptNum,
-        next_retry_at: new Date(nowMs + delay).toISOString(),
+        next_retry_at: new Date(settleNowMs + delay).toISOString(),
         lease_until: null
       });
     }
@@ -2372,8 +2766,12 @@ async function runRetryWorker(store, deliverFn, ctx) {
 async function manualRetry(store, attemptId, deliverFn, ctx) {
   const a = await store.getAttempt(attemptId);
   if (!a) return { ok: false, reason: "not_found" };
-  const won = await store.claimLease(attemptId, ctx.workerId || "manual", ctx.nowMs, ctx.leaseMs || 3e4);
+  const won = await store.claimLease(attemptId, ctx.workerId || "manual", ctx.nowMs, ctx.leaseMs || DEFAULT_LEASE_MS);
   if (!won) return { ok: false, reason: "leased" };
+  if (typeof ctx.isLeadSold === "function" && await ctx.isLeadSold(a.lead_id)) {
+    await store.updateAttempt(attemptId, { status: ATTEMPT_STATUS.SUPERSEDED, next_retry_at: null, lease_until: null });
+    return { ok: true, status: ATTEMPT_STATUS.SUPERSEDED };
+  }
   const nextAttemptNum = (a.attempt_number || 1) + 1;
   const res = await deliverFn({ ...a, attempt_number: nextAttemptNum });
   await store.updateAttempt(attemptId, {
@@ -2496,9 +2894,15 @@ function computeConfigHash(group, members) {
   const material = JSON.stringify({
     g: [group.id, group.method, group.order_index, group.price_weight, group.priority_weight],
     m: (members || []).map((m) => [
+      // sub_delivery_id is the CANONICAL destination pointer; destination_id
+      // is deprecated compatibility only (see RouteMember.json). Omitting it
+      // meant repointing a member from one SubDelivery to another under the
+      // same buyer produced no diff and an unchanged hash - a real gap
+      // against RouteConfigVersion's own explainability guarantee.
       m.id,
       m.buyer_id,
       m.destination_id,
+      m.sub_delivery_id,
       m.active,
       m.priority,
       m.weight,
@@ -2518,7 +2922,7 @@ function computeConfigHash(group, members) {
   }
   return (h >>> 0).toString(16).padStart(8, "0");
 }
-function validateConfigForPublish({ group, members, buyers, destinations, subDeliveries, deliveries }, nowMs) {
+function validateConfigForPublish({ group, members, buyers, destinations, subDeliveries, deliveries, buyerStateCpls }, nowMs) {
   const errors = [];
   if (!group || !group.campaign_id) errors.push({ code: "CONFIG_INVALID", detail: "group missing campaign" });
   if (!members || members.length === 0) errors.push({ code: "CONFIG_INVALID", detail: "group has no members" });
@@ -2536,6 +2940,10 @@ function validateConfigForPublish({ group, members, buyers, destinations, subDel
     if (!b) errors.push({ member_id: m.id, code: "CONFIG_INVALID", detail: "buyer not found" });
     else if (!(String(b.status).toLowerCase() === "active" && b.active === true)) {
       errors.push({ member_id: m.id, code: "BUYER_INELIGIBLE", detail: "buyer not active" });
+    }
+    if (m.price_mode === "rule" && Array.isArray(buyerStateCpls)) {
+      const hasCoverage = buyerStateCpls.some((r) => String(r.buyer_id) === String(m.buyer_id) && r.active !== false);
+      if (!hasCoverage) errors.push({ member_id: m.id, code: "CONFIG_INVALID", detail: "rule-mode member: buyer has no active BuyerStateCpl coverage" });
     }
     if (m.sub_delivery_id) {
       const sd = subById[m.sub_delivery_id];
@@ -2573,7 +2981,7 @@ function diffConfig(oldCfg, newCfg) {
   for (const id of /* @__PURE__ */ new Set([...Object.keys(m0), ...Object.keys(m1)])) {
     if (!m0[id]) changes.push({ scope: "member", id, change: "added" });
     else if (!m1[id]) changes.push({ scope: "member", id, change: "removed" });
-    else for (const k of ["buyer_id", "destination_id", "active", "priority", "weight", "fixed_price", "reserve_price", "filters", "caps", "schedule"]) {
+    else for (const k of ["buyer_id", "destination_id", "sub_delivery_id", "active", "priority", "weight", "price_mode", "fixed_price", "reserve_price", "conditions", "filters", "caps", "schedule"]) {
       if (JSON.stringify(m0[id][k]) !== JSON.stringify(m1[id][k])) changes.push({ scope: "member", id, field: k, from: m0[id][k] ?? null, to: m1[id][k] ?? null });
     }
   }
@@ -2678,11 +3086,15 @@ export {
   applyTransform,
   backoffWithJitter,
   buildAttemptRecord,
+  buildCaps,
+  buildMemberForRetry,
   buildModeAudit,
   buildPayloadFromTemplate,
   buildPingPayload,
   buildRoutingSnapshot,
   buildVersionSnapshot,
+  buildWallet,
+  capScopeKey,
   capScopesFor,
   capWindowStart,
   classifyResponse,
@@ -2704,7 +3116,9 @@ export {
   idempotencyKey,
   isBlocked,
   isCanaryLead,
+  isLeadAlreadySold,
   isOperator,
+  isSafeRegexPattern,
   isValidTrustedForm,
   isWithinSchedule,
   loadRoutingSnapshot,
@@ -2713,7 +3127,9 @@ export {
   makeEntityHealthStore,
   makeEntityWalletStore,
   makeInMemoryAttemptStore,
+  makeInMemoryCasStore,
   makeInMemoryHealthStore,
+  makeInMemoryWalletStore,
   manualRetry,
   missingRequiredFields,
   nextHealth,
@@ -2726,6 +3142,7 @@ export {
   redact,
   release,
   reserve,
+  reserveAndDeliver,
   resolveCampaign,
   resolvePrice,
   resolveSubDeliveryCfg,
@@ -2738,6 +3155,7 @@ export {
   runRetryWorker,
   runShadow,
   runSimulation,
+  safeTest,
   selectAuction,
   selectHybrid,
   selectPriority,

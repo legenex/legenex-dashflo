@@ -25,7 +25,7 @@ function makeDb({ groups = [], members = [], buyers = [], destinations = [], sub
       Delivery: { filter: filterOne(deliveries) },
       RouteConfigVersion: {
         create: async (data) => { const row = { id: `rcv-${created.versions.length + 1}`, ...data }; created.versions.push(row); return row; },
-        filter: async () => created.versions,
+        filter: async (q) => (q && q.id ? created.versions.filter((v) => v.id === q.id) : created.versions),
       },
       DistributionAudit: { create: async (data) => { created.audits.push(data); return data; } },
     },
@@ -93,5 +93,47 @@ describe('distributionConfig: validate/publish load the real SubDelivery/Deliver
     const db = makeDb({ groups: [GROUP], members: [legacyMember], buyers: [NATIVE_BUYER], destinations: [destination] });
     const res = await distributionConfig(ctxFor(db, { action: 'validate', route_group_id: 'g1' }));
     expect(res.valid).toBe(true);
+  });
+});
+
+describe('distributionConfig: validate returns a member-level diff against the last published version', () => {
+  // Regression: the operator publish dialog previously had no way to see a
+  // RouteMember repointed to a different SubDelivery (or any other
+  // member-level change) - only group-level field changes were ever shown,
+  // even though computeConfigHash already reflected the change.
+  it('reports no diff when no prior version has ever been published', async () => {
+    const db = makeDb({
+      groups: [GROUP], members: [NATIVE_MEMBER], buyers: [NATIVE_BUYER],
+      subDeliveries: [NATIVE_SUB], deliveries: [NATIVE_DELIVERY],
+    });
+    const res = await distributionConfig(ctxFor(db, { action: 'validate', route_group_id: 'g1' }));
+    expect(res.diff).toEqual([]);
+  });
+
+  it('reports the sub_delivery_id repoint against the last published snapshot', async () => {
+    const priorSnapshot = JSON.stringify({ group: GROUP, members: [{ ...NATIVE_MEMBER, sub_delivery_id: 'sd-old' }] });
+    const publishedGroup = { ...GROUP, config_version_id: 'rcv-1' };
+    const db = makeDb({
+      groups: [publishedGroup], members: [NATIVE_MEMBER], buyers: [NATIVE_BUYER],
+      subDeliveries: [NATIVE_SUB], deliveries: [NATIVE_DELIVERY],
+    });
+    db.created.versions.push({ id: 'rcv-1', route_group_id: 'g1', config_hash: 'oldhash', snapshot: priorSnapshot });
+    const res = await distributionConfig(ctxFor(db, { action: 'validate', route_group_id: 'g1' }));
+    const change = res.diff.find((c) => c.scope === 'member' && c.field === 'sub_delivery_id');
+    expect(change).toBeTruthy();
+    expect(change.from).toBe('sd-old');
+    expect(change.to).toBe('sd1');
+  });
+
+  it('does not fail validation when the prior snapshot is corrupt/legacy - just skips the diff', async () => {
+    const publishedGroup = { ...GROUP, config_version_id: 'rcv-1' };
+    const db = makeDb({
+      groups: [publishedGroup], members: [NATIVE_MEMBER], buyers: [NATIVE_BUYER],
+      subDeliveries: [NATIVE_SUB], deliveries: [NATIVE_DELIVERY],
+    });
+    db.created.versions.push({ id: 'rcv-1', route_group_id: 'g1', config_hash: 'oldhash', snapshot: 'not valid json' });
+    const res = await distributionConfig(ctxFor(db, { action: 'validate', route_group_id: 'g1' }));
+    expect(res.valid).toBe(true);
+    expect(res.diff).toEqual([]);
   });
 });

@@ -34,11 +34,15 @@ function buildPayload(leadData, fieldMap) {
   return out;
 }
 
-// cfg: { destinationId, targetUrl, method, encoding, headers, fieldMap, payloadTemplate, timeoutMs,
+// cfg: { destinationId, routeMemberId, targetUrl, method, encoding, headers, fieldMap, payloadTemplate, timeoutMs,
 //        responseMapping:{accept,reject,duplicate,queue,requireAccept,revenuePath,leadIdPath},
 //        idempotencyKey, leadData, leadId, attemptNumber, isPrimary, trigger, retryOpts }
 // payloadTemplate, when a non-empty string, is authoritative over fieldMap.
-// ctx: { store, nowMs, fetchImpl, testMode, allowlistHosts }
+// ctx: { store, nowMs, fetchImpl, testMode, allowlistHosts, validateTarget }
+// validateTarget(url) -> Promise<{ok, reason?}>, injected by the server (see
+// server/src/lib/ssrfGuard.js) so this isomorphic module never imports a
+// Node-only DNS API directly. Only applied for a REAL (non-test-mode) send;
+// testMode already enforces its own localhost-only allowlist below.
 export async function deliverDirectPost(cfg, ctx) {
   const nowMs = ctx.nowMs ?? 0;
   const fetchImpl = ctx.fetchImpl || globalThis.fetch;
@@ -53,6 +57,19 @@ export async function deliverDirectPost(cfg, ctx) {
     const allowed = ctx.allowlistHosts || [];
     if (!isLocalhost(url.hostname) && !allowed.includes(url.hostname)) {
       return failClosed(ctx, cfg, nowMs, 'host_not_allowed', 'HOST_NOT_ALLOWED');
+    }
+  } else if (typeof ctx.validateTarget === 'function') {
+    // SSRF guard for a real send: an operator-configured target_url must
+    // resolve only to a public address. Never validates the literal string
+    // and stops there - the injected validator re-resolves DNS at send time,
+    // so a hostname crafted to resolve to a private/metadata address is
+    // caught even when the string itself looks public. Redirects are never
+    // followed (fetch is called with redirect:'manual' below and the
+    // response is never re-dispatched), so there is no separate
+    // validate-then-redirect-into-private-network path to close.
+    const check = await ctx.validateTarget(url);
+    if (!check || check.ok !== true) {
+      return failClosed(ctx, cfg, nowMs, check && check.reason ? check.reason : 'target_not_allowed', 'SSRF_BLOCKED');
     }
   }
 
@@ -103,8 +120,10 @@ export async function deliverDirectPost(cfg, ctx) {
 
   // Persist the attempt BEFORE sending (durable record for crash recovery).
   const pending = await ctx.store.createAttempt({
-    lead_id: cfg.leadId, sub_delivery_id: cfg.subDeliveryId || null, destination_id: cfg.destinationId, trigger: cfg.trigger || 'primary',
-    attempt_number: attemptNumber, idempotency_key: cfg.idempotencyKey, is_primary: !!cfg.isPrimary,
+    lead_id: cfg.leadId, sub_delivery_id: cfg.subDeliveryId || null, destination_id: cfg.destinationId,
+    route_member_id: cfg.routeMemberId || null, trigger: cfg.trigger || 'primary',
+    attempt_number: attemptNumber, idempotency_key: cfg.idempotencyKey,
+    run_idempotency_key: cfg.runIdempotencyKey || null, is_primary: !!cfg.isPrimary,
     status: ATTEMPT_STATUS.PENDING, started_at: new Date(nowMs).toISOString(),
   });
 
@@ -156,8 +175,9 @@ export async function deliverDirectPost(cfg, ctx) {
 
 async function failClosed(ctx, cfg, nowMs, errorClass, code) {
   const rec = await ctx.store.createAttempt({
-    lead_id: cfg.leadId, destination_id: cfg.destinationId, attempt_number: cfg.attemptNumber || 1,
-    idempotency_key: cfg.idempotencyKey, is_primary: !!cfg.isPrimary,
+    lead_id: cfg.leadId, destination_id: cfg.destinationId, route_member_id: cfg.routeMemberId || null,
+    attempt_number: cfg.attemptNumber || 1,
+    idempotency_key: cfg.idempotencyKey, run_idempotency_key: cfg.runIdempotencyKey || null, is_primary: !!cfg.isPrimary,
     status: ATTEMPT_STATUS.ERROR, error_class: errorClass, code,
     started_at: new Date(nowMs).toISOString(), completed_at: new Date(nowMs).toISOString(),
   });

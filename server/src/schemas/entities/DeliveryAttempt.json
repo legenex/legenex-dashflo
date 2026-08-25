@@ -8,13 +8,16 @@
     "lead_id": { "type": "string", "description": "Lead being delivered" },
     "sub_delivery_id": { "type": "string", "description": "CANONICAL endpoint the attempt targets. Retries and health/circuit-breaker key on this so they are per endpoint, not per buyer." },
     "destination_id": { "type": "string", "description": "DEPRECATED (compatibility only): legacy destination id. Superseded by sub_delivery_id." },
+    "route_member_id": { "type": "string", "description": "The RouteMember this attempt was sent for. Lets the async retry worker re-resolve caps/wallet/price against the exact same RouteMember the primary send used, so a retry is governed by the identical business rules rather than a second implementation. Null for an attempt created before this field existed." },
     "trigger": { "type": "string", "description": "What triggered this attempt (e.g. route, retry, manual)" },
     "attempt_number": { "type": "number", "default": 1, "description": "Sequential attempt number for this lead+destination" },
-    "idempotency_key": { "type": "string", "description": "Idempotency key for the outbound delivery" },
+    "idempotency_key": { "type": "string", "description": "Idempotency key for the outbound delivery, scoped to this lead+destination (used as the outbound Idempotency-Key header)" },
+    "run_idempotency_key": { "type": "string", "description": "The bare, non-member-scoped originating idempotency key (the lead-level key, before the destination was appended). Persisted so a later async retry can reconstruct the IDENTICAL outbound idempotency_key/Idempotency-Key header a retry of this same logical attempt must reuse, rather than a different one that would defeat the buyer's own dedup." },
     "status": {
       "type": "string",
-      "enum": ["pending", "sent", "accepted", "rejected", "duplicate", "queued", "error", "dead_letter"],
-      "default": "pending"
+      "enum": ["pending", "sent", "accepted", "rejected", "duplicate", "queued", "error", "dead_letter", "superseded"],
+      "default": "pending",
+      "description": "superseded: the destination genuinely accepted, but a DIFFERENT destination had already won this lead by completion time (a cross-destination retry race) - no cap/wallet effect was applied for this attempt."
     },
     "is_primary": { "type": "boolean", "default": false, "description": "Whether this is the primary/winning delivery" },
     "request_meta": { "type": "string", "description": "JSON, secrets redacted" },
@@ -27,5 +30,12 @@
     "started_at": { "type": "string", "format": "date-time" },
     "completed_at": { "type": "string", "format": "date-time" }
   },
-  "required": ["lead_id", "destination_id"]
+  // destination_id (deprecated) is intentionally NOT required here: a
+  // native-only attempt (identified by sub_delivery_id, its canonical
+  // identity) legitimately carries destination_id: null. Requiring the
+  // deprecated field while leaving the canonical one optional previously
+  // understated migration-tooling severity for a dangling sub_delivery_id
+  // reference relative to a dangling destination_id - see
+  // server/src/lib/migrationPlan.js's requiredFields().
+  "required": ["lead_id"]
 }

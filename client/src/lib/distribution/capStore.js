@@ -6,7 +6,8 @@
 // PB-008/009 stop-and-present point, not a silent downgrade.
 //
 // Interface (all async):
-//   incrementIfBelow(key, limit) -> boolean   // atomic: increments iff count < limit
+//   incrementIfBelow(key, limit, meta?) -> boolean  // atomic: increments iff count < limit;
+//                                                    // meta populates reporting columns on first create only
 //   decrement(key) -> void
 //   getCount(key) -> number
 //   claim(key) -> boolean                      // atomic 0->1; true only for the first caller
@@ -26,7 +27,8 @@ export function makeInMemoryCasStore({ yieldFn } = {}) {
   let seq = 0;
   const microYield = yieldFn || (() => new Promise((r) => setTimeout(r, 0)));
 
-  async function incrementIfBelow(key, limit, maxRetry = 100) {
+  async function incrementIfBelow(key, limit, meta = null, maxRetry = 100) {
+    void meta; // no reporting columns in the in-memory test double
     for (let i = 0; i < maxRetry; i++) {
       const cur = counters.get(key) || { value: 0, version: 0 };
       const { value, version } = cur;
@@ -55,7 +57,11 @@ export function makeInMemoryCasStore({ yieldFn } = {}) {
   async function getCount(key) { return (counters.get(key) || { value: 0 }).value; }
 
   // Atomic claim: exactly one concurrent caller sees the transition to claimed.
-  // Modeled as a value-0-to-1 CAS on a dedicated key.
+  // Modeled as a value-0-to-1 CAS on a dedicated key. Uses its OWN `claims`
+  // map, deliberately separate from `counters`/getCount - so a read-only
+  // "has this been claimed" peek must go through isClaimed below, never
+  // through getCount('claim:'+key) (that would only happen to work for the
+  // entity adapter, whose claim() is itself built on incrementIfBelow).
   async function claim(key) {
     const cur = claims.get(key);
     await microYield();
@@ -64,6 +70,9 @@ export function makeInMemoryCasStore({ yieldFn } = {}) {
     claims.set(key, true);
     return true;
   }
+
+  // Read-only: has `key` been claimed (by anyone, ever)? Never mutates.
+  async function isClaimed(key) { return !!claims.get(key); }
 
   async function putReservation(rec) {
     const row = { ...rec, id: 'r' + (++seq) };
@@ -87,7 +96,7 @@ export function makeInMemoryCasStore({ yieldFn } = {}) {
   }
 
   return {
-    incrementIfBelow, decrement, getCount, claim,
+    incrementIfBelow, decrement, getCount, claim, isClaimed,
     putReservation, getReservation, awaitReservation, updateReservation,
     _debug: { counters, reservations },
   };
@@ -96,22 +105,45 @@ export function makeInMemoryCasStore({ yieldFn } = {}) {
 // ---- Real the backend adapter (runs when deployed; NEEDS-ENV to verify live) ----
 // Uses CapCounter for windowed counts and a claim CapCounter for dedup, each via
 // updateMany CAS. `db` is api.asServiceRole.
+//
+// scope_key is the ONE canonical lookup key, used by every reader and writer
+// (this store, and snapshotLoader.js's eligibility pre-check) so the two can
+// never independently drift into different key shapes for the same scope
+// (a prior version of snapshotLoader.js queried by scope_type/scope_id/window,
+// fields this store never wrote, so an exhausted cap silently reported as
+// eligible at the trace/snapshot level even though the atomic reserve()
+// below correctly blocked it). scope_type/scope_id/window/window_start/limit
+// are populated at row-creation time, from the same key components, purely
+// for operator reporting/debugging - never read back for matching.
 export function makeEntityCapStore(db) {
-  async function ensureCounter(key) {
+  async function ensureCounter(key, meta) {
     // create-if-missing, then reconcile to a single canonical row (lowest id) so
     // a concurrent create does not leave uncontrolled duplicates.
     let rows = await db.entities.CapCounter.filter({ scope_key: key });
     if (!rows.length) {
-      await db.entities.CapCounter.create({ scope_key: key, count: 0 });
-      rows = await db.entities.CapCounter.filter({ scope_key: key });
+      try {
+        await db.entities.CapCounter.create({ scope_key: key, count: 0, ...(meta || {}) });
+      } catch (err) {
+        // A concurrent first-time caller on this exact key can win the real
+        // DB-level unique constraint on scope_key (server/src/db/schema.js)
+        // between this function's own empty pre-check filter and its
+        // create() call. That is not a failure - it means the counter now
+        // genuinely exists, just not created by us; fall through to re-read
+        // it. Only a filter that comes back STILL empty after this means
+        // something is actually broken, and that original error is what
+        // propagates.
+        rows = await db.entities.CapCounter.filter({ scope_key: key });
+        if (!rows.length) throw err;
+      }
+      if (!rows.length) rows = await db.entities.CapCounter.filter({ scope_key: key });
     }
     rows.sort((a, b) => String(a.id).localeCompare(String(b.id)));
     return rows[0];
   }
 
-  async function incrementIfBelow(key, limit, maxRetry = 25) {
+  async function incrementIfBelow(key, limit, meta = null, maxRetry = 25) {
     for (let i = 0; i < maxRetry; i++) {
-      const row = await ensureCounter(key);
+      const row = await ensureCounter(key, meta);
       const value = Number(row.count || 0);
       if (value >= limit) return false;
       // CAS: only update the row still at the expected count.
@@ -146,6 +178,14 @@ export function makeEntityCapStore(db) {
     return incrementIfBelow(`claim:${key}`, 1);
   }
 
+  // Read-only: has `key` been claimed (by anyone, ever)? Queries directly
+  // rather than through ensureCounter, so a peek never creates a row as a
+  // side effect.
+  async function isClaimed(key) {
+    const rows = await db.entities.CapCounter.filter({ scope_key: `claim:${key}` });
+    return !!(rows && rows[0] && Number(rows[0].count || 0) >= 1);
+  }
+
   async function getReservation(idempotencyKey, memberId) {
     const rows = await db.entities.CapReservation.filter({ idempotency_key: idempotencyKey, route_member_id: memberId });
     return rows[0] || null;
@@ -161,5 +201,5 @@ export function makeEntityCapStore(db) {
   async function putReservation(rec) { return db.entities.CapReservation.create(rec); }
   async function updateReservation(id, patch) { return db.entities.CapReservation.update(id, patch); }
 
-  return { incrementIfBelow, decrement, getCount, claim, getReservation, awaitReservation, putReservation, updateReservation };
+  return { incrementIfBelow, decrement, getCount, claim, isClaimed, getReservation, awaitReservation, putReservation, updateReservation };
 }

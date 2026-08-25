@@ -1,5 +1,5 @@
 import React from 'react';
-import { api } from '@/api/client';
+import { deliveryHistory } from '@/functions/deliveryHistory';
 import { useQuery } from '@tanstack/react-query';
 import { Badge } from '@/components/ui/badge';
 import { Loader2 } from 'lucide-react';
@@ -8,17 +8,24 @@ import { format } from 'date-fns';
 const STATUS_VARIANT = {
   accepted: 'outline', rejected: 'destructive', duplicate: 'outline',
   queued: 'outline', error: 'destructive', dead_letter: 'destructive', pending: 'outline', sent: 'outline',
+  superseded: 'outline',
 };
 
-// Delivery history for one native SubDelivery, read from the real
-// DeliveryAttempt entity (server/src/schemas/entities/DeliveryAttempt.json).
-// request_meta/response_meta are already redacted and minimized server-side
-// (deliveryAttempt.js's buildAttemptRecord) before they ever reach this
-// query, so nothing further needs to be hidden here.
+// Delivery history for one native SubDelivery, read through the dedicated
+// deliveryHistory backend function (server/src/functions/deliveryHistory.js)
+// rather than the generic entity route: DeliveryAttempt is deliberately
+// absent from entityPolicy.js's ENTITY_POLICY table (denied outright, not
+// narrowly), so a direct api.entities.DeliveryAttempt.filter call here
+// always returned nothing. The function returns only an explicit safe-field
+// allowlist - no request_meta/response_meta, no route_member_id/credential
+// references - so nothing further needs to be hidden here.
 export default function DeliveryHistoryTab({ subDeliveryId }) {
   const { data: attempts = [], isLoading } = useQuery({
     queryKey: ['delivery-attempts', subDeliveryId],
-    queryFn: () => api.entities.DeliveryAttempt.filter({ sub_delivery_id: subDeliveryId }, '-created_date', 100),
+    // functions.invoke resolves { data, status } (client/src/api/client.js's
+    // invokeFunction), not the parsed body directly - unwrap .data, the same
+    // way every other functions.invoke caller in this codebase does.
+    queryFn: async () => (await deliveryHistory({ sub_delivery_id: subDeliveryId, limit: 100 })).data?.attempts || [],
     enabled: !!subDeliveryId,
   });
 
