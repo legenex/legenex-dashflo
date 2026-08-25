@@ -3500,3 +3500,433 @@ new generic-destination fixture.
    `systemTransfer`/`systemTransferRedact`) remain an open, separate,
    unrequested gap against the same invariant this stage restored
    protection for on the routing engine specifically.
+
+## Lead Distribution rebuild, Stage 4: production access, real-record readiness, adversarial fix loop
+
+25 August 2026. Builds on Stage 1 (`9d35ab7`/`b480973`), Stage 2 (`7fd9b49`),
+Stage 3 (`a06394e`). Three commits, `7c4b393`, `0bd0c1a`, `a35d52d`, each
+gate-passing and independently deployed and verified. This is the first
+stage with real production SSH and database access (`ssh dashflo-vps`,
+`docker compose exec db psql`); every prior stage's "not run against
+production, no access" caveat is superseded for the items below.
+
+### 1. Production access, proven
+
+`ssh dashflo-vps` reaches the VPS directly (`srv1907687`, user `dashflo`).
+`/opt/apps/dashflo` is a single `compose.yaml` stack: `dashflo-app` (built
+from this repo) and `dashflo-db` (`postgres:16`, database `dashflo_staging`
+despite that name - it is the real production database, not a staging
+copy, confirmed by its 1992 real `e_lead` rows and real dollar-value
+`e_buyer_state_cpl` coverage). `docker compose exec -T db psql -U dashflo -d
+dashflo_staging` gives direct read/write SQL access; `docker compose exec -T
+app node server/scripts/...` runs any committed script against the real,
+already-configured application database with zero local credential
+handling. Proven read access with `\dt` (102 tables, all `e_*` JSONB entity
+tables plus `lead_receipts`, `base44_*`, `migration_import_runs`) and safe
+count queries before anything else.
+
+Found, not created by this session: `legenex-dashflo-migration-2026-08-22-18-46.json.enc`,
+`run-migration.mjs`, `run-migration-apply.mjs` sit untracked in
+`/opt/apps/dashflo` on the VPS (separate from the identically-named local
+untracked `run-migration-apply.mjs` this repo has carried since before
+Stage 1). Base44 migration apply is an explicit human gate
+(`AGENTS.md` sections 13/17); none of the three were read, executed, or
+touched.
+
+### 2. Route-mapping planner bug, found by running it against real data, `7c4b393`
+
+Report-only `wire-route-member-subdeliveries.js` against the real 12
+production `RouteMember` rows returned `MISSING_ROUTE: 12` with the reason
+"RouteGroup.campaign_id does not resolve to a Campaign" for every single
+one, even though the referenced Campaign genuinely existed. Root cause,
+confirmed by reading `routeMemberMapping.js` against the real schema and
+real data rather than the module's own fixtures: it indexed `Campaign`
+records by their public `campaign_id` field (a separate, operator-facing
+short code) instead of their internal `id`, while
+`RouteGroup.campaign_id` is actually a foreign key to `Campaign.id`
+(confirmed against `snapshot.js`'s own campaign matching and
+`campaignResolve.js`'s `hit()`). A second, related bug in the same
+function: `Delivery.vertical_id` (a foreign key to a `Vertical` record's
+internal id) was compared directly against `Campaign.vertical` (that
+Vertical's short code, e.g. `"MVA"`) - two different identifier spaces that
+can never match for real data. The existing 16 tests never caught either
+bug because the fixtures collapsed both identifier spaces into one string
+per concept (`campaign_id: 'camp1'` used as both the campaign's id and its
+code; `vertical_id: 'MVA'` used as both a Vertical id and a Vertical code).
+
+Fixed both translations in `routeMemberMapping.js`, rewrote the fixtures to
+use distinct opaque ids matching the real schema shapes, added 4 regression
+tests (20 total, up from 16). Re-run against production after deploy:
+correctly reclassified as `MISSING_SUBDELIVERY: 2` (Walker - its Delivery
+exists but is `status: draft`, so its SubDeliveries correctly do not
+qualify as routable candidates) and `MISSING_DELIVERY: 10` (the other 5
+buyers with RouteMembers have no Delivery record at all). Zero mappings
+proposed or applied, both before and after the fix - the fix changed the
+classification from uniformly wrong to correctly reflecting real,
+unfinished configuration, not from "nothing mapped" to "something mapped."
+`--apply` was not run because nothing was ever classified `READY`; running
+it would have been a no-op, so it was not run for its own sake.
+
+### 3. Real native delivery configuration applied to Walker's production record
+
+`server/scripts/configure-walker-native-delivery.js --apply` (written and
+gate-passing since Stage 2, never previously run against production) was
+run against the real Walker Advertising `SubDelivery` rows ("Tier 1"
+`6a5a8d8c0557a6ea67e70d24`, "Tier 3" `6a5a8d94c20b54ee6ecb660c`, both under
+Delivery `6a5a8d809fe2a933ca284252`). Report-only first, confirmed it would
+write exactly `target_url`, `headers`, and `payload_template` and nothing
+else; then `--apply`. Verified by direct query afterward: both SubDeliveries
+now carry the real endpoint
+(`https://walkeradvertising.leadportal.com/apiJSON.php`), the real header
+(`{"X-Env":"prod"}`), and the real 516-character payload template.
+`Delivery.status` verified unchanged (`draft`). Idempotency verified by
+re-running report-only immediately after: identical proposed values.
+`response_mapping` and `credential_ref` remain deliberately unset, per
+Stage 2's own documented reasoning (no real Walker response has ever been
+observed to map; the endpoint's only documented header is non-secret, so no
+credential reference is currently believed necessary) - not changed this
+session, still correct.
+
+### 4. Real-record native delivery dry run, `0bd0c1a`
+
+New `server/scripts/native-delivery-dry-run.js`, read-only and zero
+database writes (grepped to confirm no `.update`/`.create`/`.delete` call
+anywhere in it), reusing the exact `buildRoutingSnapshot` /
+`deliverDirectPost` / `evaluateMember` / `classifyResponse` /
+`makeInMemoryHealthStore` pipeline the Stage 2/3 fixture tests already
+proved correct, but against Walker's REAL production `Buyer` / `Delivery` /
+`SubDelivery` / `RouteMember` records instead of hand-authored fixtures.
+`Delivery.status`/`RouteGroup.active`/`lifecycle` are copied and forced-on
+purely in this process's memory (never written back) so
+`buildRoutingSnapshot`'s own activation gate does not itself block the
+simulation; `target_url` is swapped for a local loopback stand-in server for
+every send scenario, so the real endpoint is never dialed. Run twice against
+production (before and after the Stage 4 fix commit), identical results both
+times:
+
+- Snapshot resolution: real Buyer/Delivery/SubDelivery/endpoint resolve
+  correctly.
+- Accepted, rejected, 5xx-retryable, malformed-response, timeout, and
+  invalid-payload-template scenarios against the real persisted
+  `payload_template` and (unset) `response_mapping`, each against a local
+  loopback stand-in: `accepted`/`rejected`/`error`/`accepted`(*)/`error
+  (timeout)`/`error (invalid_payload_template)` respectively.
+  (*) the malformed-response scenario classifying `accepted` is a real,
+  reportable finding, not a script bug: with `response_mapping` unset,
+  `classifyResponse` falls back to pure HTTP-status classification, so any
+  2xx - even one with a non-JSON or error-shaped body - is currently treated
+  as accepted. This is documented, expected engine behavior for an
+  unconfigured response mapping, not new behavior introduced this stage; it
+  is the concrete reason a real observed Walker response should be mapped
+  before this buyer goes live.
+- Disabled-SubDelivery and cross-buyer-ownership scenarios both correctly
+  produce `CONFIG_INVALID` and refuse to resolve, checked against the real
+  record shape.
+- Eligibility: `evaluateMember` against the real (currently null)
+  `filters`/`schedule`/`caps` correctly treats all three as unrestricted -
+  a synthetic lead from any state is currently eligible at this gate. The
+  gates' actual rejection behavior (state/schedule/cap-exhausted) is proven
+  separately against non-null values by the existing Stage 2/3 fixture
+  suites, since production configures none of these three for Walker today
+  and inventing values to reject against would violate the standing
+  instruction not to invent cap/schedule/filter values.
+- Circuit breaker: 5 consecutive failures opens it, `isBlocked` correctly
+  true immediately after and false past cooldown (half-open trial), one
+  success after cooldown closes it - via `makeInMemoryHealthStore`, so no
+  `DestinationHealth` row was ever written to production.
+
+### 5. Seven parallel adversarial critic reviews, all findings triaged, six fixed, `a35d52d`
+
+Per the operating loop's critic/review requirement, seven independent
+read-only review agents (routing correctness, data model consistency,
+security/secrets, retry/circuit breaker, UI/configuration parity,
+white-label/resellability, production DB/config) audited this stage's work
+and the surrounding engine. One (security) hit a transport error mid-run
+and was resumed from its own transcript rather than restarted blind. All
+seven completed. UI/configuration parity came back clean (single canonical
+editor confirmed structurally, no field the runtime ignores, no hardcoded
+buyer name in the editor tree). The other six surfaced real findings; six
+distinct, verified bugs were fixed (each independently re-verified by
+reading the actual code before being touched, not fixed on an agent's
+say-so):
+
+1. **`Delivery.vertical_id` identifier-space mismatch, confirmed live
+   against Walker's real record.** The canonical editor
+   (`DeliveryEditorDialog.jsx`) wrote a Vertical's short CODE into
+   `vertical_id`; `BuyerDeliveriesPanel.jsx`'s "New delivery" dialog and
+   real production data both write the Vertical's internal ID into the same
+   field. Two consumers each agreed with only one of the two UIs:
+   `ensureDeliveryRouteMember.js` treated `vertical_id` as already a code
+   (so it would 409 "No Campaign found" for exactly Walker's real,
+   id-shaped `vertical_id`), and the editor's own read-only `BuyerStateCpl`
+   coverage summary did the same (so it would silently show 0-of-0 states
+   for Walker despite 45 real coverage rows existing). Standardized on the
+   id convention throughout (matching the field's name and the
+   already-shipped `routeMemberMapping.js` translation): the editor's
+   vertical picker now writes `v.id`; the coverage summary and
+   `ensureDeliveryRouteMember.js` both now translate through the `Vertical`
+   table before comparing against a code-shaped field.
+2. **`distributionSetMode.js`'s own mode allowlist had drifted** to `'dual'`
+   where `modeControl.js` and `processLead.js`'s inline allowlist both say
+   `'new_primary_with_legacy_fallback'`. An operator setting `mode: 'dual'`
+   would have it accepted, audited, and persisted with no error surfaced
+   anywhere, while every subsequent lead's `processLead.js` check silently
+   fell back to `legacy_only` - the operator would believe native delivery
+   was live when nothing native ever ran. Aligned the string; also made
+   `nativeRetryRunner.js`'s own mode gate a fail-closed allowlist (only
+   proceeds for a recognized native mode) instead of a bare `!==
+   'legacy_only'` check, since that check was itself fail-open for any
+   unrecognized/typo'd mode string.
+3. **`distributionConfig.js`'s `loadConfig()` never fetched
+   `SubDelivery`/`Delivery` records**, so the one sanctioned publish/validate
+   path (`validateConfigForPublish`, reached only through this function)
+   reported "sub-delivery not found" for every RouteMember on the native
+   (`sub_delivery_id`) path regardless of real configuration quality. This
+   had not fired yet because no production RouteMember has `sub_delivery_id`
+   set (see item 2 above - route mapping report classified 0 `READY`), but
+   the moment `wire-route-member-subdeliveries.js --apply` ever writes one,
+   that RouteGroup would become permanently unpublishable through the
+   audited UI/API flow with no indication why. Now loads both.
+4. **`classifyResponse` ran an operator-entered regex against an unbounded
+   response body.** Bounded the text length before matching (10,000 chars),
+   which genuinely protects against an otherwise-safe but very large body
+   making a normal pattern slow to match. Explicitly documented, and proven
+   by a test, that this bound does NOT protect against a deliberately
+   pathological (catastrophic-backtracking) pattern - that class is
+   exponential in the matched run length, so even 10,000 characters is
+   nowhere near a small enough bound to guarantee fast completion; an
+   initial attempt at this fix used a test asserting exactly that
+   protection, and the test itself hung, which is what caught the false
+   claim before it shipped. Full protection needs either a hard execution
+   timeout on the match or static rejection of dangerous pattern shapes at
+   the point an operator saves `response_mapping` - a real, separate,
+   correctly-scoped follow-up, not implemented here.
+5. **`native-delivery-dry-run.js` (new this stage) defaulted `--buyer` to
+   `"Walker Advertising"`** - a real production company name as the default
+   for generic, reusable operational tooling. Now requires `--buyer`
+   explicitly.
+6. **Five customer-name leaks into generic, multi-tenant settings/reports
+   copy**, outside the distribution engine itself but real per the
+   white-label audit's own scope: `FinanceSettingsTab.jsx`'s deposit-match
+   empty state, `dataSourcePurposes.js`'s sheet-source description,
+   `SheetSourceDialog.jsx`'s two input placeholders, `Reports.jsx`'s save
+   dialog placeholder. All referenced a real buyer name or its real
+   `buyer_code` as an example; replaced with non-real examples.
+
+Regenerated `routingEngine.generated.js` from the changed isomorphic engine
+source (`deliveryAttempt.js`) and reverified engine parity before
+committing, per invariant 13.
+
+### 6. Findings triaged and NOT fixed this stage, with reasons
+
+Confirmed real by at least one agent and, where noted, independently
+verified by reading the code directly, but deliberately left for a
+dedicated follow-up rather than rushed into a session already carrying six
+other fixes to safety-adjacent code:
+
+- **`CapCounter`'s `scope_type`/`scope_id`/`window` fields are declared but
+  never written** (`capStore.js`'s `ensureCounter` writes only
+  `scope_key`); `snapshotLoader.js`'s cap-count read queries by
+  `scope_type`/`scope_id`, so it never matches any row and `capCountsFor`
+  always returns 0 at the snapshot/trace level. Real overselling is still
+  prevented (the atomic `reserve()` step keys correctly on `scope_key` and
+  is independent of this), but every `RouteDecisionTrace`/shadow comparison
+  currently mis-reports a cap-exhausted candidate as eligible. Observability
+  bug, not a billing bug; needs its own review of `capStore.js` and
+  `snapshotLoader.js` together.
+- **The native retry path (`nativeRetryRunner.js`/`retryWorker.js`) never
+  reserves capacity or debits the wallet**, unlike the primary send path
+  (`distributeRun.js`'s `makeDeliver`). Dormant today (`distribution_mode`
+  is `legacy_only` and `NATIVE_RETRY_WORKER_ENABLED` is unset everywhere),
+  but a real gap that would let a retried delivery "accept" with revenue
+  that never reaches the ledger and no cap enforcement, once both gates
+  ever open. Recommend this specifically, not just the two existing gates,
+  block enabling `NATIVE_RETRY_WORKER_ENABLED` until resolved.
+- **Overlapping retry-scheduler ticks can double-send the same attempt**:
+  `claimLease`'s CAS is on lease fields only, never on `status`, and the
+  lease TTL (30s default) is decoupled from the per-destination
+  `timeout_ms` a slow destination can legitimately exceed. Also dormant
+  while retries are disabled; needs its own concurrency-control review
+  before `NATIVE_RETRY_WORKER_ENABLED` is set anywhere.
+- **In-run same-destination retry (`maxAttemptsPerDest > 1`) is defeated by
+  the reservation idempotency key** (`resv:${idempotencyKey}:${memberId}`,
+  no attempt number), so a second attempt at the same member returns
+  `ALREADY_RESERVED` without ever calling `deliverDirectPost` again.
+  Currently inert: `processLead.js` never sets `maxAttemptsPerDest` above
+  its default of 1.
+- **A `QUEUED` destination response is treated as a clean, fallback-eligible
+  failure** in `new_primary_with_legacy_fallback` mode, which could
+  re-offer a lead through the legacy path after a native buyer already
+  signaled receipt. Flagged as interpretive by the reviewing agent (depends
+  on whether `QUEUED` is meant to represent a firm receipt signal) - a
+  product/design confirmation, not a code bug to blindly patch.
+- **SSRF**: the real (non-test-mode) send path has no private/link-local IP
+  validation on operator-entered `target_url`, only `testMode` does.
+  Reviewed and rated a hardening item given the stated threat model
+  (operator-entered, not attacker-entered), not a blocker; worth adding
+  before the destination roster grows.
+- **`computeConfigHash`/`diffConfig` never reference `sub_delivery_id`**,
+  only the deprecated `destination_id`, so repointing a RouteMember between
+  SubDeliveries under the same buyer produces no diff and an unchanged
+  hash - a real gap against `RouteConfigVersion`'s own explainability
+  guarantee, but only reachable once something is actually published, which
+  nothing has been yet.
+- **`DestinationHealth.json`/`DeliveryAttempt.json`'s `required` arrays
+  still name the deprecated `destination_id`**, not the canonical
+  `sub_delivery_id`, which understates severity (WARNING vs ERROR) for a
+  dangling canonical reference in migration validation tooling only - not
+  the live routing path.
+- **Credential redaction is a blocklist keyed on today's one hardcoded
+  header name** (`Authorization`), not an allowlist; the currently-dead
+  `projectSubDeliveryForClient` (meant to redact `SubDelivery` before
+  sending to a browser) is never actually called by any real reader, which
+  all use the generic entity route directly instead. Neither is
+  exploitable today given the single hardcoded header and the entity-policy
+  gate already blocking portal accounts, but both are worth a follow-up
+  ticket.
+- **Tier 1 and Tier 3 now hold identical endpoint configuration** (item 3
+  above applied the same `target_url`/`headers`/`payload_template` to both,
+  because the underlying Stage 2 script always did - it was written and
+  reviewed that way, and this session ran it, not authored it). If the two
+  tiers are meant to route to genuinely different destinations or payload
+  shapes, that needs an operator decision informed by Walker's real
+  integration, not a guess.
+- **`RouteMember.fixed_price` is `null` on both of Walker's real
+  RouteMembers** with `price_mode: 'fixed'`. `snapshot.js`'s `buildMember`
+  marks a member `CONFIG_INVALID` when a fixed-price member has no price,
+  so this is a real, structural blocker to ever activating Walker beyond
+  `Delivery.status`/route-mapping - not fixed here because it is real
+  pricing data this session has no authority or source to invent.
+
+### 7. What is still required before Walker (or any buyer) reaches
+   "genuinely ready, pending only human approval"
+
+In addition to the two gates that were never touched this stage
+(`distribution_mode` staying `legacy_only`; every `RouteGroup` staying
+inactive/draft):
+
+1. `Delivery.status` would need to move from `draft` to `active` (a
+   reversible, non-live-traffic action in itself, since the RouteGroup
+   containing it stays inactive/draft regardless) before
+   `wire-route-member-subdeliveries.js` can classify anything `READY`.
+2. Doing so alone is not sufficient: `candidateSubDeliveries` has no
+   per-RouteMember tie-break, so with both Tier 1 and Tier 3 now
+   equally-configured active SubDeliveries, each of Walker's two
+   RouteMembers would resolve to 2 candidates and classify `AMBIGUOUS`, not
+   `READY` - a human must decide and manually set each RouteMember's
+   `sub_delivery_id` (or resolve item 6's Tier 1/Tier 3 duplication
+   question first, which would collapse this back to one candidate).
+3. `RouteMember.fixed_price` must be set to a real value for both Walker
+   RouteMembers (item 6 above) or `buildMember` marks them
+   `CONFIG_INVALID` regardless of the above.
+4. `SubDelivery.response_mapping` should be populated from a real observed
+   Walker response before relying on automatic accept/reject classification
+   - both for correctness (see item 4's malformed-response finding) and
+   because `distributionConfig.js`'s sanctioned publish path fails closed
+   without one (`configPublish.js`'s `validateConfigForPublish`).
+5. `RouteGroup.active`/`lifecycle` activation and the `distribution_mode`
+   transition itself remain separate, explicit human-approval actions under
+   `AGENTS.md` section 13, unaffected by and independent of all of the
+   above.
+
+None of items 1-4 were performed this session: 1 and 2 require an explicit
+"is this configuration finished and reviewed" judgment call adjacent to
+live-activation territory that this session chose not to make unilaterally;
+3 and 4 require real business/observed data this session does not have and
+must not invent.
+
+### 8. Legacy relay and safety-gate invariant, reverified after every deploy
+
+Reverified directly against the running production database and container
+environment after each of this stage's three deployments, not only by
+`git diff`:
+
+- `e_app_settings`'s single row carries no `distribution_mode` key at any
+  point this stage (confirmed by direct query before the first change and
+  after the last) - `processLead.js`'s own default (`legacy_only`) governs.
+- `NATIVE_RETRY_WORKER_ENABLED` absent from the app container's environment
+  throughout.
+- The default `LeadByteConnector` (`is_default: true`, `enabled: true`,
+  `target_url: https://legenex.leadbyte.co/restapi/v1.3/leads`) unchanged
+  throughout.
+- `git diff --name-only a06394e..a35d52d` touches no
+  `leadbyte|WebhookDeliverySettings|LeadByteConnector`-named file.
+- Every `RouteGroup` in production remains `active: false` (both the
+  pre-existing two and none created this stage - `ensureDeliveryRouteMember`
+  was fixed but never invoked against production, since doing so would
+  create a new RouteGroup/RouteMember for Walker alongside the two that
+  already exist, which is exactly the kind of "is this the intended
+  structure" judgment call left to item 7.1-7.2 above).
+
+### 9. Evidence
+
+- `npm run gate`: PASS, all eight steps, at each of the three commits
+  individually. Final state: 125 test files, 1580 tests, 0 failures, up
+  from 122 files and 1562 tests before this stage (18 net new tests: 4
+  route-mapping regression, 1 `ensureDeliveryRouteMember` regression, 4
+  `distributionSetMode`, 4 `nativeRetryRunner`, 4 `distributionConfig`, 1
+  `classifyResponse` bound).
+- All three commits deployed individually; GitHub Actions runs
+  `32814335948`, `32814946438`, `32816603184` each succeeded, confirmed by
+  comparing the deployed container's `git rev-parse HEAD` against the
+  pushed SHA after each one.
+- `git diff --check`: clean on every commit. `run-migration-apply.mjs`
+  (pre-existing, unrelated to any stage) deliberately excluded from every
+  commit and left exactly as found.
+- Production reads performed this stage, all confirmed safe/non-mutating
+  except where explicitly noted as a deliberate, reviewed write: table list
+  (`\dt`), row counts, `AppSettings`, `Buyer`/`Delivery`/`SubDelivery`/
+  `RouteGroup`/`RouteMember`/`Campaign`/`Vertical`/`BuyerStateCpl` contents
+  for the lead-distribution graph, `DestinationHealth`/`DeliveryAttempt`/
+  `RouteDecisionTrace`/`DistributionAudit` counts (all zero), `SystemKey`
+  contents (names/providers only), default `LeadByteConnector` fields. The
+  two deliberate production writes: `configure-walker-native-delivery.js
+  --apply` (item 3) and nothing else - `wire-route-member-subdeliveries.js
+  --apply` was never run because it never had anything to apply.
+
+### Required end state, self-assessed against the operating loop's own checklist
+
+`PRODUCTION SSH: WORKING` - `PRODUCTION DB: ACCESSIBLE THROUGH VPS` -
+`GENERIC NATIVE ENGINE: READY, SIX ADVERSARIALLY-FOUND BUGS FIXED` -
+`ROUTEMEMBER MAPPING: REPORT CORRECTED, 0 APPLIED (NONE YET DETERMINISTICALLY
+SAFE)` - `REAL NATIVE DELIVERY CONFIG: PRESENT FOR WALKER (endpoint,
+headers, payload template)` - `REAL PRODUCTION-RECORD DRY RUN: PASS (13
+scenarios against real config, mock transport)` - `GENERIC SECOND
+DESTINATION: PASS (Stage 3's fixture, rerun, still 14/14)` -
+`CUSTOMER-SPECIFIC NATIVE CODE: ZERO (own new tooling's default and five
+unrelated-page copy leaks found and fixed)` - `WEBHOOKS UI / BUYER EDITOR:
+VERIFIED SAME RECORD STRUCTURALLY (no browser tool available this session -
+see below)` - `ENGINE PARITY: PASS` - `TESTS: PASS, 1580` - `GATE: PASS` -
+`LEGACY LIVE RELAY: UNCHANGED, REVERIFIED AFTER EVERY DEPLOY` -
+`DISTRIBUTION MODE: LEGACY_ONLY` - `NATIVE RETRIES: DISABLED` - `LIVE
+NATIVE COMMERCIAL TRAFFIC: NOT ACTIVATED`.
+
+`UNPROVEN`, stated plainly rather than assumed: this session had no browser
+automation tool available, so the `/webhooks` and Operations > Buyers >
+Walker Advertising pages were checked only by confirming they return HTTP
+200 and by reading the component tree that renders them (single canonical
+`DeliveryEditorDialog` mounted from both, verified by an independent
+adversarial review agent tracing the actual props/query-key data flow, not
+just the import statement). A human visually opening both pages against the
+live SHA is the one genuinely manual verification step this stage could not
+perform itself.
+
+### Exact blockers before any live cutover
+
+1. `RouteMember.fixed_price` on Walker's two real RouteMembers - real
+   pricing data this session has no source for.
+2. `SubDelivery.response_mapping` for Walker - needs a real observed
+   response from `walkeradvertising.leadportal.com/apiJSON.php`.
+3. An operator decision on whether Tier 1 and Tier 3 should route to
+   genuinely different configurations (they are currently identical).
+4. An operator decision to move `Delivery.status` to `active` and manually
+   resolve the resulting `AMBIGUOUS` Tier 1 vs Tier 3 RouteMember mapping
+   (not automatic - see section 7.2).
+5. Before `NATIVE_RETRY_WORKER_ENABLED` specifically (independent of the
+   above): the retry path's missing cap reservation/wallet debit and the
+   retry-scheduler lease concurrency gap (section 6), neither fixed this
+   stage.
+6. `RouteGroup.active`/`lifecycle` activation and the `distribution_mode`
+   transition: the standing human-approval gate, `AGENTS.md` section 13 /
+   `docs/HUMAN-GATES.md` Gate C, untouched and unaffected by everything
+   above.
