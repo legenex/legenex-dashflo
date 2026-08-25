@@ -13,6 +13,7 @@
 
 import * as engine from '../functions/routingEngine.generated.js';
 import { makeTargetValidator } from './ssrfGuard.js';
+import { resolveSubDeliveryCredential as resolveCredential } from './subDeliveryCredential.js';
 
 // Fail-closed allowlist, not a bare "!== legacy_only" check: an unrecognized
 // or drifted mode string (e.g. a typo, or the historical 'dual' vs
@@ -31,16 +32,6 @@ const NATIVE_MODES = new Set(engine.MODES.filter((m) => m !== 'legacy_only'));
 // distinction is exactly what ctx.testMode already exists for elsewhere in
 // this engine, but a retry send is never testMode by design.
 const defaultValidateTarget = makeTargetValidator();
-
-async function resolveCredential(db, ref) {
-  if (!ref) return {};
-  try {
-    const rows = await db.entities.IntegrationConfig.filter({ key: ref });
-    const val = rows && rows[0] && rows[0].value;
-    if (val && typeof val === 'string') return { Authorization: val };
-  } catch { /* secret store not configured in this env */ }
-  return {};
-}
 
 // Resolve the RouteMember/SubDelivery/Delivery graph a stored attempt targets
 // and build the minimal member shape reserveAndDeliver needs. Returns null

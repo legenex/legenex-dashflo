@@ -22,6 +22,7 @@ beforeAll(async () => {
       if (path === '/duplicate') { res.writeHead(409); return res.end('{"result":"duplicate"}'); }
       if (path === '/invalid') { res.writeHead(200); return res.end('<<not json>>'); }
       if (path === '/echo') return json(res, 200, { result: 'accepted', echo: body, ctype: req.headers['content-type'] });
+      if (path === '/method') return json(res, 200, { result: 'accepted', method: req.method, query: Object.fromEntries(url.searchParams), rawBody: body });
       if (path === '/flaky') { // timeout on attempt 1 (never respond), accept after
         if (n === 1) return; // hang -> client aborts
         return json(res, 200, { result: 'accepted', revenue: 5 });
@@ -203,5 +204,97 @@ describe('direct-post adapter: payload_template live path (Stage 3)', () => {
     expect(r.status).toBe(ATTEMPT_STATUS.ACCEPTED);
     const stored = JSON.stringify(store._debug.attempts[0].request_meta);
     expect(stored).not.toContain('a@b.com');
+  });
+});
+
+// Method/query-param-aware request semantics (product/UX rebuild): GET never
+// sends a body and its only outbound mechanism is query_params; DELETE
+// matches GET unless delete_with_body is explicitly true; POST/PUT/PATCH
+// always send a body. Verified against request_meta (method/url/body_present)
+// on the persisted attempt, not just the classified outcome, so a passing
+// test proves the actual wire request changed, not just that *something* 2xx'd.
+describe('direct-post adapter: method-aware request semantics', () => {
+  it('GET sends no body regardless of a configured payload_template/field_map', async () => {
+    const store = makeInMemoryAttemptStore();
+    const r = await deliverDirectPost(cfg({
+      targetUrl: `${base}/accepted`, method: 'GET',
+      payloadTemplate: '{"should_not_send":"{{first_name}}"}',
+      fieldMap: [{ src: 'email', dest: 'email' }],
+      leadData: { first_name: 'Jane', email: 'a@b.com' },
+    }), ctx(store));
+    expect(r.status).toBe(ATTEMPT_STATUS.ACCEPTED);
+    const meta = JSON.parse(store._debug.attempts[0].request_meta);
+    expect(meta.method).toBe('GET');
+    expect(meta.body_present).toBe(false);
+  });
+
+  it('GET resolves query_params (same {{token}} syntax as payload_template) onto the URL', async () => {
+    const store = makeInMemoryAttemptStore();
+    const r = await deliverDirectPost(cfg({
+      targetUrl: `${base}/accepted`, method: 'GET',
+      queryParamsTemplate: '{"zip":"{{zip}}","src":"native"}',
+      leadData: { zip: '90210' },
+    }), ctx(store));
+    expect(r.status).toBe(ATTEMPT_STATUS.ACCEPTED);
+    const meta = JSON.parse(store._debug.attempts[0].request_meta);
+    expect(meta.method).toBe('GET');
+    expect(meta.body_present).toBe(false);
+    const sentUrl = new URL(meta.url);
+    expect(sentUrl.searchParams.get('zip')).toBe('90210');
+    expect(sentUrl.searchParams.get('src')).toBe('native');
+  });
+
+  it('an invalid query_params template fails closed without sending', async () => {
+    const store = makeInMemoryAttemptStore();
+    const r = await deliverDirectPost(cfg({
+      targetUrl: `${base}/accepted`, method: 'GET',
+      queryParamsTemplate: '{"broken": {{zip}}', leadData: { zip: '90210' },
+    }), ctx(store));
+    expect(r.status).toBe(ATTEMPT_STATUS.ERROR);
+    expect(r.code).toBe('INVALID_QUERY_PARAMS_TEMPLATE');
+    expect(store._debug.attempts).toHaveLength(1);
+  });
+
+  it('a GET with no query_params configured sends the exact configured URL unchanged (no host-casing surprise)', async () => {
+    const store = makeInMemoryAttemptStore();
+    await deliverDirectPost(cfg({ targetUrl: `${base}/accepted`, method: 'GET' }), ctx(store));
+    const meta = JSON.parse(store._debug.attempts[0].request_meta);
+    expect(meta.url).toBe(`${base}/accepted`);
+  });
+
+  it('DELETE sends no body by default, matching GET', async () => {
+    const store = makeInMemoryAttemptStore();
+    const r = await deliverDirectPost(cfg({
+      targetUrl: `${base}/accepted`, method: 'DELETE',
+      fieldMap: [{ src: 'email', dest: 'email' }], leadData: { email: 'a@b.com' },
+    }), ctx(store));
+    expect(r.status).toBe(ATTEMPT_STATUS.ACCEPTED);
+    const meta = JSON.parse(store._debug.attempts[0].request_meta);
+    expect(meta.method).toBe('DELETE');
+    expect(meta.body_present).toBe(false);
+  });
+
+  it('DELETE sends a body only when delete_with_body is explicitly true', async () => {
+    const store = makeInMemoryAttemptStore();
+    const r = await deliverDirectPost(cfg({
+      targetUrl: `${base}/accepted`, method: 'DELETE', deleteWithBody: true,
+      fieldMap: [{ src: 'email', dest: 'email' }], leadData: { email: 'a@b.com' },
+    }), ctx(store));
+    expect(r.status).toBe(ATTEMPT_STATUS.ACCEPTED);
+    const meta = JSON.parse(store._debug.attempts[0].request_meta);
+    expect(meta.method).toBe('DELETE');
+    expect(meta.body_present).toBe(true);
+  });
+
+  it.each(['POST', 'PUT', 'PATCH'])('%s always sends a body', async (method) => {
+    const store = makeInMemoryAttemptStore();
+    const r = await deliverDirectPost(cfg({
+      targetUrl: `${base}/accepted`, method,
+      fieldMap: [{ src: 'email', dest: 'email' }], leadData: { email: 'a@b.com' },
+    }), ctx(store));
+    expect(r.status).toBe(ATTEMPT_STATUS.ACCEPTED);
+    const meta = JSON.parse(store._debug.attempts[0].request_meta);
+    expect(meta.method).toBe(method);
+    expect(meta.body_present).toBe(true);
   });
 });

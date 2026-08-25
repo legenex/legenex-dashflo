@@ -1,7 +1,7 @@
 // GENERATED FILE - DO NOT EDIT BY HAND.
 // Source of truth: src/lib/distribution/backend-entry.js and its imports.
 // Regenerate: node scripts/generate-backend-engine.mjs
-// canonical-engine-sha256: adec7c58e5bf17fa8a4c24098eb02b73de9f994fb13f1a379a10fbf209ff61fa
+// canonical-engine-sha256: e57c654f17480b441be7f773715b773cc6a6c1b25efb8bd1b1914e3049f782df
 // src/lib/distribution/engine.js
 var REASON = {
   ELIGIBLE: "ELIGIBLE",
@@ -676,6 +676,8 @@ function projectSubDeliveryForClient(sd) {
     target_url: sd.target_url || "",
     method: sd.method || "POST",
     encoding: sd.encoding || "json",
+    query_params: sd.query_params || "",
+    delete_with_body: sd.delete_with_body === true,
     headers,
     field_map: sd.field_map || "",
     transforms: sd.transforms || "",
@@ -703,6 +705,10 @@ function resolveSubDeliveryCfg(sd) {
     fieldMap: toFieldMap(parseJson(sd.field_map)),
     // Authoritative over fieldMap when non-empty; see directPost.js.
     payloadTemplate: typeof sd.payload_template === "string" ? sd.payload_template : "",
+    // Additive: resolved the same way as payloadTemplate, but appended as URL
+    // query parameters rather than a request body. See directPost.js.
+    queryParamsTemplate: typeof sd.query_params === "string" ? sd.query_params : "",
+    deleteWithBody: sd.delete_with_body === true,
     transforms: parseJson(sd.transforms) || [],
     responseMapping: toClassifyResponseMapping(parseJson(sd.response_mapping)),
     timeoutMs: Math.min(Number(sd.timeout_ms) || 1e4, MAX_SEND_TIMEOUT_MS),
@@ -1885,6 +1891,7 @@ async function deliverDirectPost(cfg, ctx) {
   const nowMs = ctx.nowMs ?? 0;
   const fetchImpl = ctx.fetchImpl || globalThis.fetch;
   const attemptNumber = cfg.attemptNumber || 1;
+  const method = String(cfg.method || "POST").toUpperCase();
   let url;
   try {
     url = new URL(cfg.targetUrl);
@@ -1902,20 +1909,43 @@ async function deliverDirectPost(cfg, ctx) {
       return failClosed(ctx, cfg, nowMs, check && check.reason ? check.reason : "target_not_allowed", "SSRF_BLOCKED");
     }
   }
-  let payload;
-  if (cfg.payloadTemplate && String(cfg.payloadTemplate).trim() !== "") {
-    let rendered;
+  let finalUrl = cfg.targetUrl;
+  if (cfg.queryParamsTemplate && String(cfg.queryParamsTemplate).trim() !== "") {
+    let renderedParams;
     try {
-      rendered = await buildPayloadFromTemplate(cfg.payloadTemplate, cfg.leadData || {});
+      renderedParams = await buildPayloadFromTemplate(cfg.queryParamsTemplate, cfg.leadData || {});
     } catch {
-      return failClosed(ctx, cfg, nowMs, "invalid_payload_template", "INVALID_PAYLOAD_TEMPLATE");
+      return failClosed(ctx, cfg, nowMs, "invalid_query_params_template", "INVALID_QUERY_PARAMS_TEMPLATE");
     }
-    if (rendered === null || typeof rendered !== "object" || Array.isArray(rendered)) {
-      return failClosed(ctx, cfg, nowMs, "invalid_payload_template", "INVALID_PAYLOAD_TEMPLATE");
+    if (renderedParams === null || typeof renderedParams !== "object" || Array.isArray(renderedParams)) {
+      return failClosed(ctx, cfg, nowMs, "invalid_query_params_template", "INVALID_QUERY_PARAMS_TEMPLATE");
     }
-    payload = rendered;
-  } else {
-    payload = buildPayload(cfg.leadData || {}, cfg.fieldMap);
+    let appended = false;
+    for (const [k, v] of Object.entries(renderedParams)) {
+      if (v != null) {
+        url.searchParams.set(k, String(v));
+        appended = true;
+      }
+    }
+    if (appended) finalUrl = url.toString();
+  }
+  const sendsBody = method !== "GET" && !(method === "DELETE" && !cfg.deleteWithBody);
+  let payload;
+  if (sendsBody) {
+    if (cfg.payloadTemplate && String(cfg.payloadTemplate).trim() !== "") {
+      let rendered;
+      try {
+        rendered = await buildPayloadFromTemplate(cfg.payloadTemplate, cfg.leadData || {});
+      } catch {
+        return failClosed(ctx, cfg, nowMs, "invalid_payload_template", "INVALID_PAYLOAD_TEMPLATE");
+      }
+      if (rendered === null || typeof rendered !== "object" || Array.isArray(rendered)) {
+        return failClosed(ctx, cfg, nowMs, "invalid_payload_template", "INVALID_PAYLOAD_TEMPLATE");
+      }
+      payload = rendered;
+    } else {
+      payload = buildPayload(cfg.leadData || {}, cfg.fieldMap);
+    }
   }
   const encoding = cfg.encoding === "form" ? "form" : "json";
   const headers = { ...cfg.headers || {} };
@@ -1929,12 +1959,14 @@ async function deliverDirectPost(cfg, ctx) {
   }
   headers["Idempotency-Key"] = cfg.idempotencyKey;
   let body;
-  if (encoding === "form") {
-    headers["Content-Type"] = headers["Content-Type"] || "application/x-www-form-urlencoded";
-    body = new URLSearchParams(payload).toString();
-  } else {
-    headers["Content-Type"] = headers["Content-Type"] || "application/json";
-    body = JSON.stringify(payload);
+  if (sendsBody) {
+    if (encoding === "form") {
+      headers["Content-Type"] = headers["Content-Type"] || "application/x-www-form-urlencoded";
+      body = new URLSearchParams(payload).toString();
+    } else {
+      headers["Content-Type"] = headers["Content-Type"] || "application/json";
+      body = JSON.stringify(payload);
+    }
   }
   const pending = await ctx.store.createAttempt({
     lead_id: cfg.leadId,
@@ -1956,8 +1988,8 @@ async function deliverDirectPost(cfg, ctx) {
   let errorClass = null;
   const t0 = nowMs;
   try {
-    const resp = await fetchImpl(cfg.targetUrl, {
-      method: cfg.method || "POST",
+    const resp = await fetchImpl(finalUrl, {
+      method,
       headers,
       body,
       redirect: "manual",
@@ -1988,7 +2020,7 @@ async function deliverDirectPost(cfg, ctx) {
     idempotencyKey: cfg.idempotencyKey,
     isPrimary: cfg.isPrimary,
     status,
-    request: { method: cfg.method || "POST", url: cfg.targetUrl, headers, body },
+    request: { method, url: finalUrl, headers, body: body ?? null },
     response: { status: httpStatus, body: bodyText },
     httpStatus,
     latencyMs: (ctx.nowMs ?? 0) - t0,

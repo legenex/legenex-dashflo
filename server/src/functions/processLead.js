@@ -7,6 +7,7 @@ import { completeReceipt } from '../lib/receipts.js';
 import { pool as receiptPool } from '../db/pool.js';
 import { ensureReceiptSchema } from '../db/receiptSchema.js';
 import { makeTargetValidator } from '../lib/ssrfGuard.js';
+import { resolveSubDeliveryCredential } from '../lib/subDeliveryCredential.js';
 
 // SSRF guard for the real native send path: an operator-configured
 // SubDelivery.target_url must resolve only to a public address, checked
@@ -837,21 +838,6 @@ function dispatchConnectors(db, connectors, trigger, leadData, leadId, supplierA
 }
 
 // ── Native distribution helpers (ADDITIVE) ────────────────────────────────
-// Resolve an opaque SubDelivery credential_ref into real auth headers, server
-// side, at send time. The secret never enters a snapshot, a trace, an operator
-// response, or anything browser-facing. Returns {} when the secret store holds
-// nothing for the ref, so a misconfigured destination fails as an unauthenticated
-// rejection rather than leaking or crashing the pipeline.
-async function resolveSubDeliveryCredential(db, ref) {
-  if (!ref) return {};
-  try {
-    const rows = await db.entities.IntegrationConfig.filter({ key: ref });
-    const val = rows && rows[0] && rows[0].value;
-    if (val && typeof val === 'string') return { Authorization: val };
-  } catch { /* secret store not configured in this environment */ }
-  return {};
-}
-
 // Canary traffic allowlist. Canary sends NOTHING unless an explicit allowlist is
 // configured, so an operator who moves to canary without one keeps legacy fully
 // authoritative instead of quietly going live.

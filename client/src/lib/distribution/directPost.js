@@ -47,6 +47,7 @@ export async function deliverDirectPost(cfg, ctx) {
   const nowMs = ctx.nowMs ?? 0;
   const fetchImpl = ctx.fetchImpl || globalThis.fetch;
   const attemptNumber = cfg.attemptNumber || 1;
+  const method = String(cfg.method || 'POST').toUpperCase();
 
   let url;
   try { url = new URL(cfg.targetUrl); } catch { return failClosed(ctx, cfg, nowMs, 'invalid_url', 'INVALID_URL'); }
@@ -73,28 +74,65 @@ export async function deliverDirectPost(cfg, ctx) {
     }
   }
 
+  // Query parameters: resolved the same way as payload_template (same
+  // {{token|transform}} renderer), appended to the target URL rather than the
+  // body. Honored for any method (harmless alongside a body), but this is the
+  // ONLY outbound mechanism for GET/DELETE-without-body, which never send one.
+  // finalUrl only diverges from the operator-configured cfg.targetUrl string
+  // when a query parameter is actually appended - the URL object's own
+  // serialization lowercases the hostname and can otherwise reformat a URL
+  // that had nothing wrong with it, a needless behavior change for the common
+  // case (no query_params configured) that a byte-identical passthrough avoids.
+  let finalUrl = cfg.targetUrl;
+  if (cfg.queryParamsTemplate && String(cfg.queryParamsTemplate).trim() !== '') {
+    let renderedParams;
+    try {
+      renderedParams = await buildPayloadFromTemplate(cfg.queryParamsTemplate, cfg.leadData || {});
+    } catch {
+      return failClosed(ctx, cfg, nowMs, 'invalid_query_params_template', 'INVALID_QUERY_PARAMS_TEMPLATE');
+    }
+    if (renderedParams === null || typeof renderedParams !== 'object' || Array.isArray(renderedParams)) {
+      return failClosed(ctx, cfg, nowMs, 'invalid_query_params_template', 'INVALID_QUERY_PARAMS_TEMPLATE');
+    }
+    let appended = false;
+    for (const [k, v] of Object.entries(renderedParams)) {
+      if (v != null) { url.searchParams.set(k, String(v)); appended = true; }
+    }
+    if (appended) finalUrl = url.toString();
+  }
+
+  // A GET never sends a body. A DELETE only sends one when the SubDelivery
+  // explicitly opted in via delete_with_body - otherwise it behaves like GET.
+  // POST/PUT/PATCH always send one. Method changes the wire request, not just
+  // which editor section the operator sees.
+  const sendsBody = method !== 'GET' && !(method === 'DELETE' && !cfg.deleteWithBody);
+
   // Payload: SubDelivery.payload_template is authoritative when configured
   // (same generic {{token|transform}} renderer as Dry Run and Mock Send, via
   // payloadTemplate.js), otherwise fall back to the structured field_map, for
   // backward compatibility with SubDeliveries that only ever configured that.
+  // Skipped entirely when the method sends no body (GET, or DELETE without
+  // delete_with_body): there is nothing to render or fail closed on.
   let payload;
-  if (cfg.payloadTemplate && String(cfg.payloadTemplate).trim() !== '') {
-    let rendered;
-    try {
-      rendered = await buildPayloadFromTemplate(cfg.payloadTemplate, cfg.leadData || {});
-    } catch {
-      return failClosed(ctx, cfg, nowMs, 'invalid_payload_template', 'INVALID_PAYLOAD_TEMPLATE');
+  if (sendsBody) {
+    if (cfg.payloadTemplate && String(cfg.payloadTemplate).trim() !== '') {
+      let rendered;
+      try {
+        rendered = await buildPayloadFromTemplate(cfg.payloadTemplate, cfg.leadData || {});
+      } catch {
+        return failClosed(ctx, cfg, nowMs, 'invalid_payload_template', 'INVALID_PAYLOAD_TEMPLATE');
+      }
+      // buildPayloadFromTemplate falls back to the raw resolved STRING when the
+      // rendered text is not valid JSON (useful for a preview showing the
+      // operator what broke). The real send path must never silently POST that
+      // string as if it were the payload: fail closed instead.
+      if (rendered === null || typeof rendered !== 'object' || Array.isArray(rendered)) {
+        return failClosed(ctx, cfg, nowMs, 'invalid_payload_template', 'INVALID_PAYLOAD_TEMPLATE');
+      }
+      payload = rendered;
+    } else {
+      payload = buildPayload(cfg.leadData || {}, cfg.fieldMap);
     }
-    // buildPayloadFromTemplate falls back to the raw resolved STRING when the
-    // rendered text is not valid JSON (useful for a preview showing the
-    // operator what broke). The real send path must never silently POST that
-    // string as if it were the payload: fail closed instead.
-    if (rendered === null || typeof rendered !== 'object' || Array.isArray(rendered)) {
-      return failClosed(ctx, cfg, nowMs, 'invalid_payload_template', 'INVALID_PAYLOAD_TEMPLATE');
-    }
-    payload = rendered;
-  } else {
-    payload = buildPayload(cfg.leadData || {}, cfg.fieldMap);
   }
   const encoding = cfg.encoding === 'form' ? 'form' : 'json';
   const headers = { ...(cfg.headers || {}) }; // NON-secret headers only (never carries a stored key)
@@ -110,12 +148,14 @@ export async function deliverDirectPost(cfg, ctx) {
   }
   headers['Idempotency-Key'] = cfg.idempotencyKey;
   let body;
-  if (encoding === 'form') {
-    headers['Content-Type'] = headers['Content-Type'] || 'application/x-www-form-urlencoded';
-    body = new URLSearchParams(payload).toString();
-  } else {
-    headers['Content-Type'] = headers['Content-Type'] || 'application/json';
-    body = JSON.stringify(payload);
+  if (sendsBody) {
+    if (encoding === 'form') {
+      headers['Content-Type'] = headers['Content-Type'] || 'application/x-www-form-urlencoded';
+      body = new URLSearchParams(payload).toString();
+    } else {
+      headers['Content-Type'] = headers['Content-Type'] || 'application/json';
+      body = JSON.stringify(payload);
+    }
   }
 
   // Persist the attempt BEFORE sending (durable record for crash recovery).
@@ -132,8 +172,8 @@ export async function deliverDirectPost(cfg, ctx) {
   let httpStatus = null; let bodyText = ''; let errorClass = null;
   const t0 = nowMs;
   try {
-    const resp = await fetchImpl(cfg.targetUrl, {
-      method: cfg.method || 'POST', headers, body, redirect: 'manual', signal: controller.signal,
+    const resp = await fetchImpl(finalUrl, {
+      method, headers, body, redirect: 'manual', signal: controller.signal,
     });
     httpStatus = resp.status;
     bodyText = await resp.text();
@@ -161,7 +201,7 @@ export async function deliverDirectPost(cfg, ctx) {
   const record = buildAttemptRecord({
     leadId: cfg.leadId, destinationId: cfg.destinationId, trigger: cfg.trigger, attemptNumber,
     idempotencyKey: cfg.idempotencyKey, isPrimary: cfg.isPrimary, status,
-    request: { method: cfg.method || 'POST', url: cfg.targetUrl, headers, body },
+    request: { method, url: finalUrl, headers, body: body ?? null },
     response: { status: httpStatus, body: bodyText }, httpStatus,
     latencyMs: (ctx.nowMs ?? 0) - t0, errorClass, nowMs, retryOpts: cfg.retryOpts,
   });

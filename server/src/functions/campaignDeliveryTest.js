@@ -1,6 +1,7 @@
 import { requireUser } from './_runtime.js';
 import * as engine from './routingEngine.generated.js';
 import { makeTargetValidator } from '../lib/ssrfGuard.js';
+import { resolveSubDeliveryCredential as resolveCredential } from '../lib/subDeliveryCredential.js';
 
 const validateTarget = makeTargetValidator();
 
@@ -18,21 +19,9 @@ const validateTarget = makeTargetValidator();
 // performs a real outbound request, and only for an explicitly confirmed test.
 //
 // CREDENTIAL HARD RULE: the outbound secret is resolved server-side here from the
-// sub-delivery's opaque credential_ref via secret storage. It is never accepted
-// from the browser, never logged, and never returned in the response.
-
-// Resolve credential_ref -> real auth headers from server-side secret storage.
-// Wired to the deployment secret store. Returns {} when unavailable so the test
-// still runs (unauthenticated) rather than leaking or crashing.
-async function resolveCredential(db, ref) {
-  if (!ref) return {};
-  try {
-    const rows = await db.entities.IntegrationConfig.filter({ key: ref });
-    const val = rows && rows[0] && rows[0].value;
-    if (val && typeof val === 'string') return { Authorization: val };
-  } catch { /* secret store not configured in this env */ }
-  return {};
-}
+// sub-delivery's opaque credential_ref via secret storage (subDeliveryCredential.js,
+// the same shared resolver processLead.js and nativeRetryRunner.js use). It is
+// never accepted from the browser, never logged, and never returned in the response.
 
 export default async function campaignDeliveryTest(ctx) {
   const user = requireUser(ctx);

@@ -44,6 +44,8 @@ export function projectSubDeliveryForClient(sd) {
     target_url: sd.target_url || '',
     method: sd.method || 'POST',
     encoding: sd.encoding || 'json',
+    query_params: sd.query_params || '',
+    delete_with_body: sd.delete_with_body === true,
     headers,
     field_map: sd.field_map || '',
     transforms: sd.transforms || '',
@@ -80,6 +82,10 @@ export function resolveSubDeliveryCfg(sd) {
     fieldMap: toFieldMap(parseJson(sd.field_map)),
     // Authoritative over fieldMap when non-empty; see directPost.js.
     payloadTemplate: typeof sd.payload_template === 'string' ? sd.payload_template : '',
+    // Additive: resolved the same way as payloadTemplate, but appended as URL
+    // query parameters rather than a request body. See directPost.js.
+    queryParamsTemplate: typeof sd.query_params === 'string' ? sd.query_params : '',
+    deleteWithBody: sd.delete_with_body === true,
     transforms: parseJson(sd.transforms) || [],
     responseMapping: toClassifyResponseMapping(parseJson(sd.response_mapping)),
     timeoutMs: Math.min(Number(sd.timeout_ms) || 10000, MAX_SEND_TIMEOUT_MS),
