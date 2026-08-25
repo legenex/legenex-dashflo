@@ -266,7 +266,7 @@ export default function DeliveryEditorDialog({ open, onOpenChange, buyerId, buye
                   <SelectTrigger className="h-9 bg-background"><SelectValue placeholder="Select vertical" /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="none">None</SelectItem>
-                    {verticals.map((v) => <SelectItem key={v.code} value={v.code}>{v.name}</SelectItem>)}
+                    {verticals.map((v) => <SelectItem key={v.id} value={v.id}>{v.name}</SelectItem>)}
                   </SelectContent>
                 </Select>
               </Field>
@@ -333,7 +333,10 @@ export default function DeliveryEditorDialog({ open, onOpenChange, buyerId, buye
               <div className="space-y-3">
                 <RouteScheduleEditor value={schedule} onChange={setSchedule} />
                 <RouteCapsEditor value={caps} onChange={setCaps} />
-                <StateCoverageSummary buyerId={effectiveBuyerId} verticalId={verticalId} />
+                <StateCoverageSummary
+                  buyerId={effectiveBuyerId}
+                  verticalCode={verticals.find((v) => v.id === verticalId)?.code || ''}
+                />
               </div>
             )}
           </CollapsibleSection>
@@ -411,10 +414,13 @@ function LoadingRow() {
 // Operations > Buyers > Coverage, this just links to it so an operator does
 // not have to guess whether a state filter here duplicates or conflicts with
 // coverage configured elsewhere.
-function StateCoverageSummary({ buyerId, verticalId }) {
+// verticalCode is BuyerStateCpl.vertical's own short-code shape (e.g. "MVA"),
+// resolved by the caller from the selected Vertical record's id - BuyerStateCpl
+// never stores a Vertical record id.
+function StateCoverageSummary({ buyerId, verticalCode }) {
   const { data: rows = [] } = useQuery({
-    queryKey: ['buyer-state-cpl-summary', buyerId, verticalId],
-    queryFn: () => api.entities.BuyerStateCpl.filter(verticalId ? { buyer_id: buyerId, vertical: verticalId } : { buyer_id: buyerId }),
+    queryKey: ['buyer-state-cpl-summary', buyerId, verticalCode],
+    queryFn: () => api.entities.BuyerStateCpl.filter(verticalCode ? { buyer_id: buyerId, vertical: verticalCode } : { buyer_id: buyerId }),
     enabled: !!buyerId,
   });
   const active = rows.filter((r) => r.active !== false).length;
@@ -423,7 +429,7 @@ function StateCoverageSummary({ buyerId, verticalId }) {
     <div className="flex items-center gap-2 rounded-md border border-border bg-muted/20 px-3 py-2.5">
       <Badge variant="outline">{active} of {rows.length} states active</Badge>
       <span className="text-[11px] text-muted-foreground">
-        via Buyer Coverage{verticalId ? ` (${verticalId})` : ''}. State eligibility for routing is a separate Filters
+        via Buyer Coverage{verticalCode ? ` (${verticalCode})` : ''}. State eligibility for routing is a separate Filters
         setting above - it is not automatically derived from coverage.
       </span>
     </div>

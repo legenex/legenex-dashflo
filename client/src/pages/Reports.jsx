@@ -235,7 +235,7 @@ export default function Reports() {
           <div className="space-y-3">
             <div>
               <Label className="text-[12px]">Report Name</Label>
-              <Input autoFocus value={saveName} onChange={e => setSaveName(e.target.value)} placeholder="e.g. AG1 Report" className="mt-1 bg-background text-[13px]" />
+              <Input autoFocus value={saveName} onChange={e => setSaveName(e.target.value)} placeholder="e.g. LF1 Report" className="mt-1 bg-background text-[13px]" />
             </div>
             <p className="text-[12px] text-muted-foreground">
               Saves the current cards, widgets and active filters as a named report under the Custom group.

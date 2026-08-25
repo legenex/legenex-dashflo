@@ -36,11 +36,29 @@ export function shouldRetry(status, attemptNumber, maxAttempts = 5) {
   return retryable && attemptNumber < maxAttempts;
 }
 
+// Response text is bounded before any operator-supplied regex runs against
+// it. mapping.duplicate/reject/queue/accept are free-text patterns an
+// operator enters in the delivery editor, matched with new RegExp(re, 'i')
+// against the destination's response body. This bound protects against a
+// large-but-otherwise-safe body making even a normal pattern slow to match
+// (linear-time cost against a multi-megabyte string). It is NOT a complete
+// defense against a deliberately pathological pattern (nested-quantifier
+// catastrophic backtracking, e.g. (a+)+b): that class of pattern is
+// exponential in the length of the matched run, so even this bound's 10,000
+// characters is nowhere near small enough to guarantee fast completion
+// against one. Full protection needs either a hard execution timeout on the
+// match (not available for a synchronous RegExp in plain Node without a
+// worker thread) or static rejection of dangerous pattern shapes at the
+// point an operator saves a response_mapping - neither is implemented here;
+// this bound is a real but partial mitigation, not a guarantee.
+const MAX_CLASSIFY_TEXT_LENGTH = 10000;
+
 // Classify a destination response into an attempt status. `mapping` optionally
 // supplies regexes for duplicate/reject/queue detection in the body text.
 export function classifyResponse({ httpStatus, body, error, mapping = {} } = {}) {
   if (error) return ATTEMPT_STATUS.ERROR;
-  const text = typeof body === 'string' ? body : JSON.stringify(body ?? {});
+  const fullText = typeof body === 'string' ? body : JSON.stringify(body ?? {});
+  const text = fullText.length > MAX_CLASSIFY_TEXT_LENGTH ? fullText.slice(0, MAX_CLASSIFY_TEXT_LENGTH) : fullText;
   const test = (re) => { try { return re && new RegExp(re, 'i').test(text); } catch { return false; } };
 
   if (mapping.duplicate && test(mapping.duplicate)) return ATTEMPT_STATUS.DUPLICATE;

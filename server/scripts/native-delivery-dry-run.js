@@ -16,10 +16,11 @@
 // activation gate does not itself block the simulation. That override is
 // never written back; it is clearly labeled in the report below.
 //
-// Usage:
-//   node scripts/native-delivery-dry-run.js --buyer "Walker Advertising"
+// Usage (--buyer is required - this is generic tooling for any buyer, not
+// one company's acceptance script):
+//   node scripts/native-delivery-dry-run.js --buyer "Acme Corp"
 //
-// See docs/STATE.md for the run this script's own output backs.
+// See docs/STATE.md for prior runs this script's own output has backed.
 
 import http from 'node:http';
 import { ensureSchema } from '../src/db/schema.js';
@@ -34,7 +35,11 @@ const {
 } = engine;
 
 const argBuyerIdx = process.argv.indexOf('--buyer');
-const BUYER_NAME = argBuyerIdx > -1 ? process.argv[argBuyerIdx + 1] : 'Walker Advertising';
+const BUYER_NAME = argBuyerIdx > -1 ? process.argv[argBuyerIdx + 1] : null;
+if (!BUYER_NAME) {
+  console.log('[native-delivery-dry-run] Usage: node scripts/native-delivery-dry-run.js --buyer "<company_name>"');
+  process.exit(1);
+}
 
 const SYNTHETIC_LEAD = {
   first_name: 'Synthetic', last_name: 'DryRun', email: 'synthetic.dryrun@example.test',

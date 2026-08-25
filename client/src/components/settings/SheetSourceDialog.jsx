@@ -460,7 +460,7 @@ export default function SheetSourceDialog({ open, onOpenChange, source, onSaved 
             </div>
             <div>
               <Label className="text-[12px]">Name *</Label>
-              <Input value={form.name} onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))} placeholder="e.g. AG1 Buyer Feedback" className="mt-1 bg-background" />
+              <Input value={form.name} onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))} placeholder="e.g. LF1 Buyer Feedback" className="mt-1 bg-background" />
             </div>
             <DialogFooter>
               <Button variant="ghost" onClick={() => onOpenChange(false)}>Cancel</Button>
@@ -615,7 +615,7 @@ export default function SheetSourceDialog({ open, onOpenChange, source, onSaved 
                 <Input
                   value={aiPrompt}
                   onChange={(e) => setAiPrompt(e.target.value)}
-                  placeholder="e.g. AG1 feedback, Phone is the consumer, Qualified Flag means converted, Net Cost is what they paid us"
+                  placeholder="e.g. LF1 feedback, Phone is the consumer, Qualified Flag means converted, Net Cost is what they paid us"
                   className="bg-background text-[12px]"
                 />
                 <Button variant="outline" onClick={aiConfigure} disabled={aiBusy || !columns.length} className="gap-1.5 shrink-0">

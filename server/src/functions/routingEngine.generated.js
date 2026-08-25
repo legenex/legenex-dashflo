@@ -1,7 +1,7 @@
 // GENERATED FILE - DO NOT EDIT BY HAND.
 // Source of truth: src/lib/distribution/backend-entry.js and its imports.
 // Regenerate: node scripts/generate-backend-engine.mjs
-// canonical-engine-sha256: 55f6dcb004b9ff27875ddb1f16f30d9594205b605557a50c71ee886fb9dd1779
+// canonical-engine-sha256: f20f89d472e72d3644347cfda847f382194398645fab5cd9b3fab3d0c6fdfc28
 // src/lib/distribution/engine.js
 var REASON = {
   ELIGIBLE: "ELIGIBLE",
@@ -478,9 +478,11 @@ function shouldRetry(status, attemptNumber, maxAttempts = 5) {
   const retryable = status === ATTEMPT_STATUS.ERROR || status === ATTEMPT_STATUS.QUEUED;
   return retryable && attemptNumber < maxAttempts;
 }
+var MAX_CLASSIFY_TEXT_LENGTH = 1e4;
 function classifyResponse({ httpStatus, body, error, mapping = {} } = {}) {
   if (error) return ATTEMPT_STATUS.ERROR;
-  const text = typeof body === "string" ? body : JSON.stringify(body ?? {});
+  const fullText = typeof body === "string" ? body : JSON.stringify(body ?? {});
+  const text = fullText.length > MAX_CLASSIFY_TEXT_LENGTH ? fullText.slice(0, MAX_CLASSIFY_TEXT_LENGTH) : fullText;
   const test = (re) => {
     try {
       return re && new RegExp(re, "i").test(text);

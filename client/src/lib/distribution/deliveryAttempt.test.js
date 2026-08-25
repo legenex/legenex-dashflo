@@ -40,6 +40,23 @@ describe('classifyResponse', () => {
     expect(classifyResponse({ httpStatus: 200, body: 'REJECT: dq', mapping: { reject: 'reject' } }))
       .toBe(ATTEMPT_STATUS.REJECTED);
   });
+  it('bounds the text a SAFE regex runs against, so a very large-but-otherwise-safe response body cannot make matching arbitrarily slow', () => {
+    // A real accept marker still matches when it is well within the bound.
+    const nearStart = `{"result":"accepted"}${'x'.repeat(20000)}`;
+    expect(classifyResponse({ httpStatus: 200, body: nearStart, mapping: { accept: 'accepted' } }))
+      .toBe(ATTEMPT_STATUS.ACCEPTED);
+    // A marker placed only past the bound does not match - proves the input
+    // actually got truncated before the regex ran, not just tolerated.
+    const pastBound = `${'x'.repeat(20000)}{"result":"accepted"}`;
+    expect(classifyResponse({ httpStatus: 400, body: pastBound, mapping: { accept: 'accepted' } }))
+      .toBe(ATTEMPT_STATUS.REJECTED);
+    // NOTE: this bound does NOT protect against a deliberately pathological
+    // (catastrophic-backtracking) pattern - 10,000 characters is still far
+    // too large a run for an exponential-time match to complete quickly. See
+    // the comment above MAX_CLASSIFY_TEXT_LENGTH for what would actually be
+    // needed to close that gap; it is a known, documented, unfixed limit,
+    // not something this test claims to cover.
+  });
 });
 
 describe('buildAttemptRecord', () => {

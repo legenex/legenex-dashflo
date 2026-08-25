@@ -5,8 +5,15 @@ import { requireUser, HttpError } from './_runtime.js';
 // transition, writes a DistributionAudit record (who/when/from/to/reason),
 // then updates the setting. Authorization runs before any data mutation.
 
-// Known distribution modes for the routing engine, in rollout order.
-const DISTRIBUTION_MODES = ['legacy_only', 'shadow', 'canary', 'dual', 'new_only'];
+// Known distribution modes for the routing engine, in rollout order. Must
+// match client/src/lib/distribution/modeControl.js's MODES and the inline
+// allowlist processLead.js checks distribution_mode against exactly - this
+// list had drifted to 'dual' where the other two say
+// 'new_primary_with_legacy_fallback', which meant an operator could set
+// mode:'dual' here (accepted, audited, and persisted) while processLead.js
+// silently fell back to legacy_only on every subsequent lead, since 'dual'
+// matched nothing in its own allowlist.
+const DISTRIBUTION_MODES = ['legacy_only', 'shadow', 'canary', 'new_primary_with_legacy_fallback', 'new_only'];
 
 function isOperator(u) {
   if (!u) return false;

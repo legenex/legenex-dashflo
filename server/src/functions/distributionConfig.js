@@ -29,9 +29,18 @@ export default async function distributionConfig(ctx) {
       const members = await svc.entities.RouteMember.filter({ route_group_id: gid }, 'priority', 500, 0);
       const buyerIds = [...new Set(members.map((m) => m.buyer_id).filter(Boolean))];
       const destIds = [...new Set(members.map((m) => m.destination_id).filter(Boolean))];
+      // Canonical (native) members reference sub_delivery_id, not destination_id
+      // (deprecated legacy path). validateConfigForPublish needs the real
+      // SubDelivery/parent-Delivery rows to check them - without these, every
+      // member on the native path was silently reported "sub-delivery not
+      // found" regardless of how it was actually configured.
+      const subDeliveryIds = [...new Set(members.map((m) => m.sub_delivery_id).filter(Boolean))];
       const buyers = []; for (const id of buyerIds) { const r = await svc.entities.Buyer.filter({ id }); if (r[0]) buyers.push(r[0]); }
       const destinations = []; for (const id of destIds) { const r = await svc.entities.LeadByteConnector.filter({ id }); if (r[0]) destinations.push(r[0]); }
-      return { group, members, buyers, destinations };
+      const subDeliveries = []; for (const id of subDeliveryIds) { const r = await svc.entities.SubDelivery.filter({ id }); if (r[0]) subDeliveries.push(r[0]); }
+      const deliveryIds = [...new Set(subDeliveries.map((s) => s.delivery_id).filter(Boolean))];
+      const deliveries = []; for (const id of deliveryIds) { const r = await svc.entities.Delivery.filter({ id }); if (r[0]) deliveries.push(r[0]); }
+      return { group, members, buyers, destinations, subDeliveries, deliveries };
     }
 
     if (action === 'create_draft') {

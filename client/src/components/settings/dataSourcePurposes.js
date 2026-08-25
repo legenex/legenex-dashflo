@@ -26,7 +26,7 @@ export const SHEET_PURPOSES = [
     value: 'inbound_calls',
     label: 'Inbound calls',
     short: 'Calls',
-    desc: 'Calls with their qualified flag and payout, e.g. a Walker AG1 report. Each row becomes a call record you can see under Leads, Calls.',
+    desc: 'Calls with their qualified flag and payout, e.g. a buyer call report. Each row becomes a call record you can see under Leads, Calls.',
     writesTo: 'CallRecord',
     needsMatch: false,
     needsApiKey: false,

@@ -62,12 +62,19 @@ export default async function ensureDeliveryRouteMember(ctx) {
     }, 409);
   }
 
-  const campaigns = await db.entities.Campaign.filter({ vertical: delivery.vertical_id });
+  // Delivery.vertical_id is a foreign key to a Vertical record's internal id
+  // (the canonical editor's vertical picker writes v.id, matching this), while
+  // Campaign.vertical is that Vertical's short code (e.g. "MVA") - translate
+  // before filtering rather than comparing the two directly, the same
+  // mismatch server/src/lib/routeMemberMapping.js was fixed for.
+  const vertical = await db.entities.Vertical.get(delivery.vertical_id).catch(() => null);
+  const verticalCode = vertical ? vertical.code : null;
+  const campaigns = verticalCode ? await db.entities.Campaign.filter({ vertical: verticalCode }) : [];
   const campaign = campaigns && campaigns[0];
   if (!campaign) {
     return ctx.json({
       ok: false,
-      error: `No Campaign found for vertical "${delivery.vertical_id}". A Campaign for this vertical must exist before routing-scoped settings can be configured.`,
+      error: `No Campaign found for vertical "${verticalCode || delivery.vertical_id}". A Campaign for this vertical must exist before routing-scoped settings can be configured.`,
     }, 409);
   }
 

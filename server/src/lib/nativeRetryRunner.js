@@ -8,6 +8,14 @@
 
 import * as engine from '../functions/routingEngine.generated.js';
 
+// Fail-closed allowlist, not a bare "!== legacy_only" check: an unrecognized
+// or drifted mode string (e.g. a typo, or the historical 'dual' vs
+// 'new_primary_with_legacy_fallback' mismatch this repo once had between
+// distributionSetMode.js and processLead.js) must leave native retries off,
+// the same way processLead.js's own inline allowlist already treats an
+// unrecognized value as legacy_only rather than as "anything goes".
+const NATIVE_MODES = new Set(engine.MODES.filter((m) => m !== 'legacy_only'));
+
 async function resolveCredential(db, ref) {
   if (!ref) return {};
   try {
@@ -21,8 +29,8 @@ async function resolveCredential(db, ref) {
 export async function runNativeRetryPass(db, { workerId }) {
   const settingsArr = await db.entities.AppSettings.list();
   const mode = String((settingsArr[0] && settingsArr[0].distribution_mode) || 'legacy_only');
-  if (mode === 'legacy_only') {
-    return { ran: false, reason: 'distribution_mode is legacy_only; native retries stay off.', mode };
+  if (!NATIVE_MODES.has(mode)) {
+    return { ran: false, reason: `distribution_mode "${mode}" does not enable native delivery; native retries stay off.`, mode };
   }
 
   const store = db.entities.DeliveryAttempt ? engine.makeEntityAttemptStore(db) : engine.makeInMemoryAttemptStore();

@@ -158,7 +158,7 @@ export default function FinanceSettingsTab() {
             </Button>
           </div>
           <div className="space-y-2">
-            {settings.matchRules.length === 0 && <div className="text-[12px] text-muted-foreground py-4 text-center">No rules yet. Add one to auto-match deposits, for example "WA2" to Walker Advertising.</div>}
+            {settings.matchRules.length === 0 && <div className="text-[12px] text-muted-foreground py-4 text-center">No rules yet. Add one to auto-match deposits, for example "AB1" to a specific buyer.</div>}
             {settings.matchRules.map((r, i) => (
               <div key={r.id} className="grid grid-cols-[2fr_1fr_2fr_auto] gap-2 items-center rounded-lg border border-border bg-background/40 p-2.5">
                 <Input value={r.pattern} onChange={e => { const v = e.target.value; patch('matchRules', settings.matchRules.map((x, j) => j === i ? { ...x, pattern: v } : x)); }} placeholder="Description contains..." className="bg-background text-[12px]" />
