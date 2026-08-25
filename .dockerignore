@@ -9,3 +9,11 @@ server/.env
 uploads
 *.log
 .DS_Store
+
+# Ad hoc local migration-apply wrapper scripts and encrypted migration
+# bundles carry inline plaintext credentials. .gitignore already keeps them
+# out of the repository; excluding them here too keeps them out of built
+# image layers, which a plain COPY . . would otherwise include.
+/run-migration-apply.mjs
+/run-migration.mjs
+*.json.enc
