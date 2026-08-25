@@ -1,13 +1,14 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { api } from '@/api/client';
 import { fetchAll } from '@/lib/fetchAll';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Loader2, Plus, Pencil } from 'lucide-react';
+import { Loader2, Plus } from 'lucide-react';
 import { parseSchedule } from '@/lib/routeSchedule';
 import { parseCaps } from '@/lib/routeCaps';
-import DeliveryEditorDialog from '@/components/campaigns/DeliveryEditorDialog';
+import DeliveryActionsMenu from '@/components/delivery/DeliveryActionsMenu';
 
 function hostOf(url) {
   try { return new URL(url).host; } catch { return url || ''; }
@@ -26,11 +27,13 @@ function scheduleSummary(schedule) {
 }
 
 // Primary surface of /webhooks: every native Delivery across every buyer,
-// each backed by the SAME canonical DeliveryEditorDialog used from Operations
-// > Buyers > Buyer Deliveries. There is deliberately no separate "create"
-// flow here - opening a row or "New delivery" mounts the identical editor.
+// each edited on the SAME full-page canonical editor (/webhooks/:deliveryId)
+// used from Operations > Buyers > Buyer Deliveries. There is deliberately no
+// separate "create" flow here - opening a row or "New delivery" navigates to
+// the identical editor route.
 export default function NativeDeliveriesList() {
-  const [dialog, setDialog] = useState(null);
+  const navigate = useNavigate();
+  const qc = useQueryClient();
 
   const { data: deliveries = [], isLoading } = useQuery({
     queryKey: ['native-deliveries'],
@@ -44,12 +47,17 @@ export default function NativeDeliveriesList() {
     queryKey: ['op-buyers-picker'],
     queryFn: () => api.entities.Buyer.list(),
   });
+  const { data: verticals = [] } = useQuery({
+    queryKey: ['op-verticals'],
+    queryFn: () => api.entities.Vertical.list(),
+  });
   const { data: routeMembers = [] } = useQuery({
     queryKey: ['route-members-summary'],
     queryFn: () => fetchAll((limit, skip) => api.entities.RouteMember.list('-created_date', limit, skip)),
   });
 
   const buyersById = useMemo(() => Object.fromEntries(buyers.map((b) => [b.id, b])), [buyers]);
+  const verticalsById = useMemo(() => Object.fromEntries(verticals.map((v) => [v.id, v])), [verticals]);
   const subsByDelivery = useMemo(() => {
     const map = {};
     (subs || []).forEach((s) => { (map[s.delivery_id] ||= []).push(s); });
@@ -62,10 +70,17 @@ export default function NativeDeliveriesList() {
   );
 
   const rows = useMemo(() => (deliveries || []).map((d) => {
-    const primary = (subsByDelivery[d.id] || [])[0] || null;
+    const list = subsByDelivery[d.id] || [];
+    const primary = list.find((s) => s.active !== false) || list[0] || null;
     const rm = primary ? routeMemberBySubId[primary.id] : null;
-    return { delivery: d, sub: primary, buyer: buyersById[d.buyer_id], routeMember: rm };
-  }), [deliveries, subsByDelivery, buyersById, routeMemberBySubId]);
+    return { delivery: d, sub: primary, buyer: buyersById[d.buyer_id], vertical: verticalsById[d.vertical_id], routeMember: rm };
+  }), [deliveries, subsByDelivery, buyersById, verticalsById, routeMemberBySubId]);
+
+  function invalidateAll() {
+    qc.invalidateQueries({ queryKey: ['native-deliveries'] });
+    qc.invalidateQueries({ queryKey: ['deliveries'] });
+    qc.invalidateQueries({ queryKey: ['subdeliveries'] });
+  }
 
   if (isLoading) {
     return <div className="flex justify-center py-12"><Loader2 className="w-5 h-5 animate-spin text-muted-foreground" /></div>;
@@ -78,16 +93,16 @@ export default function NativeDeliveriesList() {
           {rows.length} native {rows.length === 1 ? 'delivery' : 'deliveries'}. Buyer-owned, edited with the same
           canonical editor as Operations &gt; Buyers &gt; Buyer Deliveries.
         </p>
-        <Button size="sm" className="gap-1.5" onClick={() => setDialog({ delivery: null, buyerId: null, buyerName: null })}>
+        <Button size="sm" className="gap-1.5" onClick={() => navigate('/webhooks/new')}>
           <Plus className="w-3.5 h-3.5" /> New delivery
         </Button>
       </div>
 
       <div className="rounded-md border border-border overflow-hidden overflow-x-auto">
-        <div className="min-w-[960px]">
-          <div className="grid grid-cols-[1fr_140px_90px_90px_1fr_90px_1fr_1fr_60px] gap-2 px-3 py-2 border-b border-border bg-background/40 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+        <div className="min-w-[1060px]">
+          <div className="grid grid-cols-[1fr_140px_90px_90px_1fr_70px_70px_1fr_1fr_40px] gap-2 px-3 py-2 border-b border-border bg-background/40 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
             <span>Name</span><span>Buyer</span><span>Status</span><span>Vertical</span>
-            <span>Endpoint host</span><span>Method</span><span>Schedule</span><span>Caps</span><span />
+            <span>Endpoint host</span><span>Method</span><span>Format</span><span>Schedule</span><span>Caps</span><span />
           </div>
           {rows.length === 0 && (
             <div className="px-3 py-8 text-center text-[12px] text-muted-foreground">
@@ -95,34 +110,31 @@ export default function NativeDeliveriesList() {
               activates them elsewhere.
             </div>
           )}
-          {rows.map(({ delivery, sub, buyer, routeMember }) => (
-            <button
+          {rows.map(({ delivery, sub, buyer, vertical, routeMember }) => (
+            <div
               key={delivery.id}
-              onClick={() => setDialog({ delivery, buyerId: delivery.buyer_id, buyerName: buyer?.company_name })}
-              className="w-full grid grid-cols-[1fr_140px_90px_90px_1fr_90px_1fr_1fr_60px] gap-2 px-3 py-2.5 border-b border-border last:border-b-0 items-center text-left hover:bg-accent/30 transition-colors"
+              role="button"
+              tabIndex={0}
+              onClick={() => navigate(`/webhooks/${delivery.id}`)}
+              onKeyDown={(e) => { if (e.key === 'Enter') navigate(`/webhooks/${delivery.id}`); }}
+              className="w-full grid grid-cols-[1fr_140px_90px_90px_1fr_70px_70px_1fr_1fr_40px] gap-2 px-3 py-2.5 border-b border-border last:border-b-0 items-center text-left hover:bg-accent/30 transition-colors cursor-pointer"
             >
               <span className="text-[12px] font-medium text-foreground truncate">{delivery.name || 'Unnamed delivery'}</span>
               <span className="text-[12px] text-muted-foreground truncate">{buyer?.company_name || delivery.buyer_id}</span>
               <StatusBadge status={delivery.status} />
-              <span className="text-[11px] text-muted-foreground">{delivery.vertical_id || '-'}</span>
+              <span className="text-[11px] text-muted-foreground">{vertical?.name || 'Global'}</span>
               <span className="text-[11px] font-mono text-muted-foreground truncate">{sub ? hostOf(sub.target_url) || 'No URL' : 'No endpoint'}</span>
               <span className="text-[11px] font-mono text-muted-foreground">{sub?.method || '-'}</span>
+              <span className="text-[11px] font-mono text-muted-foreground">{(sub?.encoding || '-').toUpperCase()}</span>
               <span className="text-[11px] text-muted-foreground truncate">{routeMember ? scheduleSummary(parseSchedule(routeMember.schedule)) : 'Not routed'}</span>
               <span className="text-[11px] text-muted-foreground truncate">{routeMember ? capSummary(parseCaps(routeMember.caps)) : '-'}</span>
-              <Pencil className="w-3.5 h-3.5 text-muted-foreground justify-self-end" />
-            </button>
+              <div onClick={(e) => e.stopPropagation()}>
+                <DeliveryActionsMenu delivery={delivery} onChanged={invalidateAll} />
+              </div>
+            </div>
           ))}
         </div>
       </div>
-
-      <DeliveryEditorDialog
-        open={!!dialog}
-        onOpenChange={(v) => { if (!v) setDialog(null); }}
-        buyerId={dialog?.buyerId || null}
-        buyerName={dialog?.buyerName || null}
-        delivery={dialog?.delivery || null}
-        primarySub={dialog?.delivery ? (subsByDelivery[dialog.delivery.id] || [])[0] || null : null}
-      />
     </div>
   );
 }

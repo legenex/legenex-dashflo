@@ -69,6 +69,7 @@ const BuyerDetail = lazy(() => import('@/pages/BuyerDetail'));
 const Reports = lazy(() => import('@/pages/Reports'));
 const Finances = lazy(() => import('@/pages/Finances'));
 const Webhooks = lazy(() => import('@/pages/Webhooks'));
+const DeliveryEditorPage = lazy(() => import('@/pages/DeliveryEditorPage'));
 const ConversionEvents = lazy(() => import('@/pages/ConversionEvents'));
 const RouteSimulator = lazy(() => import('@/pages/RouteSimulator'));
 const RouteGroups = lazy(() => import('@/pages/RouteGroups'));
@@ -212,6 +213,12 @@ export function OperatorRoutes() {
             <Route path="/campaigns/deliveries" element={<Navigate to="/campaigns" replace />} />
             {/* Canonical webhook/delivery configuration screen. */}
             <Route path="/webhooks" element={<Webhooks />} />
+            {/* Full-page canonical Delivery editor. Opened identically from
+                Webhooks (Native Deliveries) and Operations > Buyers > Buyer
+                Deliveries - same route, same Delivery/SubDelivery record,
+                no separate modal editor. /webhooks/new creates one. */}
+            <Route path="/webhooks/new" element={<DeliveryEditorPage />} />
+            <Route path="/webhooks/:deliveryId" element={<DeliveryEditorPage />} />
             {/* /deliveries is the old URL for this screen. Kept as a permanent
                 compatibility redirect so bookmarks and cross-links do not 404. */}
             <Route path="/deliveries" element={<Navigate to="/webhooks" replace />} />

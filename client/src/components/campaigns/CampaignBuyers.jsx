@@ -17,7 +17,6 @@ import ImportExportDialog from '@/components/shared/ImportExportDialog';
 import { TableShell, Row, Tag, EmptyRow } from '@/components/campaigns/campaignTable';
 import RowActionsMenu from '@/components/campaigns/RowActionsMenu';
 import BuyerDeliveryRows from '@/components/campaigns/BuyerDeliveryRows';
-import DeliveryEditorDialog from '@/components/campaigns/DeliveryEditorDialog';
 
 const BUYER_TEMPLATE = '32px 1.5fr 0.7fr 0.8fr 0.9fr 1fr 0.9fr 0.9fr 0.9fr 0.9fr 1fr 0.9fr 0.9fr 0.9fr 0.8fr';
 
@@ -35,7 +34,6 @@ export default function CampaignBuyers() {
   const [ioOpen, setIoOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [expanded, setExpanded] = useState(() => new Set());
-  const [deliveryDialog, setDeliveryDialog] = useState(null);
 
   const toggleExpand = (id) => setExpanded((prev) => {
     const next = new Set(prev);
@@ -73,6 +71,15 @@ export default function CampaignBuyers() {
     Object.values(map).forEach((list) => list.sort((a, b) => (a.order_index || 0) - (b.order_index || 0)));
     return map;
   }, [subs]);
+  // Buyer.vertical is a short code (e.g. "MVA"); Delivery.vertical_id is a
+  // Vertical record's internal id (see routeMemberMapping.js for the same
+  // identifier-space distinction). Resolved here so a new delivery created
+  // from an already-vertical-scoped buyer does not ask the operator to
+  // re-pick a vertical the buyer already has.
+  const verticalIdByCode = useMemo(
+    () => Object.fromEntries(verticalList.map((v) => [v.code, v.id])),
+    [verticalList],
+  );
   const verticalOptions = verticalList.map(v => ({ value: v.code, label: v.name }));
 
   const openCreate = () => { setForm(BLANK); setEditId(null); setModal(true); };
@@ -205,23 +212,15 @@ export default function CampaignBuyers() {
             <BuyerDeliveryRows
               deliveries={bDeliveries}
               subsByDelivery={subsByDelivery}
-              onCreate={() => setDeliveryDialog({ buyer: b, delivery: null })}
-              onOpen={(d) => setDeliveryDialog({ buyer: b, delivery: d })}
+              buyerId={b.id}
+              verticalId={verticalIdByCode[b.vertical] || ''}
+              onChanged={() => { qc.invalidateQueries({ queryKey: ['deliveries'] }); qc.invalidateQueries({ queryKey: ['subdeliveries'] }); }}
             />
           )}
           </div>
           );
         })}
       </TableShell>
-
-      <DeliveryEditorDialog
-        open={!!deliveryDialog}
-        onOpenChange={(v) => { if (!v) setDeliveryDialog(null); }}
-        buyerId={deliveryDialog?.buyer?.id}
-        buyerName={deliveryDialog?.buyer?.company_name}
-        delivery={deliveryDialog?.delivery || null}
-        primarySub={(subsByDelivery[deliveryDialog?.delivery?.id] || [])[0] || null}
-      />
 
       <Dialog open={modal} onOpenChange={setModal}>
         <DialogContent className="bg-popover border-border max-w-[520px]">

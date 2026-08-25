@@ -1,7 +1,7 @@
 // GENERATED FILE - DO NOT EDIT BY HAND.
 // Source of truth: src/lib/distribution/backend-entry.js and its imports.
 // Regenerate: node scripts/generate-backend-engine.mjs
-// canonical-engine-sha256: e57c654f17480b441be7f773715b773cc6a6c1b25efb8bd1b1914e3049f782df
+// canonical-engine-sha256: 58d2f6736184a0708867027d09e307319b708d4c61c7b8c8e36499c47a5f738f
 // src/lib/distribution/engine.js
 var REASON = {
   ELIGIBLE: "ELIGIBLE",
@@ -1868,6 +1868,14 @@ async function buildPayloadFromTemplate(template, data) {
   }
 }
 
+// src/lib/distribution/methodSemantics.js
+function methodSendsBody(method, deleteWithBody) {
+  const m = String(method || "POST").toUpperCase();
+  if (m === "GET") return false;
+  if (m === "DELETE") return deleteWithBody === true;
+  return true;
+}
+
 // src/lib/distribution/directPost.js
 function getPath(obj, path) {
   if (!path) return void 0;
@@ -1929,7 +1937,7 @@ async function deliverDirectPost(cfg, ctx) {
     }
     if (appended) finalUrl = url.toString();
   }
-  const sendsBody = method !== "GET" && !(method === "DELETE" && !cfg.deleteWithBody);
+  const sendsBody = methodSendsBody(method, cfg.deleteWithBody);
   let payload;
   if (sendsBody) {
     if (cfg.payloadTemplate && String(cfg.payloadTemplate).trim() !== "") {
@@ -3163,6 +3171,7 @@ export {
   makeInMemoryHealthStore,
   makeInMemoryWalletStore,
   manualRetry,
+  methodSendsBody,
   missingRequiredFields,
   nextHealth,
   nextRetryAtIso,

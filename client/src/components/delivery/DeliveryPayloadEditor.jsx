@@ -17,7 +17,7 @@ import { beautifyJson } from '@/lib/jsonBeautify';
 // JSON.stringify(parsed, null, 2) - tokens are ordinary string content inside
 // valid JSON, so they round-trip untouched. It never runs automatically and
 // never touches the editor when the JSON is invalid; the operator sees why.
-export default function DeliveryPayloadEditor({ value, onChange, customFields = [] }) {
+export default function DeliveryPayloadEditor({ value, onChange, customFields = [], minHeight = 280 }) {
   const [error, setError] = useState(null);
 
   const text = value || '';
@@ -62,7 +62,7 @@ export default function DeliveryPayloadEditor({ value, onChange, customFields = 
             </Button>
           </div>
         </div>
-        <HighlightedPayloadEditor value={text} onChange={handleChange} minHeight={280} />
+        <HighlightedPayloadEditor value={text} onChange={handleChange} minHeight={minHeight} />
         {error && (
           <p className="text-[11px] text-destructive">
             {error.line != null ? `Line ${error.line}, column ${error.column}: ` : ''}{error.message}

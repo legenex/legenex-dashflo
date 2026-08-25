@@ -23,6 +23,7 @@ export { makeEntityWalletStore, makeInMemoryWalletStore } from './walletStore.js
 export { walletDebit, walletCredit, walletCreditReturn, WALLET } from './walletLedger.js';
 export { computeBillingLines, applyReturnAdjustment } from './billing.js';
 export { deliverDirectPost } from './directPost.js';
+export { methodSendsBody } from './methodSemantics.js';
 export { resolveSubDeliveryCfg, projectSubDeliveryForClient } from './deliveryResolve.js';
 export { runPingPost, buildPingPayload, PING_ALLOWLIST } from './pingpostFlow.js';
 export { distributeLead, orderEligible } from './distribute.js';

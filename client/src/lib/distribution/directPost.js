@@ -10,6 +10,7 @@
 import { classifyResponse, buildAttemptRecord, ATTEMPT_STATUS } from './deliveryAttempt.js';
 import { applyTransform } from './transforms.js';
 import { buildPayloadFromTemplate } from './payloadTemplate.js';
+import { methodSendsBody } from './methodSemantics.js';
 
 function getPath(obj, path) {
   if (!path) return undefined;
@@ -101,11 +102,11 @@ export async function deliverDirectPost(cfg, ctx) {
     if (appended) finalUrl = url.toString();
   }
 
-  // A GET never sends a body. A DELETE only sends one when the SubDelivery
-  // explicitly opted in via delete_with_body - otherwise it behaves like GET.
-  // POST/PUT/PATCH always send one. Method changes the wire request, not just
-  // which editor section the operator sees.
-  const sendsBody = method !== 'GET' && !(method === 'DELETE' && !cfg.deleteWithBody);
+  // Method changes the wire request, not just which editor section the
+  // operator sees: methodSendsBody is the SAME function the Delivery editor
+  // evaluates to decide whether to render the Payload tab or a "this method
+  // sends no body" notice, so the two can never disagree.
+  const sendsBody = methodSendsBody(method, cfg.deleteWithBody);
 
   // Payload: SubDelivery.payload_template is authoritative when configured
   // (same generic {{token|transform}} renderer as Dry Run and Mock Send, via
