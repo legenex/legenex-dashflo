@@ -4577,3 +4577,257 @@ payload-shape question the observed error suggests is unresolved; visual
 browser verification of `/webhooks` and Operations > Buyers > Walker
 Advertising was not performed this stage (no browser tool available), same
 carry-forward as every prior stage.
+
+## Lead Distribution rebuild, Stage 7: product/UX correction pass, production
+   RouteMember cleanup, eight parallel adversarial critics
+
+25-26 August 2026. A different kind of stage than 1-6: those built and
+hardened the native delivery *engine*. Stage 7 was explicitly scoped by the
+operator as a product/UX correction pass, because the operator-facing UI
+(Buyers tab, Routing tab, Webhooks page, delivery editor) had never been
+rebuilt to match the engine and was reported showing the wrong product
+model in production, with a specific reproducible screenshot: the MVA
+campaign's Routing tab showed roughly 12 rows that looked like real
+configured Deliveries but were mostly duplicated buyer names. Six commits,
+`dc1ed51` through `7b1ab78`, each independently gate-passing and
+individually deployed and verified before the next began, plus the
+production data cleanup performed directly against the VPS.
+
+### 1. Root cause of the ~12 fake Routing rows, found by direct production
+   query before any code change
+
+Read-only queries against the real production database
+(`docker compose exec -T db psql`) found the exact shape: 12 `RouteMember`
+rows, all under one `RouteGroup` (`6a5ceabe19fb1eaa0aabd593`, MVA campaign,
+`active:false`/`lifecycle:draft` throughout), created in two byte-for-byte
+duplicate batches 105 minutes apart (`2026-07-19T15:18:22Z` and
+`2026-07-19T17:03:36Z`) - six buyers, two `RouteMember` rows each. Only
+Walker Advertising (`buyer_code AG1`) has a real `Delivery`
+(`"Walker - 30 Days"`) anywhere in production; the other five buyers
+(Cofman Townsley, Quintessa, Jacoby & Meyers, Rainwater Holt & Sexton, Best
+Case Leads) have zero `Delivery` records at all. Every one of the 10
+orphan `RouteMember` rows had `sub_delivery_id: null` and a
+`destination_name` set to the buyer's own company name.
+
+The rendering bug: `client/src/lib/campaigns/memberDestination.js`'s
+`destinationLabel()` returned `RouteMember.destination_name` unconditionally
+whenever it was non-empty, with no check that `sub_delivery_id` resolved to
+anything real. The mechanism that populated `destination_name` with a
+buyer's own name: `client/src/components/campaigns/BuyerConfigModal.jsx`
+had a text input literally labeled "Buyer name" bound to that field.
+Two RouteMembers per buyer, not one, because the same buyer set was
+inserted twice 105 minutes apart by whatever process created these rows
+(not this session, and not reproducible from any script currently in this
+repository) - both batches' `priority` values are the interleaved sequence
+1 through 12 assigned per buyer per batch, evidence this was a single
+global counter across two runs, not a deliberate per-buyer choice.
+
+Walker's own two RouteMembers were a smaller, related problem: both already
+had `sub_delivery_id` set to the same real, active SubDelivery
+(`"Tier 1"`, per Stage 6's tier normalization), differing only in
+`priority` (2 vs 1) - the exact same duplicate-creation-batch artifact,
+not a deliberate distinction.
+
+### 2. Product/UX rebuild
+
+- **Buyers tab**: Operations > Buyers gained an accurate "Deliveries" count
+  column (`buyerColumns.js`/`OperationsBuyers.jsx`), matching what
+  Campaigns > Buyers already showed correctly. Every real Delivery under a
+  Buyer (`BuyerDeliveryRows.jsx`/`BuyerDeliveriesCard.jsx`) now has its own
+  row with a `DeliveryActionsMenu` (Edit/Rename/Duplicate/Enable-Disable/
+  Archive), replacing the old single ambiguous "Manage" button.
+- **Delivery editor**: `DeliveryEditorDialog.jsx` (an 880px modal, and the
+  also-dead, never-wired, more-feature-complete
+  `BuyerDeliveriesPanel.jsx` found during the audit) both deleted. Replaced
+  by `client/src/pages/DeliveryEditorPage.jsx`, a full-page route at
+  `/webhooks/:deliveryId` and `/webhooks/new`, tabbed: Overview / Request /
+  Payload / Routing Rules / Caps & Schedule / Response / Retries & Health /
+  History. Mounted identically from Webhooks and from Buyers - confirmed by
+  both surfaces navigating to the same route for the same record id.
+- **Method/format now actually change the editor**: `SubDelivery.method`
+  enum expanded from `[POST,PUT,GET]` to `[GET,POST,PUT,PATCH,DELETE]`; new
+  `query_params` and `delete_with_body` fields. GET/DELETE-without-body hide
+  the Payload tab and show Query Parameters instead; Format:Form renders
+  Field/Value rows over the same `payload_template` storage instead of raw
+  JSON (no new storage shape - the runtime already form-encodes the same
+  resolved object it would otherwise JSON-encode). One shared pure function,
+  `client/src/lib/distribution/methodSemantics.js`'s `methodSendsBody`, is
+  evaluated by both the real send path (`directPost.js`) and the editor, so
+  the two cannot disagree.
+- **Headers and query parameters are key/value rows**
+  (`KeyValueRowsEditor.jsx`), not a raw JSON textarea.
+- **Credential reference is a real picker** (`CredentialReferencePicker.jsx`,
+  `listCredentialReferences.js`) sourced from stored `IntegrationConfig`
+  names, never the secret value, with an owner/admin-gated inline "New
+  credential" flow.
+- **Vertical is read-only whenever context already determines it** (an
+  existing Delivery, or a campaign/buyer vertical carried through
+  navigation) - only a genuinely fresh, contextless Delivery gets a picker.
+- **Routing tab shows real Deliveries only**: `isConfiguredMember()` (new,
+  in `memberDestination.js`) requires `sub_delivery_id` to resolve to an
+  active SubDelivery whose parent Delivery is both active AND owned by the
+  same buyer as the RouteMember (the buyer-ownership check was missing in
+  the first version of this fix, found by two independent adversarial
+  review agents - see section 4). An unconfigured row now renders muted,
+  badged "Not configured", with a "Configure a delivery for this buyer
+  first" link to that buyer's page, instead of a fabricated-looking name.
+  `MemberPickerDialog.jsx` ("+ Add delivery") was already correct per the
+  audit - it only ever attaches an existing active Delivery/SubDelivery,
+  never invents one - and was not changed.
+- **Webhooks page**: `NativeDeliveriesList.jsx` rewritten with a Format
+  column and the same `DeliveryActionsMenu` per row, navigating to the same
+  canonical editor.
+- A real, previously-shipped bug fixed along the way: `credential_ref`
+  resolution (`processLead.js`, `campaignDeliveryTest.js`,
+  `nativeRetryRunner.js`, each with its own copy) filtered `IntegrationConfig`
+  by a `key` field and read `.value` off the row, neither of which exists
+  on the real schema (`name` + JSON `config`) - every configured credential
+  has therefore always resolved to nothing, silently sending outbound
+  requests unauthenticated. Consolidated into one shared, fixed
+  `server/src/lib/subDeliveryCredential.js`.
+
+### 3. Production RouteMember cleanup, before/after
+
+Before (all 12, confirmed by direct query, see section 1): 2 `READY`
+(Walker, byte-identical except `priority`), 10 `MISSING_DELIVERY`.
+
+`server/src/lib/routeMemberArchival.js` (pure, tested,
+`server/test/routeMemberArchival.test.js`, a fixture reproducing this exact
+6-buyer/2-each shape) classifies generically: `NO_DELIVERY_CONFIGURED` (via
+the existing `planRouteMemberMapping`) or `EXACT_DUPLICATE` (two active
+members in the same RouteGroup/buyer agreeing on every routing-meaningful
+field). `server/scripts/archive-invalid-route-members.js` is the
+report-only/`--apply` CLI wrapper. Run report-only against production
+first, output matched the expected classification exactly (10
+`NO_DELIVERY_CONFIGURED`, Walker's pair correctly left alone since
+`priority` differs and the generic classifier does not guess), then
+`--apply`:
+
+```
+[archive-invalid-route-members] Archived 10 RouteMember(s). 2 remain active.
+```
+
+Walker's pair needed a second, narrower step: `priority` (2 vs 1) is a real
+field difference, so the generic classifier correctly refused to guess.
+Cross-checking all 12 original rows' `priority` values by creation
+timestamp showed the full sequence 1-12 assigned as an interleaved global
+counter across the two duplicate-creation batches (section 1) - not a
+deliberate choice. `server/scripts/normalize-walker-route-member-duplicate.js`
+follows `normalize-walker-native-delivery-tiers.js`'s own established
+precedent exactly: a one-time, explicitly Walker-specific script (hardcoded
+ids, not generic tooling defaulted to one buyer), which re-verifies every
+other field matches before touching anything. Report-only confirmed the
+match, then `--apply`:
+
+```
+[normalize-walker-route-member-duplicate] Archived 6a5d036865c28196402bdd17.
+6a5ceabe90e288d32b53717f remains the one active Walker RouteMember.
+```
+
+After (verified by direct query): exactly 1 active RouteMember
+(`6a5ceabe90e288d32b53717f`, Walker, `sub_delivery_id` pointing at the real
+`Tier 1` SubDelivery), 11 archived (`active:false`, `destination_name`
+suffixed with an audit marker naming the reason and this section). Nothing
+deleted. Buyer/Delivery/SubDelivery/Lead counts confirmed unchanged
+(10/1/2/1997) before and after. Safety invariants reverified after: 
+`distribution_mode` still empty (`legacy_only` governs),
+`NATIVE_RETRY_WORKER_ENABLED` still absent, both `RouteGroup` rows still
+`active:false`/`lifecycle:draft`, default `LeadByteConnector` unchanged.
+
+### 4. Eight parallel adversarial critics, six real findings fixed
+
+Per the operating loop's own requirement, eight independent read-only
+agents (product model, HTTP method/encoding, delivery editor UX, routing
+data/cleanup correctness, API/backend/UI parity, security/secrets,
+production database consistency, visual/product) reviewed the actual
+shipped code, not a description of it, and tried to prove it wrong. Six
+real, independently-verified findings, several confirmed by more than one
+agent:
+
+1. **SEVERE - confirmed silent data corruption.** `entityPolicy.js` redacts
+   a secret-shaped `SubDelivery.headers` value to the literal string
+   `"[redacted]"` before it reaches the browser. The new editor loaded that
+   placeholder into an editable row and resubmitted it verbatim on every
+   save, permanently overwriting the real header value. Fixed with a new
+   `saveSubDeliveryHeaders.js`, merging the incoming write against the real
+   stored value server-side - the same reason `saveIntegrationConfig.js`
+   exists for `IntegrationConfig.config`.
+2. **Cross-buyer ownership never checked** (found independently by two
+   agents): `isConfiguredMember` did not verify the resolved Delivery
+   belongs to the RouteMember's own buyer, while the real send-time
+   resolver (`snapshot.js`) does. Fixed in both `memberDestination.js` and
+   `routeMemberArchival.js`'s classification (new `OWNERSHIP_MISMATCH`/
+   `UNKNOWN_BUYER` handling).
+3. **Silent data loss**: saving cleared `payload_template` to empty
+   whenever the current method sends no body. Now always preserved; the
+   runtime already ignores it for a bodyless method.
+4. **Stale query parameters**: `query_params` applied to the outbound URL
+   for any method, but the editor only shows/lets an operator clear that
+   section for a bodyless method - switching Method to one that sends a
+   body left a stale, possibly credential-shaped query string silently
+   firing with no visible control to remove it. Runtime now applies
+   `query_params` only when the method sends no body.
+5. **Authorization gap**: `listCredentialReferences.js` allowed any
+   authenticated user, including a buyer/supplier portal account, to
+   enumerate internal credential names. Now gated with the same shared
+   `isOperator` predicate its sibling delivery functions already use.
+6. **Defense in depth**: `query_params` can carry lead PII; the persisted
+   `DeliveryAttempt.request_meta.url` kept it unredacted while the body was
+   already deliberately minimized for the same reason. Query parameter
+   VALUES are now redacted in the stored record (keys kept).
+
+Also fixed: the Archive confirmation copy claimed no effect on existing
+route assignments, when an active route through an archived Delivery
+actually fails closed immediately (`snapshot.js`'s own `CONFIG_INVALID`
+gate) - copy corrected. The Duplicate action's `?rename=1` navigation
+param is now stripped from the URL after being read, so a refresh no
+longer reopens the rename dialog indefinitely.
+
+Findings triaged and deliberately NOT fixed this stage, with reasons:
+
+- `EXACT_DUPLICATE`'s fingerprint omits `RouteMember.integration_complete`/
+  `pause_reason` - both confirmed dead schema properties today (zero reads
+  or writes anywhere in the repository), so nothing is currently at risk.
+- The generic `archive-invalid-route-members.js` has no per-RouteGroup
+  scope/confirmation gate before `--apply`, unlike the deliberately
+  hand-verified, hardcoded Walker script. Not a problem for the one
+  already-fully-reviewed application performed this stage (every one of
+  the 12 rows was individually inspected before `--apply` ran), but a real
+  gap before this tool is ever run again against a RouteGroup nobody has
+  manually reviewed - recommend adding a scope flag or requiring a
+  human-reviewed report before any future `--apply`.
+- A pre-existing role-model gap, not introduced this stage: a `User` with
+  no `base_role` and `role !== 'admin'` resolves to `'manager'`
+  client-side but `ROLE.UNKNOWN` server-side, so the new editor would
+  render normally for such an account and then every write 403s.
+- Vertical is permanently locked once set on an existing Delivery, with no
+  UI path to ever change it - consistent with Buyer's own immutability in
+  this editor, but undocumented as deliberate.
+- Payload workspace: a real, substantial increase (`minHeight` 280 -> 520,
+  roughly 16 to 29 visible lines) but short of the brief's stated
+  "50-100 lines" target; the token sidebar is a fixed 260px rather than a
+  literal 30% share on very wide viewports.
+
+### 5. Evidence
+
+- `npm run gate`: PASS, all eight steps, at every one of the six commits
+  individually. Final state: 1746 tests, 0 failures (up from 1687 before
+  this stage).
+- Each commit deployed individually via GitHub Actions and verified;
+  `deploy-production.yml`'s own stale-SHA guard correctly refused one
+  rerun of an out-of-date commit after a newer one had already deployed in
+  the interim (`host is at <newer sha> but GitHub is deploying <older sha>`)
+  - expected behavior given two pushes in quick succession, not a real
+  failure; confirmed the newer SHA was already live and healthy.
+- Production verified after every deploy and after the data cleanup:
+  `/api/health` 200, all five public hosts 200, safety invariants
+  unchanged throughout (section 3).
+- `UNPROVEN`, stated plainly: no browser tool was available this stage
+  either. Every UI claim above is verified by direct reading of the
+  component source and, where the change is behavioral rather than purely
+  visual, by a test exercising the real logic (`directPost.test.js`'s
+  method/query-param suite proves the actual wire request changes; there is
+  no equivalent for a literal rendered screenshot). A human visually
+  opening `/webhooks`, a Buyer's Deliveries tab, and the MVA campaign's
+  Routing tab against the live deployed SHA remains the one genuinely
+  manual verification step this stage could not perform itself.
