@@ -75,17 +75,29 @@ export async function deliverDirectPost(cfg, ctx) {
     }
   }
 
+  // Method changes the wire request, not just which editor section the
+  // operator sees: methodSendsBody is the SAME function the Delivery editor
+  // evaluates to decide whether to render the Payload tab or a "this method
+  // sends no body" notice, so the two can never disagree.
+  const sendsBody = methodSendsBody(method, cfg.deleteWithBody);
+
   // Query parameters: resolved the same way as payload_template (same
   // {{token|transform}} renderer), appended to the target URL rather than the
-  // body. Honored for any method (harmless alongside a body), but this is the
-  // ONLY outbound mechanism for GET/DELETE-without-body, which never send one.
+  // body. Applied ONLY when the method sends no body (GET, or DELETE without
+  // delete_with_body) - matching exactly what the editor's Request tab shows
+  // the operator ("Query parameters are configured on GET..."). Query params
+  // are not silently applied to a POST/PUT/PATCH/DELETE-with-body request:
+  // the editor hides that section once the method sends a body, so a value
+  // left over from an earlier GET configuration must not keep firing once
+  // Method is switched to something that sends a body - the operator would
+  // have no visible control left to see or clear it.
   // finalUrl only diverges from the operator-configured cfg.targetUrl string
   // when a query parameter is actually appended - the URL object's own
   // serialization lowercases the hostname and can otherwise reformat a URL
   // that had nothing wrong with it, a needless behavior change for the common
   // case (no query_params configured) that a byte-identical passthrough avoids.
   let finalUrl = cfg.targetUrl;
-  if (cfg.queryParamsTemplate && String(cfg.queryParamsTemplate).trim() !== '') {
+  if (!sendsBody && cfg.queryParamsTemplate && String(cfg.queryParamsTemplate).trim() !== '') {
     let renderedParams;
     try {
       renderedParams = await buildPayloadFromTemplate(cfg.queryParamsTemplate, cfg.leadData || {});
@@ -101,12 +113,6 @@ export async function deliverDirectPost(cfg, ctx) {
     }
     if (appended) finalUrl = url.toString();
   }
-
-  // Method changes the wire request, not just which editor section the
-  // operator sees: methodSendsBody is the SAME function the Delivery editor
-  // evaluates to decide whether to render the Payload tab or a "this method
-  // sends no body" notice, so the two can never disagree.
-  const sendsBody = methodSendsBody(method, cfg.deleteWithBody);
 
   // Payload: SubDelivery.payload_template is authoritative when configured
   // (same generic {{token|transform}} renderer as Dry Run and Mock Send, via

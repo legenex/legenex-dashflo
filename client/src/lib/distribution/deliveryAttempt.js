@@ -142,9 +142,29 @@ export function buildAttemptRecord({
   };
 }
 
+// Query parameter VALUES may carry lead PII (query_params templates resolve
+// against the same leadData a payload_template does - see directPost.js).
+// The body is deliberately never stored verbatim for the same reason; a
+// query string appended to the persisted url must get the same treatment,
+// not a narrower one just because it lives in a different request field.
+// Keys are kept (useful for debugging which parameter was sent), values are
+// not. Falls back to the raw string if it is not a parseable URL.
+function redactQueryValues(url) {
+  if (!url) return url;
+  try {
+    const u = new URL(url);
+    if (![...u.searchParams.keys()].length) return url;
+    for (const key of u.searchParams.keys()) u.searchParams.set(key, '[redacted]');
+    return u.toString();
+  } catch {
+    return url;
+  }
+}
+
 function minimizeRequest(req) {
-  // keep method/url/headers (redacted downstream) but never the raw PII body verbatim
-  return { method: req.method, url: req.url, headers: req.headers, body_present: req.body != null };
+  // keep method/url/headers (redacted downstream) but never the raw PII body
+  // verbatim, and never a raw PII query-parameter value either.
+  return { method: req.method, url: redactQueryValues(req.url), headers: req.headers, body_present: req.body != null };
 }
 function minimizeResponse(res) {
   const text = typeof res.body === 'string' ? res.body : JSON.stringify(res.body ?? {});

@@ -228,20 +228,41 @@ describe('direct-post adapter: method-aware request semantics', () => {
     expect(meta.body_present).toBe(false);
   });
 
-  it('GET resolves query_params (same {{token}} syntax as payload_template) onto the URL', async () => {
+  it('GET resolves query_params (same {{token}} syntax as payload_template) onto the URL actually sent', async () => {
     const store = makeInMemoryAttemptStore();
     const r = await deliverDirectPost(cfg({
-      targetUrl: `${base}/accepted`, method: 'GET',
+      targetUrl: `${base}/method`, method: 'GET',
       queryParamsTemplate: '{"zip":"{{zip}}","src":"native"}',
+      responseMapping: { leadIdPath: 'query' },
       leadData: { zip: '90210' },
     }), ctx(store));
     expect(r.status).toBe(ATTEMPT_STATUS.ACCEPTED);
+    // The mock destination echoes back the query object it actually received
+    // server-side - proof of what really went over the wire, independent of
+    // how the platform's own stored attempt record treats it.
+    expect(r.buyerLeadId).toEqual({ zip: '90210', src: 'native' });
     const meta = JSON.parse(store._debug.attempts[0].request_meta);
     expect(meta.method).toBe('GET');
     expect(meta.body_present).toBe(false);
+  });
+
+  it('does not persist a lead-PII-shaped query parameter VALUE in the stored attempt record, only the key', async () => {
+    // query_params can carry lead PII (same leadData a payload_template
+    // renders against). The body is deliberately never stored verbatim for
+    // the same reason; a query string appended to the persisted url gets the
+    // same treatment here, not a narrower one just because it lives in a
+    // different request field.
+    const store = makeInMemoryAttemptStore();
+    await deliverDirectPost(cfg({
+      targetUrl: `${base}/accepted`, method: 'GET',
+      queryParamsTemplate: '{"email":"{{email}}"}',
+      leadData: { email: 'a@b.com' },
+    }), ctx(store));
+    const meta = JSON.parse(store._debug.attempts[0].request_meta);
     const sentUrl = new URL(meta.url);
-    expect(sentUrl.searchParams.get('zip')).toBe('90210');
-    expect(sentUrl.searchParams.get('src')).toBe('native');
+    expect(sentUrl.searchParams.has('email')).toBe(true);
+    expect(sentUrl.searchParams.get('email')).toBe('[redacted]');
+    expect(JSON.stringify(store._debug.attempts[0])).not.toContain('a@b.com');
   });
 
   it('an invalid query_params template fails closed without sending', async () => {
@@ -283,6 +304,24 @@ describe('direct-post adapter: method-aware request semantics', () => {
     expect(r.status).toBe(ATTEMPT_STATUS.ACCEPTED);
     const meta = JSON.parse(store._debug.attempts[0].request_meta);
     expect(meta.method).toBe('DELETE');
+    expect(meta.body_present).toBe(true);
+  });
+
+  it('query_params configured for GET does not silently keep firing once switched to a body-sending method (POST)', async () => {
+    // Regression: the editor hides the Query Parameters section once Method
+    // sends a body, so a stale value left over from an earlier GET
+    // configuration must not still be appended to the URL - the operator
+    // would have no visible control left to see or clear it.
+    const store = makeInMemoryAttemptStore();
+    const r = await deliverDirectPost(cfg({
+      targetUrl: `${base}/accepted`, method: 'POST',
+      queryParamsTemplate: '{"api_key":"{{token}}"}',
+      fieldMap: [{ src: 'email', dest: 'email' }], leadData: { email: 'a@b.com', token: 'stale-value' },
+    }), ctx(store));
+    expect(r.status).toBe(ATTEMPT_STATUS.ACCEPTED);
+    const meta = JSON.parse(store._debug.attempts[0].request_meta);
+    expect(meta.url).toBe(`${base}/accepted`);
+    expect(meta.url).not.toContain('stale-value');
     expect(meta.body_present).toBe(true);
   });
 

@@ -15,22 +15,24 @@ import { isLegacyMember, isConfiguredMember, destinationLabel } from './memberDe
  * legitimate legacy member); everything else renders as "Not configured".
  */
 
-const activeDelivery = { id: 'del-1', status: 'active' };
-const pausedDelivery = { id: 'del-2', status: 'paused' };
-const draftDelivery = { id: 'del-3', status: 'draft' };
-const archivedDelivery = { id: 'del-4', status: 'archived' };
+const activeDelivery = { id: 'del-1', status: 'active', buyer_id: 'b1' };
+const pausedDelivery = { id: 'del-2', status: 'paused', buyer_id: 'b1' };
+const draftDelivery = { id: 'del-3', status: 'draft', buyer_id: 'b1' };
+const archivedDelivery = { id: 'del-4', status: 'archived', buyer_id: 'b1' };
+const otherBuyerDelivery = { id: 'del-5', status: 'active', buyer_id: 'b2' };
 
 const activeSub = { id: 'sub-1', delivery_id: 'del-1', active: true, name: 'Primary endpoint' };
 const inactiveSub = { id: 'sub-2', delivery_id: 'del-1', active: false, name: 'Disabled endpoint' };
 const subOnPausedDelivery = { id: 'sub-3', delivery_id: 'del-2', active: true, name: 'Paused-parent endpoint' };
 const subOnDraftDelivery = { id: 'sub-4', delivery_id: 'del-3', active: true, name: 'Draft-parent endpoint' };
 const subOnArchivedDelivery = { id: 'sub-5', delivery_id: 'del-4', active: true, name: 'Archived-parent endpoint' };
+const subOnOtherBuyerDelivery = { id: 'sub-7', delivery_id: 'del-5', active: true, name: 'Other buyer endpoint' };
 
 const subById = Object.fromEntries(
-  [activeSub, inactiveSub, subOnPausedDelivery, subOnDraftDelivery, subOnArchivedDelivery].map((s) => [s.id, s]),
+  [activeSub, inactiveSub, subOnPausedDelivery, subOnDraftDelivery, subOnArchivedDelivery, subOnOtherBuyerDelivery].map((s) => [s.id, s]),
 );
 const deliveryById = Object.fromEntries(
-  [activeDelivery, pausedDelivery, draftDelivery, archivedDelivery].map((d) => [d.id, d]),
+  [activeDelivery, pausedDelivery, draftDelivery, archivedDelivery, otherBuyerDelivery].map((d) => [d.id, d]),
 );
 
 describe('isConfiguredMember', () => {
@@ -74,6 +76,19 @@ describe('isConfiguredMember', () => {
     const localSubById = { ...subById, 'sub-6': orphanSub };
     const m = { id: 'm8', buyer_id: 'b1', sub_delivery_id: 'sub-6' };
     expect(isConfiguredMember(m, localSubById, deliveryById)).toBe(false);
+  });
+
+  // Regression: the real send-time resolver (client/src/lib/distribution/
+  // snapshot.js) refuses a cross-buyer sub_delivery_id as CONFIG_INVALID,
+  // and RouteMember.json documents the same contract explicitly. Without
+  // this check, a RouteMember pointing at a real, active SubDelivery owned
+  // by a DIFFERENT buyer would display as a fully configured, working
+  // delivery while the engine independently refuses to ever send through
+  // it - the UI and the engine disagreeing about whether a row is real,
+  // reached a different way than the original bug report.
+  it('is false when sub_delivery_id resolves to a real, active SubDelivery owned by a DIFFERENT buyer', () => {
+    const m = { id: 'm9', buyer_id: 'b1', sub_delivery_id: 'sub-7' };
+    expect(isConfiguredMember(m, subById, deliveryById)).toBe(false);
   });
 });
 
@@ -149,6 +164,11 @@ describe('destinationLabel', () => {
     const m = { id: 'm1', buyer_id: 'b1', sub_delivery_id: 'sub-1', destination_name: 'X' };
     expect(isConfiguredMember(m)).toBe(false);
     expect(destinationLabel(m)).toBe('Not configured');
+  });
+
+  it('reports "Not configured" for a cross-buyer sub_delivery_id, never the other buyer\'s real delivery name', () => {
+    const m = { id: 'm9', buyer_id: 'b1', sub_delivery_id: 'sub-7', destination_name: 'Looks fine' };
+    expect(destinationLabel(m, subById, deliveryById)).toBe('Not configured');
   });
 });
 

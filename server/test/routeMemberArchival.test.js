@@ -66,6 +66,34 @@ describe('classifyRouteMembersForArchival', () => {
     expect(result.remaining).toEqual([]);
   });
 
+  it('archives a member whose sub_delivery_id resolves to a REAL, active delivery owned by a DIFFERENT buyer (OWNERSHIP_MISMATCH)', () => {
+    // This is the shape the display-layer fix (isConfiguredMember in
+    // memberDestination.js) also had to close: sub_delivery_id is non-null
+    // and resolves to something real, so it looks wired up, but the real
+    // send-time resolver (snapshot.js) refuses it as CONFIG_INVALID because
+    // the Delivery belongs to a different buyer than the RouteMember.
+    const buyerA = buyer('b-a', 'Buyer A');
+    const buyerB = buyer('b-b', 'Buyer B');
+    const dB = delivery('d-b', 'b-b', 'active');
+    const sdB = subDelivery('sd-b', 'd-b', true);
+    const routeMembers = [member('rm1', { buyer_id: 'b-a', sub_delivery_id: 'sd-b' })];
+    const result = classifyRouteMembersForArchival({
+      routeMembers, routeGroups, campaigns, buyers: [buyerA, buyerB], deliveries: [dB], subDeliveries: [sdB], verticals,
+    });
+    expect(result.actions).toHaveLength(1);
+    expect(result.actions[0].code).toBe('OWNERSHIP_MISMATCH');
+    expect(result.remaining).toEqual([]);
+  });
+
+  it('archives a member whose buyer_id does not resolve to any Buyer at all (UNKNOWN_BUYER)', () => {
+    const routeMembers = [member('rm1', { buyer_id: 'b-does-not-exist' })];
+    const result = classifyRouteMembersForArchival({
+      routeMembers, routeGroups, campaigns, buyers: [], deliveries: [], subDeliveries: [], verticals,
+    });
+    expect(result.actions).toHaveLength(1);
+    expect(result.actions[0].code).toBe('UNKNOWN_BUYER');
+  });
+
   it('never collapses two active members that differ in any routing-meaningful field, even for the same buyer/sub-delivery', () => {
     const b = buyer('b1', 'B1');
     const d1 = delivery('d1', 'b1', 'active');

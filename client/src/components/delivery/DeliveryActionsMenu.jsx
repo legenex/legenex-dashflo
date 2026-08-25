@@ -131,8 +131,9 @@ export default function DeliveryActionsMenu({ delivery, onChanged, showEdit = tr
             <AlertDialogTitle>Archive "{delivery.name || 'this delivery'}"?</AlertDialogTitle>
             <AlertDialogDescription>
               Archived deliveries are hidden from Routing&apos;s Add Delivery picker and cannot be newly routed.
-              Historical attempts and configuration remain readable, and nothing is deleted. This does not affect any
-              existing route assignment&apos;s history.
+              If a route is currently assigned to this delivery, archiving takes effect immediately: that route stops
+              sending as soon as this delivery is no longer active, not only for new assignments. Historical attempts
+              and configuration remain readable, and nothing is deleted.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

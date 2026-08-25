@@ -1,10 +1,17 @@
 import { describe, it, expect } from 'vitest';
 import listCredentialReferences from '../src/functions/listCredentialReferences.js';
 
-const OPERATOR = { id: 'u1', base_role: 'operator' };
+const OPERATOR = { id: 'u1', role: 'admin', base_role: 'operator' };
+const BUYER_PORTAL = { id: 'u2', base_role: 'buyer', linked_buyer_id: 'b1' };
+const SUPPLIER_PORTAL = { id: 'u3', base_role: 'supplier', linked_supplier_id: 's1' };
 
-function makeDb(rows = []) {
-  return { entities: { IntegrationConfig: { list: async () => rows } } };
+function makeDb(rows = [], users = [OPERATOR, BUYER_PORTAL, SUPPLIER_PORTAL]) {
+  return {
+    entities: {
+      IntegrationConfig: { list: async () => rows },
+      User: { get: async (id) => users.find((u) => u.id === id) || null },
+    },
+  };
 }
 
 function ctxFor(db, user = OPERATOR) {
@@ -43,5 +50,29 @@ describe('listCredentialReferences', () => {
 
   it('requires an authenticated user', async () => {
     await expect(listCredentialReferences(ctxFor(makeDb([]), null))).rejects.toThrow();
+  });
+
+  // A buyer/supplier portal account is authenticated but must not enumerate
+  // internal delivery credential names - metadata a portal account has no
+  // reason to see, matching the same operator gate deliveryPayloadPreview.js
+  // and campaignDeliveryTest.js already enforce.
+  it('forbids a buyer-portal account', async () => {
+    const db = makeDb([{ id: 'ic1', name: 'walker_advertising_auth', config: '{}' }]);
+    const res = await listCredentialReferences(ctxFor(db, BUYER_PORTAL));
+    expect(res.__status).toBe(403);
+    expect(res.success).toBe(false);
+  });
+
+  it('forbids a supplier-portal account', async () => {
+    const db = makeDb([{ id: 'ic1', name: 'walker_advertising_auth', config: '{}' }]);
+    const res = await listCredentialReferences(ctxFor(db, SUPPLIER_PORTAL));
+    expect(res.__status).toBe(403);
+  });
+
+  it('allows an operator (admin role) through', async () => {
+    const db = makeDb([{ id: 'ic1', name: 'walker_advertising_auth', config: '{}' }]);
+    const res = await listCredentialReferences(ctxFor(db, OPERATOR));
+    expect(res.success).toBe(true);
+    expect(res.credentials).toHaveLength(1);
   });
 });

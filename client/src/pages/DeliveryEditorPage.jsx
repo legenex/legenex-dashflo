@@ -31,6 +31,7 @@ import DeliveryTestPanel from '@/components/delivery/DeliveryTestPanel';
 import DeliveryHistoryTab from '@/components/delivery/DeliveryHistoryTab';
 import { ensureDeliveryRouteMember } from '@/functions/ensureDeliveryRouteMember';
 import { deliveryHistory } from '@/functions/deliveryHistory';
+import { saveSubDeliveryHeaders } from '@/functions/saveSubDeliveryHeaders';
 import { methodSendsBody } from '@/lib/distribution/methodSemantics';
 
 // THE canonical full-page delivery editor. Opened identically from Webhooks
@@ -50,12 +51,24 @@ import { methodSendsBody } from '@/lib/distribution/methodSemantics';
 // decision this page never makes.
 export default function DeliveryEditorPage() {
   const { deliveryId: rawId } = useParams();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
   const isNew = !rawId || rawId === 'new';
   const buyerIdParam = searchParams.get('buyerId') || '';
   const verticalIdParam = searchParams.get('verticalId') || '';
-  const autoRename = searchParams.get('rename') === '1';
+  // Captured once via useState's lazy initializer, not read fresh on every
+  // render: cleared from the URL immediately below so a refresh, or
+  // navigating back to this exact URL, does not reopen the rename dialog
+  // every time.
+  const [autoRename] = useState(() => searchParams.get('rename') === '1');
+  useEffect(() => {
+    if (searchParams.get('rename') === '1') {
+      const next = new URLSearchParams(searchParams);
+      next.delete('rename');
+      setSearchParams(next, { replace: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Remount the entire editor whenever the target record changes (a real
   // route navigation between two deliveries, or from an existing delivery to
@@ -223,14 +236,25 @@ function DeliveryEditorPageInner({ deliveryId, buyerIdParam, verticalIdParam, au
         dId = created.id;
       }
 
+      // headers is deliberately NOT included here for an existing SubDelivery:
+      // entityPolicy.js redacts a secret-shaped header value to the literal
+      // string "[redacted]" before this page ever sees it, and resubmitting
+      // that placeholder through the generic entity route would permanently
+      // overwrite the real value. saveSubDeliveryHeaders.js merges against
+      // the real stored value server-side instead. A brand-new SubDelivery
+      // has no prior stored value to protect, so its headers are set directly
+      // at creation.
       const subPayload = {
         target_url: targetUrl.trim(),
         method,
         encoding,
-        headers: headers.trim(),
         credential_ref: credentialRef.trim() || null,
         timeout_ms: Number(timeoutMs) || 10000,
-        payload_template: sendsBody ? payloadTemplate : '',
+        // Always preserved regardless of the current method: the runtime
+        // (methodSendsBody, shared with directPost.js) already ignores this
+        // for a method that sends no body, so clearing it here on save would
+        // only destroy configuration an operator might switch back to.
+        payload_template: payloadTemplate,
         query_params: queryParams,
         delete_with_body: method === 'DELETE' ? deleteWithBody : false,
         response_mapping: responseMapping,
@@ -238,9 +262,10 @@ function DeliveryEditorPageInner({ deliveryId, buyerIdParam, verticalIdParam, au
       };
       if (subId) {
         await api.entities.SubDelivery.update(subId, subPayload);
+        await saveSubDeliveryHeaders({ subDeliveryId: subId, headers: headers.trim() });
       } else {
         const createdSub = await api.entities.SubDelivery.create({
-          delivery_id: dId, name: 'Primary', order_index: 0, active: true, ...subPayload,
+          delivery_id: dId, name: 'Primary', order_index: 0, active: true, headers: headers.trim(), ...subPayload,
         });
         subId = createdSub.id;
       }

@@ -14,19 +14,30 @@ export function isLegacyMember(m) {
 }
 
 // A member is "configured" only when sub_delivery_id resolves to a real,
-// active SubDelivery whose parent Delivery is also active. This is the
-// client-side equivalent of server/src/lib/routeMemberMapping.js's READY
-// classification, simplified for display purposes: it does not distinguish
-// MISSING_DELIVERY from MISSING_SUBDELIVERY, it only answers "is this member
-// actually backed by something real and routable". A member can look fully
-// filled in (destination_name set, alias set) and still not be configured;
+// active SubDelivery whose parent Delivery is also active AND belongs to
+// this member's own buyer. This is the client-side equivalent of
+// server/src/lib/routeMemberMapping.js's READY classification, simplified
+// for display purposes: it does not distinguish MISSING_DELIVERY from
+// MISSING_SUBDELIVERY, it only answers "is this member actually backed by
+// something real and routable". A member can look fully filled in
+// (destination_name set, alias set) and still not be configured;
 // destination_name is a free-text label, never proof of a real delivery.
+//
+// The buyer-ownership check matters on its own: the real send-time resolver
+// (client/src/lib/distribution/snapshot.js) refuses a cross-buyer
+// sub_delivery_id as CONFIG_INVALID, and RouteMember.json documents the same
+// contract explicitly. Without checking it here, a RouteMember pointing at
+// another buyer's SubDelivery would display as a real, working delivery
+// while the engine independently refuses to ever send through it - the UI
+// and the engine disagreeing about whether a row is real is exactly the bug
+// class this module exists to close, just reached a different way.
 export function isConfiguredMember(m, subById, deliveryById) {
   if (!m?.sub_delivery_id) return false;
   const sub = subById?.[m.sub_delivery_id];
   if (!sub || sub.active === false) return false;
   const delivery = deliveryById?.[sub.delivery_id];
   if (!delivery || delivery.status !== 'active') return false;
+  if (String(delivery.buyer_id) !== String(m.buyer_id)) return false;
   return true;
 }
 

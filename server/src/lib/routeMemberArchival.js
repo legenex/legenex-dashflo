@@ -8,9 +8,16 @@
 // Two independent, buyer-agnostic classifications, either one alone is
 // sufficient reason to archive a row:
 //
-// 1. NO_DELIVERY_CONFIGURED: planRouteMemberMapping reports MISSING_DELIVERY
-//    or MISSING_SUBDELIVERY - there is no active Delivery/SubDelivery this
-//    member could ever route to today.
+// 1. NO_BACKING: planRouteMemberMapping reports MISSING_DELIVERY,
+//    MISSING_SUBDELIVERY, OWNERSHIP_MISMATCH, or UNKNOWN_BUYER - there is no
+//    active Delivery/SubDelivery this member could ever route to today, an
+//    admission it always resolves to a valid destination but under the
+//    wrong buyer, or the member's own buyer_id does not exist at all. All
+//    four states share the same real-world consequence this cleanup exists
+//    for: the row can look wired up (OWNERSHIP_MISMATCH in particular has a
+//    real, non-null sub_delivery_id) while the real send-time resolver
+//    (client/src/lib/distribution/snapshot.js) refuses it as CONFIG_INVALID
+//    regardless - it can never deliver a real lead.
 //
 // 2. EXACT_DUPLICATE: two or more active RouteMembers in the SAME RouteGroup,
 //    for the SAME buyer, agree on every routing-meaningful field. Two
@@ -20,7 +27,16 @@
 //    another, are collapsed. The earliest-created row is kept.
 import { planRouteMemberMapping, MAPPING_STATE } from './routeMemberMapping.js';
 
-const NO_BACKING_STATES = new Set([MAPPING_STATE.MISSING_DELIVERY, MAPPING_STATE.MISSING_SUBDELIVERY]);
+const NO_BACKING_STATES = new Set([
+  MAPPING_STATE.MISSING_DELIVERY, MAPPING_STATE.MISSING_SUBDELIVERY,
+  MAPPING_STATE.OWNERSHIP_MISMATCH, MAPPING_STATE.UNKNOWN_BUYER,
+]);
+const NO_BACKING_CODE = {
+  [MAPPING_STATE.MISSING_DELIVERY]: 'NO_DELIVERY_CONFIGURED',
+  [MAPPING_STATE.MISSING_SUBDELIVERY]: 'NO_DELIVERY_CONFIGURED',
+  [MAPPING_STATE.OWNERSHIP_MISMATCH]: 'OWNERSHIP_MISMATCH',
+  [MAPPING_STATE.UNKNOWN_BUYER]: 'UNKNOWN_BUYER',
+};
 
 // Deliberately excludes id, route_group_id (grouped on), created_date,
 // updated_date, created_by, and destination_name/alias (display-only -
@@ -50,7 +66,7 @@ export function classifyRouteMembersForArchival({
     if (m.active === false) continue;
     const cls = stateByMemberId.get(m.id);
     if (cls && NO_BACKING_STATES.has(cls.state)) {
-      actions.push({ route_member_id: m.id, buyer_id: m.buyer_id, code: 'NO_DELIVERY_CONFIGURED', reason: cls.detail });
+      actions.push({ route_member_id: m.id, buyer_id: m.buyer_id, code: NO_BACKING_CODE[cls.state], reason: cls.detail });
     }
   }
   const archivedSoFar = new Set(actions.map((a) => a.route_member_id));

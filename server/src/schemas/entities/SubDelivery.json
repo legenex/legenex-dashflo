@@ -18,7 +18,7 @@
     "target_url": { "type": "string", "description": "Outbound endpoint URL" },
     "method": { "type": "string", "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"], "default": "POST" },
     "encoding": { "type": "string", "enum": ["json", "form"], "default": "json", "description": "Outbound body encoding" },
-    "query_params": { "type": "string", "description": "Additive. JSON template string (same {{token}}/{{token|transform}} syntax as payload_template, resolved by the same buildPayloadFromTemplate) appended as URL query parameters at send time. Primarily for GET; harmless if set alongside a body-sending method." },
+    "query_params": { "type": "string", "description": "Additive. JSON template string (same {{token}}/{{token|transform}} syntax as payload_template, resolved by the same buildPayloadFromTemplate) appended as URL query parameters at send time. Applied ONLY when the method sends no body (GET, or DELETE without delete_with_body) - matching exactly what the editor's Request tab shows the operator, so a value configured for GET does not silently keep firing once Method is switched to something that sends a body." },
     "delete_with_body": { "type": "boolean", "default": false, "description": "Additive. Only relevant when method is DELETE. GET never sends a body regardless of this flag; DELETE also sends no body unless this is explicitly true." },
     "headers": { "type": "string", "description": "JSON of NON-secret headers only. Never store auth/API keys here." },
     "credential_ref": { "type": "string", "description": "Opaque reference to a secret in secret storage. NEVER the secret value itself." },

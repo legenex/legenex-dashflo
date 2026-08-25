@@ -1,7 +1,7 @@
 // GENERATED FILE - DO NOT EDIT BY HAND.
 // Source of truth: src/lib/distribution/backend-entry.js and its imports.
 // Regenerate: node scripts/generate-backend-engine.mjs
-// canonical-engine-sha256: 58d2f6736184a0708867027d09e307319b708d4c61c7b8c8e36499c47a5f738f
+// canonical-engine-sha256: e2485b573f5baf4a6552ad5aff13c09a2641eb61c8267fe6f5941efe2e6ccc38
 // src/lib/distribution/engine.js
 var REASON = {
   ELIGIBLE: "ELIGIBLE",
@@ -636,8 +636,19 @@ function buildAttemptRecord({
     completed_at: new Date(nowMs).toISOString()
   };
 }
+function redactQueryValues(url) {
+  if (!url) return url;
+  try {
+    const u = new URL(url);
+    if (![...u.searchParams.keys()].length) return url;
+    for (const key of u.searchParams.keys()) u.searchParams.set(key, "[redacted]");
+    return u.toString();
+  } catch {
+    return url;
+  }
+}
 function minimizeRequest(req) {
-  return { method: req.method, url: req.url, headers: req.headers, body_present: req.body != null };
+  return { method: req.method, url: redactQueryValues(req.url), headers: req.headers, body_present: req.body != null };
 }
 function minimizeResponse(res) {
   const text = typeof res.body === "string" ? res.body : JSON.stringify(res.body ?? {});
@@ -1917,8 +1928,9 @@ async function deliverDirectPost(cfg, ctx) {
       return failClosed(ctx, cfg, nowMs, check && check.reason ? check.reason : "target_not_allowed", "SSRF_BLOCKED");
     }
   }
+  const sendsBody = methodSendsBody(method, cfg.deleteWithBody);
   let finalUrl = cfg.targetUrl;
-  if (cfg.queryParamsTemplate && String(cfg.queryParamsTemplate).trim() !== "") {
+  if (!sendsBody && cfg.queryParamsTemplate && String(cfg.queryParamsTemplate).trim() !== "") {
     let renderedParams;
     try {
       renderedParams = await buildPayloadFromTemplate(cfg.queryParamsTemplate, cfg.leadData || {});
@@ -1937,7 +1949,6 @@ async function deliverDirectPost(cfg, ctx) {
     }
     if (appended) finalUrl = url.toString();
   }
-  const sendsBody = methodSendsBody(method, cfg.deleteWithBody);
   let payload;
   if (sendsBody) {
     if (cfg.payloadTemplate && String(cfg.payloadTemplate).trim() !== "") {
