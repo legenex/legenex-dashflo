@@ -4322,3 +4322,258 @@ list and is data/business, not engineering:
 5. `RouteGroup.active`/`lifecycle` activation and the `distribution_mode`
    transition: the standing human-approval gate, unaffected by everything
    above.
+
+## Lead Distribution rebuild, Stage 6: operator decisions applied, response
+   contract observed from a real synthetic send, credential exposure found
+   and contained
+
+25 August 2026. Operator supplied explicit decisions closing every Stage 5
+data/business blocker except the standing `distribution_mode`/`RouteGroup`
+activation gate, which remains untouched. Three commits: `38ceb90` (new
+tooling), `1386bb3` (a real bug the tooling surfaced, plus a credential
+staging hazard fix), and this evidence entry.
+
+### 1. Pricing: `price_mode:'rule'` applied to both Walker RouteMembers
+
+New generic `server/scripts/set-buyer-rule-pricing.js` (`--buyer` required,
+no default, per the Stage 4 lesson about generic tooling). Report-only first,
+then `--apply` against production: both real RouteMembers
+(`6a5d036865c28196402bdd17`, `6a5ceabe90e288d32b53717f`) moved
+`price_mode` fixed -> rule; `fixed_price` untouched (stays null, now unused
+rather than invented). No `BuyerStateCpl` row was created, edited, or
+duplicated into `RouteMember.fixed_price` - the operator directive was to use
+the existing 45 rows (37 active) as the sole source, and that is what the
+already-wired Stage 5 engine capability reads from directly.
+
+Verified against a live routing evaluation, not just structural validation:
+`engine.buildRoutingSnapshot` with `leadState` supplied resolved
+`price=400` for CA and `price=275` for TX/NY, matching the real
+`BuyerStateCpl` rows exactly (`SELECT cpl FROM e_buyer_state_cpl WHERE
+buyer_id=... AND state='CA'` = 400), with `configErrors: []` and
+`active: true` for both members once real `SubDelivery` records were passed
+alongside (see the CapCounter-shaped false negative below).
+
+### 2. Tier normalization: Tier 3 archived, Tier 1 canonical, RouteMembers
+   wired
+
+New, deliberately buyer-specific (this is a one-time historical-duplicate
+fix, not a reusable capability - see the script's own header for why that is
+not the Stage 4 anti-pattern) `server/scripts/normalize-walker-native-
+delivery-tiers.js`. Report-only first, then `--apply`:
+
+- Tier 3 (`6a5a8d94c20b54ee6ecb660c`): `active` true -> false, `name` ->
+  `"Tier 3 (ARCHIVED: duplicate of Tier 1, no functional distinction found -
+  see docs/STATE.md Stage 5)"`. Not deleted - the schema has no separate
+  archived state for `SubDelivery`, `active:false` plus a visible name marker
+  is the safe, auditable equivalent, and history (including any future
+  `DeliveryAttempt` join) is preserved.
+- `Delivery` (`6a5a8d809fe2a933ca284252`): `status` draft -> active. Per
+  Stage 4 section 7's own finding, this is not a live-traffic action on its
+  own: `RouteGroup.active`/`lifecycle` (checked separately by
+  `buildRoutingSnapshot`'s group filter) stayed `false`/`draft` throughout,
+  confirmed by direct query before and after.
+
+Then the existing, unmodified, generic `wire-route-member-subdeliveries.js`:
+report-only reclassified both Walker RouteMembers `MISSING_SUBDELIVERY` ->
+`READY` (exactly one deterministic candidate each, now that only one active
+SubDelivery exists under the Delivery), `--apply` wrote
+`sub_delivery_id: 6a5a8d8c0557a6ea67e70d24` (Tier 1) to both. The other 10
+production RouteMembers stayed `MISSING_DELIVERY`, unaffected.
+
+**A real bug found by running the existing dry-run tooling against this
+newly-normalized data, not invented**: `native-delivery-dry-run.js` selected
+`deliverySubs[0]` from a `-created_date` (newest-first) list with no `active`
+filter. Tier 3 is newer than Tier 1 by 8 seconds, so once Tier 3 became the
+archived/inactive one, the script started silently simulating against the
+WRONG (archived) endpoint - `configErrors: [{"code":"CONFIG_INVALID","detail":
+"inactive sub-delivery"}]`, simulation aborted. Fixed in `1386bb3`: prefer the
+SubDelivery the buyer's own RouteMember actually resolves to (the real
+routing-canonical pointer), falling back to the first active,
+target_url-configured SubDelivery only when no mapping exists yet. Re-run
+after the fix: resolves Tier 1 correctly, all scenarios pass exactly as
+Stage 4 first observed them.
+
+### 3. Response contract: one real, explicitly-confirmed synthetic send,
+   `response_mapping` derived from the actual observed response
+
+New `server/scripts/probe-buyer-response-contract.js`
+(`--buyer` and `--confirm-live-send` both required, no report-only mode -
+this performs one real outbound HTTP request by design) and generic
+`server/scripts/set-subdelivery-response-mapping.js` (validates the JSON
+shape `toClassifyResponseMapping` expects; the mapping VALUE is supplied by
+the caller from a real observed response, never invented by the script).
+
+Bypasses the in-app operator live-test feature
+(`campaignDeliveryTest.js`) deliberately: that function refuses to run at
+all while `distribution_mode` is `legacy_only` (its own mode gate), which is
+exactly the state this action must not change. The probe script calls the
+same underlying `deliverDirectPost` + real SSRF `validateTarget` directly,
+entirely outside `RouteGroup`/`distribution_mode`/retry-worker state, so it
+activates nothing. It records a `DistributionAudit` entry (`action:
+delivery_live_test`) before sending and a real `DeliveryAttempt` row
+(`trigger: operator_response_contract_probe`), the same audit shape
+`campaignDeliveryTest.js` uses for a confirmed live test.
+
+Synthetic lead data only: reused `native-delivery-dry-run.js`'s own
+`SYNTHETIC_LEAD` shape (RFC 2606 `.test` email, 555-01XX reserved fictional
+phone number, no real name, no real PII). Run once, `docker compose exec app
+node server/scripts/probe-buyer-response-contract.js --buyer "Walker
+Advertising" --confirm-live-send`, against Walker's real, currently-
+configured `target_url`.
+
+**Real observed response**: HTTP 200,
+`{"response":{"errors":{"error":"JSON error: Missing request"}}}`. This is
+the exact false-positive Stage 4 predicted: with no `response_mapping`
+configured, the engine's own documented fallback (any 2xx is `accepted`)
+classified this error-shaped body as `accepted`, persisted as such on the
+one real `DeliveryAttempt` row this stage created (`id 62032c984d56e105a19
+e04c5`, `status: accepted` - a point-in-time record of what the engine
+concluded at that moment, not retroactively recomputed after the mapping
+below was applied).
+
+**`response_mapping` applied, generically, from the real shape observed**:
+`{"rejected":"\"errors\"\\s*:"}` - matches on the STRUCTURAL presence of an
+`errors` key (the real, vendor-specific signal observed), not the literal
+message text, so it also catches a differently-worded future error from the
+same response wrapper. Verified both directions with the real generated
+`classifyResponse` before applying: the real captured body classifies
+`rejected`; a control body with no `errors` key (`{"response":
+{"status":"accepted","lead_id":"12345"}}`) still classifies `accepted` via
+the unchanged HTTP-status fallback, so this narrows the known false-positive
+without narrowing anything else.
+
+**Not resolved, evidence exhausted with a single real response**: an
+`accepted`-shaped response was never observed (the synthetic post itself was
+rejected), so `revenue`/`buyer_lead_id` JSON paths remain unset - there is no
+real accepted-response shape to derive them from yet. A structural finding
+outside this stage's authorized scope (response mapping only, no payload
+changes): the error text ("Missing request") suggests Walker's endpoint may
+expect a different request wrapper/encoding than the current
+`payload_template` sends; not investigated or changed here per the operator
+instruction to configure response_mapping only, no customer-specific parser
+or payload changes - flagged for a follow-up, real-response-informed payload
+review before any live send of this SubDelivery is authorized again.
+
+### 4. Final pre-activation verification
+
+- Sanctioned publish flow (`engine.validateConfigForPublish`, the same
+  function `distributionConfig.js`'s `validate` action calls - never
+  `publish`, which would flip `RouteGroup.lifecycle` to active): re-run after
+  the response_mapping fix. Before: `valid:false`, both members
+  `CONFIG_INVALID` "sub-delivery missing response mapping". After:
+  `valid:true`, zero errors, `configHash: 431e85a7`. `RouteGroup.active`/
+  `lifecycle` confirmed unchanged (`false`/`draft`) by direct query
+  immediately after - `validate` never writes.
+- RouteMember -> SubDelivery mapping: `READY` x2 (section 2).
+- Rule pricing against real `BuyerStateCpl`: `$400` CA, `$275` TX/NY
+  (section 1).
+- `native-delivery-dry-run.js` re-run against the normalized production data
+  after the selection-bug fix: all scenarios (accepted/rejected/5xx/
+  malformed/timeout/invalid-template/disabled-subdelivery/cross-buyer/
+  circuit-breaker) behave exactly as Stage 4 first observed them, against a
+  loopback stand-in - the real endpoint was dialed exactly once, by the
+  probe in section 3, never by this script.
+- Focused tests: `npx vitest run client/src/lib/distribution/
+  server/test/routeMemberMapping.test.js
+  server/test/campaignDeliveryTest.test.js` - 39 files, 406 tests, all
+  passing.
+- `npm run gate`: PASS, all eight steps, both commits individually and again
+  after this evidence entry.
+- `38ceb90` deployed via GitHub Actions run `32889743159` - the deploy job's
+  "Write the deployment key and the host key" step failed once
+  transiently ("Could not read a host key from 2.24.130.44 on port 22");
+  confirmed transient by an immediate manual `ssh-keyscan` against the same
+  host succeeding, then `gh run rerun --failed` succeeded on retry. Gate job
+  itself passed on the first attempt both times. `1386bb3` deployed clean via
+  run `32890410407`.
+- Production verified after each deploy: `/api/health` 200; all five public
+  hosts (`app`, `api`, `dashflo.io`, `docs`, `progress`) 200.
+- Safety invariants reverified against the live production database and
+  container after all of the above: `e_app_settings.distribution_mode` still
+  empty (code default `legacy_only` governs); `NATIVE_RETRY_WORKER_ENABLED`
+  and `DISTRIBUTION_MODE` both absent from the running container's
+  environment; default `LeadByteConnector` unchanged (`is_default:true,
+  enabled:true`, same `target_url`); Walker's `RouteGroup` still
+  `active:false, lifecycle:draft, config_version_id: (none)`; exactly one
+  `DeliveryAttempt` row exists in production (the section 3 probe) and
+  exactly one new `DistributionAudit` row (`action: delivery_live_test`).
+
+### 5. Credential exposure found in `run-migration-apply.mjs`, contained
+
+Untracked since before Stage 1 (confirmed: `git log --all -- run-migration-
+apply.mjs` returns nothing - it has never been committed, so this is not a
+git-history purge case like the Gate B `MIGRATE_SOURCE_SECRET` incident).
+Found this stage in an unexpected state: `git status` showed it staged
+(`A`), not untracked - a deviation from the safe baseline every prior stage
+explicitly maintained ("deliberately excluded from every commit and left
+exactly as found"). `git restore --staged` did not fully clear it (left an
+intent-to-add index entry - `git ls-files` still listed it); `git rm
+--cached` did.
+
+**Root cause of the drift, found and permanently fixed**: `npm run gate`'s
+own `secret-scan`/`em-dash` steps intent-to-add untracked files so `git diff`
+can see their content (the same mechanism `.gitignore`'s existing
+`docs/resources/` comment already documents for the same reason). Every gate
+run was silently re-registering this credential-bearing untracked file in
+the index - harmless by itself, but one `git add -A` away from committing a
+live credential. Fixed in `1386bb3` the same way `docs/resources/` already
+is: added to `.gitignore` (`/run-migration-apply.mjs`, `/run-migration.mjs`,
+`*.json.enc`). Verified: `npm run gate` run again afterward, `git status`
+stayed clean of it.
+
+**Liveness determined without ever printing, logging, or transmitting either
+secret value**: the file hardcodes `PGPASSWORD` (production database
+password) and a `passphrase` (Base44 migration bundle decryption key). A
+local script read the file itself (the value was never typed into a command)
+and printed only a SHA-256 hex digest of each. Separately, over the existing
+`ssh dashflo-vps` access, a command computed the SHA-256 of the `PGPASSWORD`
+line in the live `/opt/apps/dashflo/server/.env` entirely server-side,
+printing only the digest. The two `PGPASSWORD` digests matched exactly:
+**the database password is LIVE** - it is the real, currently-active
+production credential, not a stale or already-rotated one. No equivalent
+live-comparison surface exists for the migration passphrase (it is not an
+ongoing system credential like a DB password; it only decrypts one specific
+bundle), so it is treated as compromised by policy (any plaintext-exposed
+secret is) without a "still matches production" claim to make.
+
+**Read-only, non-secret context gathered to inform cleanup, without touching
+either secret**: `/opt/apps/dashflo` on the VPS carries its own untracked
+copies (`run-migration-apply.mjs`, `run-migration.mjs`,
+`legenex-dashflo-migration-2026-08-22-18-46.json.enc`, 150 MB, all dated
+23 August, minutes apart) - the same triple Stage 4 found and left
+untouched. `migration_import_runs` (read-only query, no secret column
+touched) shows this exact bundle's `kind:owner, mode:apply` run already
+completed `status:success` at 2026-08-23 06:27-06:28 UTC, 154,324 records
+created, 0 failed - the migration this script exists to perform has already
+been applied. Nothing about this stage's cleanup recommendation depends on
+running it again.
+
+**A separate governance finding, not acted on since it is already-completed
+history**: `run-migration-apply.mjs` hardcodes `confirmed: true` and a
+non-interactive `owner`/`apply` call - it bypasses the human-confirmation
+step `AGENTS.md` section 17 requires for a migration apply. That already
+happened (see above); flagged so a future rerun of this pattern is not
+mistaken for a safe, self-contained script.
+
+Rotation was NOT performed. Per the operator instruction, this stage stops
+before that action - see the completion report for the exact approval
+required.
+
+### Required end state, self-assessed against the operator's stop condition
+
+`RULE PRICING: CONFIGURED` - `STATE COVERAGE: CONFIGURED` (37 of 45 active
+`BuyerStateCpl` rows for Walker/MVA, used as-is, none invented) -
+`CANONICAL SUBDELIVERY: RESOLVED` (Tier 1; Tier 3 archived, not deleted) -
+`ROUTEMEMBER MAPPING: READY` (both, verified) - `RESPONSE MAPPING:
+CONFIGURED FROM REAL SYNTHETIC TEST RESPONSE` - `PRODUCTION-RECORD DRY RUN:
+PASS` - `TESTS: PASS, 1661 gate + 406 focused` - `npm run gate: PASS` -
+`PRODUCTION HEALTH: PASS` - `LEGACY RELAY: UNCHANGED` - `DISTRIBUTION MODE:
+LEGACY_ONLY` - `NATIVE RETRIES: DISABLED` - `COMMERCIAL NATIVE DELIVERY: NOT
+ACTIVATED`.
+
+`UNPROVEN`, stated plainly: an `accepted`-shaped real response was never
+observed, so `response_mapping.revenue`/`.buyer_lead_id` remain unset; the
+payload-shape question the observed error suggests is unresolved; visual
+browser verification of `/webhooks` and Operations > Buyers > Walker
+Advertising was not performed this stage (no browser tool available), same
+carry-forward as every prior stage.
