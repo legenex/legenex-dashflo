@@ -14,11 +14,9 @@
 // the same as activating it, and this script does neither of the latter.
 //
 // Safe to run against whatever DATABASE_URL / PG* the environment it is
-// invoked with points at. This session has no production database
-// credential (AGENTS.md section 15), so it has been run and tested only
-// against disposable/local data - see server/test/routeMemberMapping.test.js
-// for the plain-fixture coverage and docs/STATE.md for what remains before
-// this can run against production.
+// invoked with points at - see server/test/routeMemberMapping.test.js for
+// the plain-fixture coverage and docs/STATE.md for the production run
+// history and results.
 
 import fs from 'node:fs';
 import { ensureSchema } from '../src/db/schema.js';
@@ -35,16 +33,17 @@ const LIMIT = 10_000;
 async function main() {
   await ensureSchema();
 
-  const [routeMembers, routeGroups, campaigns, buyers, deliveries, subDeliveries] = await Promise.all([
+  const [routeMembers, routeGroups, campaigns, buyers, deliveries, subDeliveries, verticals] = await Promise.all([
     repo('RouteMember').list('-created_date', LIMIT),
     repo('RouteGroup').list('-created_date', LIMIT),
     repo('Campaign').list('-created_date', LIMIT),
     repo('Buyer').list('-created_date', LIMIT),
     repo('Delivery').list('-created_date', LIMIT),
     repo('SubDelivery').list('-created_date', LIMIT),
+    repo('Vertical').list('-created_date', LIMIT),
   ]);
 
-  const plan = planRouteMemberMapping({ routeMembers, routeGroups, campaigns, buyers, deliveries, subDeliveries });
+  const plan = planRouteMemberMapping({ routeMembers, routeGroups, campaigns, buyers, deliveries, subDeliveries, verticals });
 
   console.log(`[wire-route-member-subdeliveries] ${plan.total} RouteMember record(s) classified:`);
   for (const state of Object.values(MAPPING_STATE)) {

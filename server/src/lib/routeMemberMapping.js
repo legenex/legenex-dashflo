@@ -50,10 +50,23 @@ function indexOneBy(rows, key) {
 // the SAME buyer as the RouteMember (never cross-buyer), be active, and,
 // when the RouteMember's campaign has a declared vertical, the Delivery must
 // either share it or declare no vertical of its own (unscoped = matches any).
-function candidateSubDeliveries(member, { deliveriesByBuyer, subDeliveriesByDelivery, campaignVertical }) {
+//
+// Delivery.vertical_id is a foreign key to the Vertical record's internal id
+// (client/src/components/delivery/NativeDeliveriesList.jsx renders it as
+// such); Campaign.vertical is the short vertical CODE (e.g. "MVA"), the same
+// value Vertical.code carries. These are two different identifier spaces for
+// the same concept, so a Delivery's vertical must be translated through
+// verticalCodeById before it can be compared to campaignVertical. A
+// vertical_id that does not resolve to a known Vertical is a dangling
+// reference, not "unscoped" - it does not match, rather than guessing.
+function candidateSubDeliveries(member, { deliveriesByBuyer, subDeliveriesByDelivery, campaignVertical, verticalCodeById }) {
   const deliveries = (deliveriesByBuyer.get(member.buyer_id) || [])
     .filter((d) => String(d.status) === 'active')
-    .filter((d) => !campaignVertical || !d.vertical_id || String(d.vertical_id) === String(campaignVertical));
+    .filter((d) => {
+      if (!campaignVertical || !d.vertical_id) return true;
+      const code = verticalCodeById.get(d.vertical_id) || null;
+      return code != null && String(code) === String(campaignVertical);
+    });
   const candidates = [];
   for (const delivery of deliveries) {
     for (const sd of subDeliveriesByDelivery.get(delivery.id) || []) {
@@ -69,14 +82,23 @@ function candidateSubDeliveries(member, { deliveriesByBuyer, subDeliveriesByDeli
 // Pure function: takes plain record arrays, returns a report. Never mutates
 // input and never talks to a database.
 export function planRouteMemberMapping({
-  routeMembers = [], routeGroups = [], campaigns = [], buyers = [], deliveries = [], subDeliveries = [],
+  routeMembers = [], routeGroups = [], campaigns = [], buyers = [], deliveries = [], subDeliveries = [], verticals = [],
 } = {}) {
   const groupsById = indexOneBy(routeGroups, 'id');
-  const campaignsById = indexOneBy(campaigns, 'campaign_id');
+  // RouteGroup.campaign_id is a foreign key to the Campaign record's internal
+  // id (client/src/lib/distribution/snapshot.js compares g.campaign_id
+  // against a resolved campaignId that is always campaign.id - see
+  // campaignResolve.js's hit()) - never to Campaign.campaign_id, which is a
+  // distinct, separately-editable public short code.
+  const campaignsById = indexOneBy(campaigns, 'id');
   const buyersById = indexOneBy(buyers, 'id');
   const deliveriesById = indexOneBy(deliveries, 'id');
   const deliveriesByBuyer = indexBy(deliveries, 'buyer_id');
   const subDeliveriesByDelivery = indexBy(subDeliveries, 'delivery_id');
+  const verticalCodeById = new Map();
+  for (const v of verticals || []) {
+    if (v?.id != null && v.code != null) verticalCodeById.set(v.id, v.code);
+  }
 
   const rows = [];
 
@@ -140,7 +162,7 @@ export function planRouteMemberMapping({
       continue;
     }
 
-    const candidates = candidateSubDeliveries(member, { deliveriesByBuyer, subDeliveriesByDelivery, campaignVertical });
+    const candidates = candidateSubDeliveries(member, { deliveriesByBuyer, subDeliveriesByDelivery, campaignVertical, verticalCodeById });
     row.candidates = candidates.map((c) => ({ sub_delivery_id: c.subDelivery.id, delivery_id: c.delivery.id }));
 
     if (candidates.length === 0) {
