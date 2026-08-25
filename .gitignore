@@ -40,3 +40,15 @@ docs/DashFlo-site.zip
 # before diffing, and a 124 MB package overflows the diff buffer and fails the
 # gate for reasons that have nothing to do with the change under test.
 docs/resources/
+
+# Ad hoc local migration-apply wrapper scripts. These are hand-authored,
+# machine-local runners for a specific owner migration apply and, unlike the
+# reusable code under server/scripts/, are expected to carry inline plaintext
+# database credentials and a decryption passphrase for convenience during a
+# one-off run. Never committed. Same intent-to-add hazard as docs/resources/
+# above: without this entry, every `npm run gate` run silently re-registers
+# an untracked copy of this file in the git index (harmless on its own, but
+# one `git add -A` away from committing a live credential).
+/run-migration-apply.mjs
+/run-migration.mjs
+*.json.enc

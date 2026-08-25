@@ -109,19 +109,30 @@ async function main() {
   const targetDelivery = buyerDeliveries[0] || null;
   if (!targetDelivery) { console.log(`[native-delivery-dry-run] Buyer "${BUYER_NAME}" has no Delivery record.`); await pool.end(); return; }
 
-  const deliverySubs = subDeliveries.filter((s) => String(s.delivery_id) === String(targetDelivery.id) && s.target_url);
-  if (deliverySubs.length === 0) {
-    console.log(`[native-delivery-dry-run] Delivery "${targetDelivery.name}" has no SubDelivery with a target_url configured. Nothing to simulate.`);
-    await pool.end();
-    return;
-  }
-  const targetSub = deliverySubs[0];
-
   const buyerMembers = routeMembers.filter((m) => String(m.buyer_id) === String(buyer.id));
   const targetGroup = buyerMembers.length
     ? routeGroups.find((g) => String(g.id) === String(buyerMembers[0].route_group_id))
     : routeGroups[0];
   const campaign = targetGroup ? campaigns.find((c) => String(c.id) === String(targetGroup.campaign_id)) : null;
+
+  // Prefer the SubDelivery the buyer's own RouteMember actually resolves to
+  // in real routing (the canonical pointer) over an arbitrary Delivery-level
+  // pick. Falls back to the first ACTIVE, target_url-configured SubDelivery
+  // under the Delivery only when no RouteMember mapping exists yet - never to
+  // an inactive/archived one, which -created_date ordering could otherwise
+  // silently prefer over an older but still-active row (found while running
+  // this against Walker's real, now-normalized-to-one-canonical-tier data:
+  // the newer of two SubDeliveries was the one archived as a duplicate, and
+  // an active-blind pick chose it anyway).
+  const mappedMember = buyerMembers.find((m) => m.sub_delivery_id);
+  const mappedSub = mappedMember ? subDeliveries.find((s) => String(s.id) === String(mappedMember.sub_delivery_id)) : null;
+  const activeDeliverySubs = subDeliveries.filter((s) => String(s.delivery_id) === String(targetDelivery.id) && s.target_url && s.active !== false);
+  const targetSub = (mappedSub && mappedSub.target_url && mappedSub.active !== false) ? mappedSub : activeDeliverySubs[0];
+  if (!targetSub) {
+    console.log(`[native-delivery-dry-run] Delivery "${targetDelivery.name}" has no ACTIVE SubDelivery with a target_url configured. Nothing to simulate.`);
+    await pool.end();
+    return;
+  }
 
   section('REAL RECORDS RESOLVED (read-only, nothing written)');
   line(`Buyer:        ${buyer.company_name} (${buyer.id}), buyer_code=${buyer.buyer_code || '-'}, active=${buyer.active}, status=${buyer.status}`);
