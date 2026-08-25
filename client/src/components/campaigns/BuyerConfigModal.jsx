@@ -72,7 +72,9 @@ function Section({ title, description, defaultOpen = false, children }) {
   );
 }
 
-export default function BuyerConfigModal({ open, onOpenChange, member, buyerName, method = 'direct_post' }) {
+export default function BuyerConfigModal({
+  open, onOpenChange, member, buyerName, configured = false, realDeliveryName = '', method = 'direct_post',
+}) {
   const qc = useQueryClient();
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState(null);
@@ -176,8 +178,13 @@ export default function BuyerConfigModal({ open, onOpenChange, member, buyerName
                 <Label className="text-[13px]">{form.active ? 'Enabled' : 'Paused'}</Label>
               </div>
               <div>
-                <Label className="text-[12px] font-medium">Buyer name</Label>
+                <Label className="text-[12px] font-medium">Display name override (optional)</Label>
                 <Input value={form.destination_name} onChange={(e) => set({ destination_name: e.target.value })} className="mt-1 bg-background h-9" placeholder={buyerName} />
+                <p className="text-[11px] text-muted-foreground mt-1">
+                  {configured
+                    ? `This delivery is already linked to "${realDeliveryName || 'a real delivery'}". That is the destination leads actually go to; this only changes the label shown in Routing.`
+                    : 'Free text only. It does not create or attach a Delivery. Attach a real Delivery for this buyer first, then this row will show that delivery’s name.'}
+                </p>
               </div>
               <div>
                 <Label className="text-[12px] font-medium">Alias</Label>

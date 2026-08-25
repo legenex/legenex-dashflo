@@ -77,6 +77,11 @@ export default function OperationsBuyers() {
     queryFn: () => fetchAll((limit, skip) => api.entities.StateStatus.list('', limit, skip)),
   });
 
+  const { data: deliveries = [] } = useQuery({
+    queryKey: ['op-deliveries'],
+    queryFn: () => fetchAll((limit, skip) => api.entities.Delivery.list('-created_date', limit, skip)),
+  });
+
   const { data: verticals = [] } = useQuery({
     queryKey: ['op-verticals'],
     queryFn: () => api.entities.Vertical.filter({ active: true }, 'sort_order', 200),
@@ -111,7 +116,16 @@ export default function OperationsBuyers() {
     }
   };
 
-  const ctx = { cplRows };
+  // Per-buyer Delivery count, keyed by buyer_id, so the list's Deliveries
+  // column can show 0 for a buyer with no configured deliveries rather than
+  // leaving the cell blank.
+  const deliveryCountByBuyer = useMemo(() => {
+    const map = {};
+    (deliveries || []).forEach((d) => { map[d.buyer_id] = (map[d.buyer_id] || 0) + 1; });
+    return map;
+  }, [deliveries]);
+
+  const ctx = { cplRows, deliveryCountByBuyer };
 
   // Vertical filter, applied alongside the client-type tabs. Empty means all.
   const [verticalFilter, setVerticalFilter] = useState([]);
@@ -139,7 +153,7 @@ export default function OperationsBuyers() {
     });
     return sortDir === 'asc' ? sorted : sorted.reverse();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [buyers, tab, sortKey, sortDir, cplRows, verticalFilter]);
+  }, [buyers, tab, sortKey, sortDir, cplRows, deliveryCountByBuyer, verticalFilter]);
 
   const onSort = (key) => {
     if (sortKey === key) {
@@ -159,6 +173,7 @@ export default function OperationsBuyers() {
     qc.invalidateQueries({ queryKey: ['op-buyers'] }),
     qc.invalidateQueries({ queryKey: ['op-buyer-state-cpl'] }),
     qc.invalidateQueries({ queryKey: ['op-state-status'] }),
+    qc.invalidateQueries({ queryKey: ['op-deliveries'] }),
   ]);
 
   // Instant status-only transition. The active boolean is derived at the data

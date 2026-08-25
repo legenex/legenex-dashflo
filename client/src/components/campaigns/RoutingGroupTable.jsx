@@ -1,4 +1,5 @@
 import React, { useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator,
@@ -6,9 +7,9 @@ import {
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import {
-  GripVertical, ChevronUp, ChevronDown, MoreVertical, Pencil, Pause, Play, Trash2, Wand2,
+  GripVertical, ChevronUp, ChevronDown, MoreVertical, Pencil, Pause, Play, Trash2, Wand2, AlertTriangle,
 } from 'lucide-react';
-import { destinationLabel, isLegacyMember } from '@/lib/campaigns/memberDestination';
+import { destinationLabel, isLegacyMember, isConfiguredMember } from '@/lib/campaigns/memberDestination';
 
 const money = (v) => (v == null || v === '' || Number.isNaN(Number(v)) ? '--' : `$${Number(v).toFixed(2)}`);
 
@@ -18,7 +19,7 @@ const money = (v) => (v == null || v === '' || Number.isNaN(Number(v)) ? '--' : 
 // Weighted groups expose an editable Weight column. All writes go through the
 // callbacks; this component holds no persistence logic.
 export default function RoutingGroupTable({
-  members, buyerName, subById, method, showWeight,
+  members, buyerName, subById, deliveryById, method, showWeight,
   onReorder, onMove, onEdit, onToggle, onRemove, onWeight, onConvert,
 }) {
   const [dragIndex, setDragIndex] = useState(null);
@@ -56,7 +57,14 @@ export default function RoutingGroupTable({
           {rows.map((m, i) => {
             const active = m.active !== false;
             const legacy = isLegacyMember(m);
-            const dest = destinationLabel(m, subById);
+            const configured = isConfiguredMember(m, subById, deliveryById);
+            // Unconfigured: neither a real, active-Delivery-backed member nor
+            // a legacy inline-config member. This is the pure orphan case
+            // (sub_delivery_id: null, destination_name possibly set to
+            // anything, including a buyer's own name) that must never render
+            // as if it were a real numbered Delivery row.
+            const unconfigured = !legacy && !configured;
+            const dest = destinationLabel(m, subById, deliveryById);
             const buyer = buyerName[m.buyer_id] || m.buyer_id || '--';
             return (
               <tr
@@ -82,10 +90,23 @@ export default function RoutingGroupTable({
                     <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${active ? 'bg-[hsl(var(--chart-5))]' : 'bg-muted-foreground'}`} />
                     <div className="min-w-0">
                       <div className="flex items-center gap-2">
-                        <span className="truncate text-foreground">{dest}</span>
+                        <span className={`truncate ${unconfigured ? 'text-muted-foreground italic' : 'text-foreground'}`}>{dest}</span>
                         {legacy && <Badge variant="outline" className="text-[10px] border-border text-muted-foreground shrink-0">Legacy config</Badge>}
+                        {unconfigured && (
+                          <Badge variant="outline" className="text-[10px] border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400 shrink-0 gap-1">
+                            <AlertTriangle className="w-3 h-3" />Not configured
+                          </Badge>
+                        )}
                       </div>
                       <div className="text-[11px] text-muted-foreground truncate">{buyer}</div>
+                      {unconfigured && (
+                        <Link
+                          to={`/operations/buyers?buyer=${encodeURIComponent(m.buyer_id || '')}`}
+                          className="text-[11px] text-primary hover:underline inline-block mt-0.5"
+                        >
+                          Configure a delivery for this buyer first
+                        </Link>
+                      )}
                     </div>
                   </div>
                 </td>

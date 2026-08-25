@@ -13,14 +13,41 @@ export function isLegacyMember(m) {
   return hasInline(m.delivery_config) || hasInline(m.ping_config);
 }
 
+// A member is "configured" only when sub_delivery_id resolves to a real,
+// active SubDelivery whose parent Delivery is also active. This is the
+// client-side equivalent of server/src/lib/routeMemberMapping.js's READY
+// classification, simplified for display purposes: it does not distinguish
+// MISSING_DELIVERY from MISSING_SUBDELIVERY, it only answers "is this member
+// actually backed by something real and routable". A member can look fully
+// filled in (destination_name set, alias set) and still not be configured;
+// destination_name is a free-text label, never proof of a real delivery.
+export function isConfiguredMember(m, subById, deliveryById) {
+  if (!m?.sub_delivery_id) return false;
+  const sub = subById?.[m.sub_delivery_id];
+  if (!sub || sub.active === false) return false;
+  const delivery = deliveryById?.[sub.delivery_id];
+  if (!delivery || delivery.status !== 'active') return false;
+  return true;
+}
+
 // Resolve the primary destination name for a member.
-// Priority: destination_name -> sub-delivery name -> "(no destination)".
-export function destinationLabel(m, subById) {
-  if (m?.destination_name) return m.destination_name;
-  const sub = m?.sub_delivery_id ? subById?.[m.sub_delivery_id] : null;
-  if (sub?.name) return sub.name;
-  if (isLegacyMember(m)) return 'Legacy destination';
-  return '(no destination)';
+// Only a CONFIGURED member (see isConfiguredMember) or a LEGACY member is
+// trusted to show destination_name as its identity. A legacy member is a
+// legitimate, intentionally-created inline config, so its destination_name
+// (or the sub-delivery name, for a configured member) is real. A pure orphan
+// (no sub_delivery_id, no inline config either) is neither: destination_name
+// on that row is free text a form let an operator type in (including a
+// buyer's own company name typed into "Buyer name" on BuyerConfigModal), and
+// it must never be trusted to render as if it were a real numbered Delivery.
+// That row gets a clear "Not configured" label instead.
+export function destinationLabel(m, subById, deliveryById) {
+  if (isConfiguredMember(m, subById, deliveryById)) {
+    if (m?.destination_name) return m.destination_name;
+    const sub = subById?.[m.sub_delivery_id];
+    if (sub?.name) return sub.name;
+  }
+  if (isLegacyMember(m)) return m?.destination_name || 'Legacy destination';
+  return 'Not configured';
 }
 
 function parseObj(raw) {

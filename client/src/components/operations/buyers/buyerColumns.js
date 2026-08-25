@@ -24,6 +24,12 @@ export const BUYER_COLUMNS = [
     className: 'font-mono text-[11px] text-muted-foreground',
   },
   {
+    key: 'deliveries', header: 'Deliveries', sortable: true,
+    sortValue: (b, ctx) => ctx.deliveryCountByBuyer?.[b.id] || 0,
+    accessor: (b, ctx) => String(ctx.deliveryCountByBuyer?.[b.id] || 0),
+    className: 'font-mono text-[12px] tabular-nums',
+  },
+  {
     key: 'client_type', header: 'Buyer Type', sortable: true,
     sortValue: (b) => b.client_type || 'zzz',
     // Unclassified is not a neutral state here: a buyer with no type came from a
@@ -88,7 +94,7 @@ export const BUYER_COLUMNS = [
 ];
 
 export const DEFAULT_BUYER_COLUMN_KEYS = [
-  'company_name', 'buyer_code', 'client_type', 'status', 'vertical',
+  'company_name', 'buyer_code', 'deliveries', 'client_type', 'status', 'vertical',
   'active_states', 'cpl_range', 'ipl_fee_pct', 'billing_type', 'verify_required', 'last_changed',
 ];
 

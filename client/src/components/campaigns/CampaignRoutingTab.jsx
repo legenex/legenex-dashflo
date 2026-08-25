@@ -18,7 +18,7 @@ import MemberPickerDialog from '@/components/campaigns/MemberPickerDialog';
 import BuyerConfigModal from '@/components/campaigns/BuyerConfigModal';
 import MethodTooltip from '@/components/campaigns/MethodTooltip';
 import { CAMPAIGN_METHODS, GROUP_METHODS, deriveCampaignMethod } from '@/components/campaigns/routingMethods';
-import { convertLegacyMember, destinationLabel } from '@/lib/campaigns/memberDestination';
+import { convertLegacyMember, destinationLabel, isConfiguredMember } from '@/lib/campaigns/memberDestination';
 
 // Campaign-level Routing tab. Owns the routing METHOD selector (All / Waterfall
 // / Round Robin / Hybrid), group management for Hybrid, and per-group member
@@ -31,6 +31,7 @@ export default function CampaignRoutingTab({ campaign, method: sendMode = 'direc
   const { data: buyers = [] } = useQuery({ queryKey: ['buyers'], queryFn: () => fetchAll((limit, skip) => api.entities.Buyer.list('-created_date', limit, skip)) });
   const { data: allMembers = [], isLoading: membersLoading } = useQuery({ queryKey: ['routeMembers'], queryFn: () => fetchAll((limit, skip) => api.entities.RouteMember.list('-created_date', limit, skip)) });
   const { data: subs = [] } = useQuery({ queryKey: ['subdeliveries'], queryFn: () => fetchAll((limit, skip) => api.entities.SubDelivery.list('-created_date', limit, skip)) });
+  const { data: deliveries = [] } = useQuery({ queryKey: ['deliveries'], queryFn: () => fetchAll((limit, skip) => api.entities.Delivery.list('-created_date', limit, skip)) });
 
   const groups = useMemo(
     () => allGroups
@@ -47,6 +48,7 @@ export default function CampaignRoutingTab({ campaign, method: sendMode = 'direc
 
   const buyerName = useMemo(() => Object.fromEntries(buyers.map((b) => [b.id, b.company_name || b.name || b.id])), [buyers]);
   const subById = useMemo(() => Object.fromEntries(subs.map((s) => [s.id, s])), [subs]);
+  const deliveryById = useMemo(() => Object.fromEntries(deliveries.map((d) => [d.id, d])), [deliveries]);
 
   const derived = useMemo(() => deriveCampaignMethod(groups), [groups]);
   const [busy, setBusy] = useState(false);
@@ -255,6 +257,7 @@ export default function CampaignRoutingTab({ campaign, method: sendMode = 'direc
               members={gm}
               buyerName={buyerName}
               subById={subById}
+              deliveryById={deliveryById}
               method={g.method}
               showWeight={showWeight}
               onReorder={reorderIn(g.id, gm)}
@@ -293,7 +296,9 @@ export default function CampaignRoutingTab({ campaign, method: sendMode = 'direc
         open={!!configMember}
         onOpenChange={(v) => { if (!v) setConfigMember(null); }}
         member={configMember}
-        buyerName={configMember ? destinationLabel(configMember, subById) : ''}
+        buyerName={configMember ? destinationLabel(configMember, subById, deliveryById) : ''}
+        configured={configMember ? isConfiguredMember(configMember, subById, deliveryById) : false}
+        realDeliveryName={configMember?.sub_delivery_id ? subById?.[configMember.sub_delivery_id]?.name : ''}
         method={sendMode}
       />
 
