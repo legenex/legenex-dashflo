@@ -3930,3 +3930,395 @@ perform itself.
    transition: the standing human-approval gate, `AGENTS.md` section 13 /
    `docs/HUMAN-GATES.md` Gate C, untouched and unaffected by everything
    above.
+
+## Lead Distribution rebuild, Stage 5: reopened every Stage 4 deferred
+   finding, two rounds of adversarial critique, `1038bcd`
+
+25 August 2026. Continuation of the same operating loop, per the standing
+instruction that a deferred finding dormant only because native delivery is
+disabled is still a pre-cutover blocker, not a closed item. Builds on Stage 4
+(`436789e`). One commit, `1038bcd`, gate-passing (130 files, 1661 tests, up
+from 125/1580), deployed and verified.
+
+### 1. Unresolved-findings ledger, built from Stage 4's own section 6 and
+   this stage's fresh investigation
+
+| Finding | Classification | Outcome |
+|---|---|---|
+| CapCounter reporting/read-write mismatch | CONFIRMED_FIX_NOW | Fixed: canonical `scope_key` everywhere (`capScopeKey` in `engine.js`) |
+| Retry-path wallet/cap bypass | CONFIRMED_FIX_NOW | Fixed: `reserveAndDeliver` shared primitive |
+| Retry scheduler lease-concurrency gap | CONFIRMED_FIX_NOW | Fixed: status-aware CAS, 90s lease + 20s send-timeout clamp, fresh per-attempt clock |
+| QUEUED fallback semantics | Resolved by evidence, not asked as a human decision | QUEUED now never falls back; see section 4 |
+| SSRF hardening | CONFIRMED_FIX_NOW | Fixed: `server/src/lib/ssrfGuard.js`, wired into every real send path |
+| ReDoS only partially mitigated | CONFIRMED_FIX_NOW | Fixed: `regexSafety.js`, two-rule static rejection |
+| Lower-severity canonical/legacy schema inconsistencies | CONFIRMED_FIX_NOW | Fixed: `DeliveryAttempt.json`/`DestinationHealth.json` `required` arrays |
+| In-run same-destination retry reservation defeated | CONFIRMED_FIX_NOW | Fixed: attempt-numbered reservation claim keys |
+| `computeConfigHash`/`diffConfig` missing `sub_delivery_id` | CONFIRMED_FIX_NOW | Fixed, plus `price_mode`/`conditions` found missing too |
+| Credential redaction blocklist, `projectSubDeliveryForClient` unused | CONFIRMED_FIX_NOW | Fixed: `entityPolicy.js` `READ_TRANSFORM_FIELDS` redacts `SubDelivery.headers` at the generic route itself |
+| `DeliveryHistoryTab` denied by entity policy | CONFIRMED_FIX_NOW | Fixed: new `deliveryHistory` operator-gated function |
+| `RouteMember.fixed_price` null on Walker | DATA_RECOVERY_REQUIRED, but the underlying engine gap fixed | See section 5: `price_mode:'rule'` is now real; a real `num()` pricing bug found and fixed along the way |
+| Tier 1 / Tier 3 identical configuration | BUSINESS_DECISION_REQUIRED, evidence exhausted | Byte-identical in every field, created 8 seconds apart, no recoverable distinction anywhere in the repo, DB, or migration provenance |
+| `SubDelivery.response_mapping` for Walker | DATA_RECOVERY_REQUIRED, evidence exhausted | Zero `DeliveryAttempt` rows exist in production; the only Walker-adjacent response evidence belongs to the LeadByte relay API, a different system |
+
+### 2. Retry double-sale/double-delivery risk, fixed
+
+New exported `reserveAndDeliver` in `distributeRun.js` is now the ONE
+settlement primitive both the primary send path (`makeDeliver`) and the
+async native retry path (`server/src/lib/nativeRetryRunner.js`, through the
+generated bundle) call - not two independent implementations. It reserves
+cap, posts, then on a real accepted response attempts an atomic per-lead
+winner claim (`capStore.claim('winner:'+leadId)`, the same 0-to-1 CAS
+primitive already proven for reservations) before finalizing cap and
+debiting the wallet. A pre-send peek (`isLeadAlreadySold`) rejects a retry
+without ever sending once another destination already holds the claim; the
+atomic claim is the actual correctness guarantee under a genuine concurrent
+race (two retry-due attempts for the same lead processed by two workers at
+once) - the loser is marked `SUPERSEDED` (a new terminal `DeliveryAttempt`
+status), with no cap/wallet effect even though the buyer it contacted did
+say accepted.
+
+A first version of this fix was itself found broken by the SECOND
+adversarial review round: `toRunStatus` never recognized `SUPERSEDED`, so a
+run whose only real attempt was superseded fell through
+`REJECTED`/`ERROR_CLEAN` classification (every remaining candidate in the
+same run also resolves to the pre-send guard, which the first version
+returned as plain `REJECTED`) and `processLead.js` would fall through to the
+legacy relay - reopening the exact double-sale the change exists to close,
+under ordinary duplicate-submission conditions, not a rare race. Fixed by
+(a) changing the pre-send guard's status to `SUPERSEDED` instead of
+`REJECTED`, and (b) making `toRunStatus` treat any `SUPERSEDED` attempt the
+same as an ambiguous timeout: never fallback-eligible. Regression test:
+`distributeRun.test.js`'s "a run superseded by a concurrent winner never
+reports a fallback-eligible outcome."
+
+Reservation claims are now scoped by attempt number
+(`${idempotencyKey}:${attemptNumber}`), fixing the separately-tracked
+in-run-retry-reservation finding: a same-destination retry (in-run
+`maxAttemptsPerDest>1`, or async) now gets its own fresh cap reservation
+instead of being rejected `ALREADY_RESERVED` because an earlier attempt
+already held (and released) the identical slot. The cap WINDOW key itself is
+unaffected by attempt number, so window consumption still counts correctly
+across retries of the same destination.
+
+### 3. Retry lease concurrency, fixed
+
+`claimLease` (`deliveryStore.js`, both the in-memory and entity/Postgres
+adapters) now accepts an optional `requiredStatus`, folded into the SAME
+atomic CAS condition (`updateMany({id, lease_version, status})` for the
+entity store, so it is one atomic conditional update, not a separate
+check-then-update). `runRetryWorker`'s automatic due-queue claims pass
+`requiredStatus:'error'`, so a concurrent completion (a manual retry, or
+another worker) that already moved an attempt to a different terminal
+status between `listDue()`'s read and this claim now makes the claim itself
+fail atomically, instead of resurrecting and re-sending a row someone else
+already settled. `manualRetry` omits it deliberately, since an operator
+retrying by id may legitimately target a non-`'error'` row (e.g.
+`dead_letter`).
+
+Default lease raised from 30s to 90s (`retryWorker.js`'s
+`DEFAULT_LEASE_MS`), paired with a new hard `MAX_SEND_TIMEOUT_MS` (20s)
+clamp on `SubDelivery.timeout_ms` in `deliveryResolve.js`'s
+`resolveSubDeliveryCfg`, so a lease can never legitimately expire while a
+send from the same worker is still in flight.
+
+The second adversarial round found this alone was insufficient: a single
+`nowMs` read at the top of `runRetryWorker`'s pass was reused for every
+`claimLease` call across the whole batch (`listDue`'s default limit is
+100), so a slow send early in the SAME sequential pass silently ate into
+later attempts' lease margin, and could make a later attempt's lease appear
+already expired to a concurrent worker the moment it was claimed - exactly
+the double-send risk the 90s constant exists to close, precisely under a
+backlog. Fixed with an optional `ctx.now()` callback read fresh before
+every claim and again after every send; tests omit it and keep the prior
+deterministic single-`nowMs` behavior unchanged, `nativeRetryRunner.js`'s
+real caller supplies `now: () => Date.now()`.
+
+### 4. Permanent-error retries and QUEUED semantics, fixed
+
+`res.retryable === false` (an explicit, attempt-count-independent signal
+from `directPost.js`'s `failClosed` paths - invalid URL, host not allowed,
+invalid payload template - and from the retry path's own
+destination-liveness check) now dead-letters immediately in
+`runRetryWorker`, instead of burning the full backoff schedule against a
+failure no amount of waiting fixes. The retry path's `resolveMemberForRetry`
+now also checks `SubDelivery.active`, the parent `Delivery.status`, and
+`RouteMember.active` (previously missing, contradicting its own comment) -
+an operator disabling any one of the three now stops a stale retry from
+resending PII, matching the primary path's own `snapshot.js` eligibility
+gate exactly.
+
+QUEUED resolved by evidence (dispatched as a research task, not asked as a
+human decision): a QUEUED response is a REAL response the destination
+sent, not a network failure; `retryWorker.js`'s own design already
+re-contacts the SAME destination on QUEUED rather than treating it as
+settled; legacy-era `queue_reason` semantics were always "held for a
+human," never "safe to resend elsewhere"; and production has zero observed
+counterexamples (zero `Lead.final_status='Queued'` rows ever). `toRunStatus`
+now treats QUEUED the same as an ambiguous timeout: never fallback-eligible.
+
+### 5. CapCounter consistency, a real create-race, and a real pricing bug
+
+`capScopeKey(memberId, window, windowStart)` (new, in `engine.js`) is now
+the ONE key format both `capScopesFor` (the write side) and
+`snapshotLoader.js`'s eligibility pre-check (the read side) build, closing
+the Stage 4 finding that the reader queried `scope_type`/`scope_id`/`window`
+fields the writer never wrote.
+
+A deeper, pre-existing gap surfaced by the second adversarial round:
+`capStore.js`'s entity-store `ensureCounter` (`filter -> create-if-missing
+-> filter`) had no real database uniqueness backing it, so two concurrent
+FIRST-TIME callers on the same brand-new key (a cap window, a lead-level
+winner claim, a wallet claim - all just differently-prefixed `scope_key`
+values on the same entity) could each see an empty pre-check filter and
+both successfully create their own row, defeating every exactly-once
+guarantee built on this primitive, including the reservation and
+lead-winner-claim logic this very stage added. Confirmed zero existing rows
+in production (`SELECT count(*) FROM e_cap_counter` = 0) before adding a
+real unique index (`server/src/db/schema.js`, a JSONB expression index on
+`data->>'scope_key'`, the same pattern already used for
+`auth_credentials_google_sub_idx`) - verified present on the deployed
+production database after this stage's deploy. `ensureCounter` now catches
+the resulting unique-violation and re-reads the row the other concurrent
+caller won, rather than throwing or silently duplicating.
+
+Separately: `snapshot.js`'s `num()` helper did `Number(v)` then
+`Number.isFinite` - but `Number(null) === 0` in plain JS, so a fixed-price
+`RouteMember` with an EXPLICIT database `fixed_price: null` (exactly
+Walker's real production shape) silently resolved to price 0 (a free lead)
+instead of failing `CONFIG_INVALID` as `buildMember`'s own comments
+claimed. Fixed by treating `null`/`undefined` as absent before numeric
+coercion; regression test in `snapshot.test.js` proves the real production
+shape now correctly fails closed.
+
+### 6. State pricing: `price_mode:'rule'` wired to BuyerStateCpl, not asked
+   as a human decision
+
+Investigated (dispatched as a research task) rather than asked: confirmed
+`BuyerStateCpl` is real, populated, actively-maintained data (45 rows for
+Walker alone, real non-zero CPL values), used today only by
+`generateBillingRun.js` (billing) and `recomputeStateStatus.js` (coverage
+reporting) - never by the native routing engine, which accepted
+`price_mode:'rule'` as a valid enum value with zero implementation.
+
+Wired generically: `snapshotLoader.js` resolves the campaign's vertical and
+pre-loads active `BuyerStateCpl` rows for exactly the buyers referenced;
+`buildRoutingSnapshot`/`buildMember` (`snapshot.js`) resolve a rule-mode
+member's price from `stateCplFor(buyerId, leadState)` ONLY when a specific
+lead's state is actually in view (a real routing evaluation), leaving price
+unresolved (not wrongly CONFIG_INVALID) for a structural build with no lead
+(publish validation, the simulator). `validateConfigForPublish` separately
+checks that a rule-mode member's buyer has at least one active
+`BuyerStateCpl` row at all, since a specific state can't be checked without
+a lead. State eligibility remains the separate `RouteMember.filters`
+setting it already was, per the existing editor's own documented
+intent - this only replaces the missing PRICE resolution.
+
+This gives the operator a real, evidence-backed alternative to inventing a
+`fixed_price` for Walker: switch `price_mode` to `'rule'` and it prices
+from Walker's real, already-populated `BuyerStateCpl` coverage. Left as an
+operator decision (not applied to Walker's real records this stage) since
+it changes production configuration semantics, not because the engine
+capability was missing.
+
+### 7. Security fixes
+
+- **SSRF**: new `server/src/lib/ssrfGuard.js`, a real DNS-resolving
+  validator blocking loopback/RFC1918/link-local/cloud-metadata/IPv6-private
+  ranges and non-http(s) schemes, injected into `directPost.js` via
+  `ctx.validateTarget` (the isomorphic engine never imports Node's `dns`
+  directly) and wired into every real send path found: `processLead.js`,
+  `nativeRetryRunner.js`, and `campaignDeliveryTest.js` (the operator
+  live-test path, found to have NO guard at all in the first review round).
+  The second round found the first version's IPv4-mapped-IPv6 check itself
+  was bypassed: it only matched the dotted-decimal spelling
+  (`::ffff:169.254.169.254`), but the WHATWG URL parser that actually
+  produces `url.hostname` for a bracketed literal never emits that form -
+  only the compressed hex form (`::ffff:a9fe:a9fe`) - so every such literal
+  target silently bypassed the guard on every call site including the ones
+  already wired correctly. Fixed and verified against the real parser
+  output.
+- **ReDoS**: new `client/src/lib/distribution/regexSafety.js`, run inside
+  `classifyResponse` on every evaluation (not only at save time). First
+  version rejected quantified groups containing a nested quantifier or
+  alternation. The second adversarial round found and reproduced a real
+  bypass: an "unrolled" sequence of ambiguous alternation groups with NO
+  quantifier anywhere at all (`(a|aa)` repeated 32 times) froze the event
+  loop for over 50 seconds against an ORDINARY, non-adversarial response
+  body. Fixed with a second rule: two or more ambiguous alternation groups
+  (one alternative a prefix of another) anywhere in the pattern are
+  rejected, closing the specific shape rule one cannot see. Both the
+  original catastrophic shapes and the new unrolled shape are covered by
+  regression tests, verified to complete in single-digit milliseconds
+  against the exact adversarial reproduction.
+- **Header/secret projection**: `entityPolicy.js` gained
+  `READ_TRANSFORM_FIELDS`, applied by `projectRead` (the same function
+  already used by every generic-entity-route response) to redact
+  secret-shaped keys inside `SubDelivery.headers` before it ever leaves the
+  server, rather than passing a possibly-mis-stored historical secret
+  through raw. The existing but never-called `projectSubDeliveryForClient`
+  is superseded by this route-level enforcement. Fails closed (redacts
+  entirely) for a malformed non-JSON value, not open (the first version
+  returned the raw unexamined string in that case).
+- **`campaignDeliveryTest.js` was completely broken**: found while adding
+  its SSRF guard. `engine.makeDbAttemptStore` does not exist anywhere in
+  the generated engine bundle (the real export is
+  `makeEntityAttemptStore`), so the operator live-delivery-test feature has
+  been throwing a 500 on every invocation whenever `DeliveryAttempt` exists
+  on the database, which is always true in a real deployment. Zero test
+  coverage existed for this function before this stage; fixed, and a new
+  `server/test/campaignDeliveryTest.test.js` covers it.
+
+### 8. Config versioning and UI
+
+`computeConfigHash`/`diffConfig` (`configPublish.js`) now include
+`sub_delivery_id` (closing the Stage 4 finding) and, found missing in the
+same review pass, `price_mode`/`conditions`. `distributionConfig.js`'s
+`validate` action now computes and returns a real member-level diff against
+the group's last published `RouteConfigVersion` snapshot;
+`RouteGroupPublishDialog.jsx` renders it. The second adversarial round found
+this was necessary, not cosmetic: the dialog's own local diff only ever
+compared group-level fields (`DIFF_FIELDS`, a hardcoded list of six
+non-member fields) against the in-progress form - no member-level change,
+including the exact `sub_delivery_id` repoint this stage's hash fix targets,
+was ever shown to the operator approving a publish, regardless of the hash
+fix.
+
+`DeliveryHistoryTab.jsx` now reads through a new, explicitly operator-gated
+`deliveryHistory` function (server + client) instead of the generic entity
+route, which denies `DeliveryAttempt` outright (absent from
+`entityPolicy.js`'s `ENTITY_POLICY`, so the tab always silently showed
+nothing). The same review round found the FIRST version of this fix was
+itself broken: `functions.invoke` resolves `{data, status}`
+(`client/src/api/client.js`), not the parsed body directly, and the new
+`DeliveryHistoryTab.jsx` was the only `functions.invoke` caller in the
+codebase that skipped the `.data` unwrap - so the tab would have kept
+showing "no attempts" regardless of what the server actually returned.
+Fixed.
+
+`DeliveryAttempt.json`/`DestinationHealth.json`'s `required` arrays no
+longer name only the deprecated `destination_id` (previously the ONLY
+required field on `DestinationHealth`, while the canonical `sub_delivery_id`
+was never required at all) - `server/src/lib/migrationPlan.js`'s
+`requiredFields()` reads directly from these arrays to decide `BLOCKER` vs
+`WARNING` severity for a dangling reference, so this was backwards from
+what matters. Neither field is unconditionally required now, since a
+native-only row legitimately lacks `destination_id` and a legacy-only row
+legitimately lacks `sub_delivery_id`.
+
+### 9. Two rounds of parallel adversarial critique
+
+Round 1 (4 agents: retry/idempotency/concurrency, caps/pricing,
+SSRF/secrets/regex, config-versioning/UI) reviewed the first version of
+every fix above. Every finding it surfaced is folded into the sections
+above rather than listed separately, since each was either fixed
+(`DeliveryHistoryTab`'s `.data` unwrap, `diffConfig`'s missing fields, the
+`RouteMember.active` gap, the stale-`nowMs` gap, the `num()` regression
+introduced-and-caught-by-its-own-new-test) or is the SAME finding a later
+fix in this stage addresses.
+
+Round 2, run after applying round 1's fixes, specifically targeting the
+NEW code from round 1 (not a repeat of round 1's own scope): found the
+`SUPERSEDED`/`toRunStatus` gap (section 2), the ReDoS unrolled-alternation
+bypass (section 7), the SSRF IPv4-mapped-IPv6 bypass and the missing
+`campaignDeliveryTest.js` guard (section 7), the `capStore.js` create-race
+(section 5), and the transient-vs-permanent conflation in
+`resolveMemberForRetry` (section 4). All fixed and verified in this same
+commit; each carries a regression test reproducing the actual finding, not
+just testing the fix in isolation.
+
+Findings considered and NOT fixed this stage, with reasons:
+
+- `pingpostFlow.js`'s `runPingPost` never wires a `validateTarget` default
+  of its own - dormant today (no production caller exists for it, confirmed
+  by repo-wide grep), so there is no concrete call site to wire a guard
+  into without guessing at a caller that does not exist. Whoever adds a
+  production ping-post caller must inject `validateTarget` explicitly, the
+  same way `processLead.js`/`nativeRetryRunner.js`/`campaignDeliveryTest.js`
+  now do.
+- `reservation.js`'s `reserve()` loser can time out (the entity store's
+  `awaitReservation` polls for 1s) before a legitimately slow winner
+  finishes its own multi-scope CAS sequence and calls `putReservation`.
+  This fails SAFE (no double-post; the loser is simply rejected
+  `ALREADY_RESERVED` with no attempt row ever created) rather than unsafe,
+  so it is a possible spurious lost opportunity under real database
+  contention, not a double-sale risk. Not fixed this stage.
+
+### 10. Evidence
+
+- `npm run gate`: PASS, all eight steps, at the final commit. 130 test
+  files, 1661 tests, 0 failures, up from 125 files and 1580 tests before
+  this stage (81 net new tests across the two review rounds' regression
+  suite).
+- Production database, read-only verification before any write: `SELECT
+  count(*) FROM e_cap_counter` = 0 (confirmed safe to add the unique index
+  with no backfill/migration risk).
+- GitHub Actions run `32868628937` succeeded; deployed container's
+  `git rev-parse HEAD` confirmed `1038bcd94c53b3d6ca03174bc1b9107ac4763f23`,
+  matching the pushed commit exactly.
+- All five public surfaces (`app`, `api`, `dashflo.io`, `docs`, `progress`)
+  returned 200 after deploy.
+- `e_cap_counter_scope_key_idx` UNIQUE index confirmed present on the
+  deployed production database via `\d e_cap_counter`.
+- Safety invariants reverified against the live production database and
+  container after this deploy: `e_app_settings.distribution_mode` still
+  unset (code default `legacy_only` governs); default
+  `LeadByteConnector` still `is_default:true, enabled:true`, unchanged
+  `target_url`; zero active `RouteGroup` rows; `NATIVE_RETRY_WORKER_ENABLED`
+  absent from the running container's environment.
+- `git diff --check`: clean on the commit (`run-migration-apply.mjs`,
+  pre-existing and unrelated, deliberately excluded and left exactly as
+  found - it is untracked and was never staged).
+
+### Required end state, self-assessed against the operating loop's own
+   checklist
+
+`ALL FIXABLE ROUTING ISSUES: RESOLVED` (QUEUED semantics, `RouteMember.active`
+retry gap) - `ALL FIXABLE RETRY ISSUES: RESOLVED` (double-sale/`SUPERSEDED`,
+lease concurrency, permanent-error dead-lettering, in-run reservation,
+transient-vs-permanent DB error handling) - `ALL FIXABLE CONCURRENCY ISSUES:
+RESOLVED` (status-aware lease CAS, fresh per-attempt clock, `CapCounter`
+create-race/unique index) - `ALL FIXABLE BILLING/CAP ISSUES: RESOLVED`
+(canonical `scope_key`, the `num()` null-pricing bug, `price_mode:'rule'`
+wired to real `BuyerStateCpl` data) - `ALL FIXABLE SECURITY ISSUES: RESOLVED`
+(SSRF guard on every real send path including the IPv4-mapped-IPv6 bypass,
+full ReDoS protection including the unrolled-alternation bypass, header
+redaction, the `campaignDeliveryTest.js` broken-store bug) - `ALL FIXABLE
+CONFIG-VERSION ISSUES: RESOLVED` (hash/diff completeness, the publish
+dialog now shows a real member-level diff) - `STATE COVERAGE:
+PRODUCTION-READY` (the engine capability now exists and is tested; Walker's
+own records are an operator decision, not an engine gap) - `STATE PRICING:
+PRODUCTION-READY` (same) - `RESPONSE HANDLING: EXACT UNRECOVERABLE DATA
+IDENTIFIED` (zero real Walker `DeliveryAttempt` evidence exists anywhere) -
+`TIER MAPPING: EXACT UNRECOVERABLE AMBIGUITY IDENTIFIED` (Tier 1/Tier 3
+byte-identical, no recoverable distinction) - `TESTS: PASS, 1661` - `npm run
+gate: PASS` - `PRODUCTION HEALTH: PASS` - `LEGACY RELAY: UNCHANGED` -
+`DISTRIBUTION MODE: LEGACY_ONLY` - `NATIVE RETRIES: DISABLED`.
+
+`UNPROVEN`, stated plainly: this stage did not re-run the real-record native
+delivery dry run (`server/scripts/native-delivery-dry-run.js`) against
+Walker's production records with all of this stage's fixes in place, and
+did not attempt visual browser verification of the `/webhooks` and
+Operations > Buyers pages. Both remain exactly as open as Stage 4 left
+them, not made worse by this stage.
+
+### Exact blockers before any live cutover, carried forward and reduced
+
+The engineering blockers Stage 4 left (retry cap/wallet bypass, lease
+concurrency) are now resolved. What remains is unchanged from Stage 4's own
+list and is data/business, not engineering:
+
+1. `RouteMember.fixed_price` on Walker's two real RouteMembers, OR an
+   operator decision to switch `price_mode` to `'rule'` and use Walker's
+   real, already-populated `BuyerStateCpl` coverage instead (see section 6
+   - this is now a real, tested option, not just a gap).
+2. `SubDelivery.response_mapping` for Walker - needs a real observed
+   response from `walkeradvertising.leadportal.com/apiJSON.php`; zero such
+   evidence exists anywhere in this repository or production database.
+3. An operator decision on whether Tier 1 and Tier 3 should route to
+   genuinely different configurations (confirmed byte-identical, no
+   recoverable distinction).
+4. An operator decision to move `Delivery.status` to `active` and manually
+   resolve the resulting `AMBIGUOUS` Tier 1 vs Tier 3 RouteMember mapping.
+5. `RouteGroup.active`/`lifecycle` activation and the `distribution_mode`
+   transition: the standing human-approval gate, unaffected by everything
+   above.
