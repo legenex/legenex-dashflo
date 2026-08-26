@@ -4831,3 +4831,62 @@ Findings triaged and deliberately NOT fixed this stage, with reasons:
   opening `/webhooks`, a Buyer's Deliveries tab, and the MVA campaign's
   Routing tab against the live deployed SHA remains the one genuinely
   manual verification step this stage could not perform itself.
+
+## Lead Distribution rebuild, Stage 7 follow-up: permission-model parity,
+   archival scope hardening, `54220a1`
+
+26 August 2026. The operator required the two engineering items Stage 7 had
+left as documented follow-ups (not human-only) to be closed before
+declaring the product complete, since a visible workflow that can fail, or
+a reusable tool with a known unsafe gap, is not done.
+
+**Permission model.** `client/src/lib/AuthContext.jsx`'s `resolvePermissions`
+(gates the operator UI, including the new full-page Delivery editor) and
+`server/src/lib/entityPolicy.js`'s `resolveRoleClass` (gates every entity
+read/write) disagreed on two account shapes: a user with no `base_role` and
+`role !== 'admin'` (client fell back to `'manager'`, full UI; server fell
+back to `ROLE.UNKNOWN`, 403 on every write), and a record carrying both an
+operator `base_role` and a `linked_buyer_id`/`linked_supplier_id` (server
+checks the linked id first and denies as `ROLE.PORTAL`; client ignored it
+entirely and trusted `base_role`) - the second shape was found by the new
+parity test itself, not anticipated in advance. Fixed by tightening the
+client to the server's existing fail-closed defaults, not the reverse.
+Also found and fixed in the same investigation: `client/src/lib/permissions.js`'s
+`keyForLocation` had no entry for the new `/webhooks/:deliveryId`/
+`/webhooks/new` routes added earlier this stage, so `PermissionRoute`
+treated them as "no gating key, render freely" for any authenticated user
+regardless of role - a real regression from this stage's own earlier work,
+independent of the `base_role` issue. Checked against real production data
+first: all three real `User` records already carry an explicit `base_role`
+(owner/admin/manager), so no backfill/migration was needed or written for a
+problem with zero current instances.
+
+**Archival tool scope.** `server/scripts/archive-invalid-route-members.js --apply`
+now requires an explicit `--route-group <id>` and refuses immediately,
+before ever connecting to the database, if it's absent or unrecognized.
+Classification still runs against the full dataset (required for
+correctness - a RouteMember cannot be judged in isolation from the rest of
+its own buyer's records), but the new `scopeActionsToRouteGroup`
+(`server/src/lib/routeMemberArchival.js`) is the one place that narrows the
+WRITE boundary to the selected group. Idempotent by construction (an
+already-archived row is skipped by the classifier itself).
+
+**Evidence.** 30 new tests (`AuthContext.test.js`, `permissions.test.js`,
+`rolePermissionParity.test.js` - the last imports the real `resolveRoleClass`
+and `resolvePermissions` functions from both sides rather than a re-typed
+copy of either; `routeMemberArchival.test.js` gained 6 scoping tests
+proving cross-RouteGroup isolation and idempotency directly). Full suite:
+1784 tests, 0 failures. `npm run gate`: PASS, all eight steps.
+`git diff --check`: clean. Deployed as `54220a1`, confirmed equal to the
+running container's `git rev-parse HEAD`. All five public hosts 200 after
+deploy. Safety invariants reverified unchanged: `distribution_mode` empty,
+`NATIVE_RETRY_WORKER_ENABLED` absent, both `RouteGroup` rows still
+`active:false`/`draft`, legacy `LeadByteConnector` unchanged, RouteMember
+state unchanged at 1 active / 11 archived (this round touched only
+permission-resolution code and archival tooling, no production data).
+
+`UNPROVEN`, stated plainly, unchanged from every prior stage: no browser
+tool was available. A human visually confirming that an unauthorized/
+read-only account actually sees no edit controls, and that an authorized
+operator's Delivery editor still works end to end, remains the one
+genuinely manual check.
