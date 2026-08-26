@@ -111,3 +111,23 @@ export function archivedDestinationName(current, code) {
   const marker = `(ARCHIVED: ${code} - see docs/STATE.md Stage 7)`;
   return base ? `${base} ${marker}` : marker;
 }
+
+// Filters a classification's `actions` down to only the ones whose
+// underlying RouteMember belongs to routeGroupId. This is the ONE place
+// that decides "is this action in scope for a write" - shared by
+// archive-invalid-route-members.js's --apply step and by this module's own
+// tests, so the write boundary a test proves is exactly the one the script
+// enforces, not a re-implementation of it.
+//
+// Classification itself is deliberately NOT scoped by RouteGroup (a
+// RouteMember cannot be correctly judged NO_DELIVERY_CONFIGURED/
+// EXACT_DUPLICATE/etc in isolation from the rest of its own buyer's
+// records - see routeMemberMapping.js's candidateSubDeliveries), so this
+// function takes the full, unscoped `actions` array and narrows only the
+// WRITE boundary, after classification has already happened correctly
+// against the complete dataset.
+export function scopeActionsToRouteGroup(actions, routeMembers, routeGroupId) {
+  if (!routeGroupId) return [];
+  const memberById = new Map(routeMembers.map((m) => [m.id, m]));
+  return actions.filter((a) => memberById.get(a.route_member_id)?.route_group_id === routeGroupId);
+}

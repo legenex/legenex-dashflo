@@ -198,6 +198,14 @@ export function keyForLocation(pathname, search) {
   if (pathname.startsWith('/suppliers/')) return 'dist_suppliers';
   if (pathname.startsWith('/buyers/')) return 'dist_buyers';
   if (pathname.startsWith('/distribution/buyers/')) return 'dist_buyers';
+  // The full-page Delivery editor (/webhooks/:deliveryId, /webhooks/new) is
+  // a detail route under /webhooks the same way suppliers/buyers detail
+  // routes are under their own list - without this, keyForLocation returns
+  // null for any nested path, and PermissionRoute treats a null key as
+  // "no gating key, render freely" (see PermissionRoute.jsx), letting ANY
+  // authenticated user open the editor's Save/Rename/Duplicate/Archive
+  // controls regardless of role, only to have every write 403 server-side.
+  if (pathname.startsWith('/webhooks/')) return 'dist_webhooks';
   return PATH_KEYS[pathname] || null;
 }
 

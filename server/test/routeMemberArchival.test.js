@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { classifyRouteMembersForArchival, archivedDestinationName } from '../src/lib/routeMemberArchival.js';
+import { classifyRouteMembersForArchival, archivedDestinationName, scopeActionsToRouteGroup } from '../src/lib/routeMemberArchival.js';
 
 // Fixture shaped after the real production MVA campaign this cleanup exists
 // for (docs/STATE.md Stage 7): one RouteGroup, six buyers, two RouteMembers
@@ -130,6 +130,82 @@ describe('classifyRouteMembersForArchival', () => {
     expect(result.remaining).toEqual(['rm-earliest']);
     expect(result.actions).toHaveLength(2);
     expect(result.actions.every((a) => a.kept_route_member_id === 'rm-earliest')).toBe(true);
+  });
+});
+
+// Hardening for server/scripts/archive-invalid-route-members.js's --apply
+// scope requirement: an --apply run must only ever write RouteMembers in
+// the one RouteGroup an operator explicitly named, never leak into a
+// RouteGroup nobody has reviewed, and a second run against the same scope
+// must be a no-op (idempotent).
+describe('scopeActionsToRouteGroup', () => {
+  // Two RouteGroups, each with the same "1 backed buyer + 1 orphan buyer"
+  // shape, so a scoping bug that leaks across groups would be caught by
+  // wrongly picking up rg2's orphan when scoped to rg1, or vice versa.
+  const rgA = 'rg-a';
+  const rgB = 'rg-b';
+  const routeGroupsMixed = [{ id: rgA, campaign_id: 'camp1' }, { id: rgB, campaign_id: 'camp1' }];
+  const buyersMixed = [buyer('b-a-orphan', 'Orphan A'), buyer('b-b-orphan', 'Orphan B')];
+  const membersMixed = [
+    member('rm-a-orphan', { route_group_id: rgA, buyer_id: 'b-a-orphan' }),
+    member('rm-b-orphan', { route_group_id: rgB, buyer_id: 'b-b-orphan' }),
+  ];
+
+  function classifyMixed(members) {
+    return classifyRouteMembersForArchival({
+      routeMembers: members, routeGroups: routeGroupsMixed, campaigns, buyers: buyersMixed,
+      deliveries: [], subDeliveries: [], verticals,
+    });
+  }
+
+  it('report-only classification across the full dataset finds both groups\' candidates (safe, read-only)', () => {
+    const { actions } = classifyMixed(membersMixed);
+    expect(actions.map((a) => a.route_member_id).sort()).toEqual(['rm-a-orphan', 'rm-b-orphan']);
+  });
+
+  it('scoping to rg-a returns ONLY rg-a\'s candidate, never rg-b\'s', () => {
+    const { actions } = classifyMixed(membersMixed);
+    const scoped = scopeActionsToRouteGroup(actions, membersMixed, rgA);
+    expect(scoped.map((a) => a.route_member_id)).toEqual(['rm-a-orphan']);
+  });
+
+  it('scoping to rg-b returns ONLY rg-b\'s candidate', () => {
+    const { actions } = classifyMixed(membersMixed);
+    const scoped = scopeActionsToRouteGroup(actions, membersMixed, rgB);
+    expect(scoped.map((a) => a.route_member_id)).toEqual(['rm-b-orphan']);
+  });
+
+  it('a RouteGroup with no candidates of its own modifies zero rows even though the dataset has candidates elsewhere', () => {
+    const emptyGroup = { id: 'rg-empty', campaign_id: 'camp1' };
+    const { actions } = classifyRouteMembersForArchival({
+      routeMembers: membersMixed, routeGroups: [...routeGroupsMixed, emptyGroup], campaigns,
+      buyers: buyersMixed, deliveries: [], subDeliveries: [], verticals,
+    });
+    const scoped = scopeActionsToRouteGroup(actions, membersMixed, 'rg-empty');
+    expect(scoped).toEqual([]);
+  });
+
+  it('no routeGroupId at all (the --apply-without---route-group refusal case) scopes to nothing, never falls back to "everything"', () => {
+    const { actions } = classifyMixed(membersMixed);
+    expect(scopeActionsToRouteGroup(actions, membersMixed, null)).toEqual([]);
+    expect(scopeActionsToRouteGroup(actions, membersMixed, undefined)).toEqual([]);
+    expect(scopeActionsToRouteGroup(actions, membersMixed, '')).toEqual([]);
+  });
+
+  it('second apply is idempotent: once the scoped candidate is archived (active:false), reclassifying finds nothing left to do in that scope', () => {
+    const { actions: firstPass } = classifyMixed(membersMixed);
+    const scoped = scopeActionsToRouteGroup(firstPass, membersMixed, rgA);
+    expect(scoped).toHaveLength(1);
+
+    // Simulate exactly what --apply would have written: active:false on the
+    // one archived row, nothing else touched.
+    const afterApply = membersMixed.map((m) => (m.id === 'rm-a-orphan' ? { ...m, active: false } : m));
+    const { actions: secondPass } = classifyMixed(afterApply);
+    const secondScoped = scopeActionsToRouteGroup(secondPass, afterApply, rgA);
+    expect(secondScoped).toEqual([]);
+    // rg-b's untouched candidate is still correctly found on the full-dataset
+    // pass - idempotency in rg-a did not silently affect rg-b.
+    expect(secondPass.map((a) => a.route_member_id)).toEqual(['rm-b-orphan']);
   });
 });
 
