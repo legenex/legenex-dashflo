@@ -22,6 +22,9 @@ recoverable backup on 27 August 2026.
 - Every run appends one line to `/var/backups/dashflo/backup.log`: `OK` with
   the byte size, or `FAILED` with the reason. There is no push alert yet; see
   Gaps below.
+- `deploy/backup/offsite-sync.sh` runs immediately after, in the same cron
+  line, and replicates dumps off-host once a provider is configured; see
+  "What is still missing" below for activation.
 
 ## Verified working as the `dashflo` user, 27 August 2026
 
@@ -56,19 +59,58 @@ Verified end to end as `dashflo`, not root, running the exact crontab command
 This closes on-host backup verification. Off-server replication remains open,
 see below.
 
+## Post-cutover backup verified against recovered data, 27 August 2026
+
+The verification above predates the production database cutover and, by
+construction, only proved the mechanism against an empty schema. Re-run after
+the cutover to prove the actual scheduled backup captures the recovered data,
+not just a working empty dump.
+
+Ran the literal cron command by hand as `dashflo`
+(`flock -n /tmp/dashflo-pg-backup.cron.lock
+/opt/apps/dashflo/deploy/backup/pg-backup.sh`): exit 0, wrote
+`dashflo-20260827T213008Z.dump`, 18,205,332 bytes (versus 163,583 bytes for
+every pre-cutover dump, an over 100x size difference that alone shows this is
+not the empty schema). Restored it with `pg_restore --no-owner --no-acl` into
+a disposable `backup_restore_verify` database in the same container: clean
+exit, `e_lead` count 1984 and `e_buyer` count 13, matching the cutover's own
+post-restore verification numbers exactly, and 101 tables matching the live
+database's table count. Scratch database dropped immediately after.
+
+This closes the "does the scheduled backup actually contain the recovered
+data" requirement. The daily 03:00 UTC cron entry itself was not changed by
+this check and needs no further action; this only exercised the same command
+it runs.
+
 ## What is still missing
 
 - **Off-server storage.** Every dump above lives on the same VPS as the
   database it backs up. If that VPS is lost the way the old one was, these
   backups are lost with it. This is the same failure this stage exists to
-  prevent, and it is not yet closed.
+  prevent.
 
-  Closing it needs a provider decision from the operator: object storage
-  (S3, Backblaze B2, or similar) and a credential for it. Once chosen,
-  extend `pg-backup.sh` (or add a second script invoked right after it) to
-  upload the just-written dump, and store the upload credential the same way
-  every other production secret is stored, in `server/.env` or the
-  destination's own credential store, never in this repository.
+  The implementation is prepared and installed, only a provider decision and
+  its credential are missing: `deploy/backup/offsite-sync.sh` runs `rclone
+  copy` of every dump to a remote named by `OFFSITE_RCLONE_REMOTE`, right
+  after `pg-backup.sh` in the same cron line (`deploy/backup/pg-backup.cron`).
+  `rclone` (v1.60.1) is already installed on the VPS. Until a remote is
+  configured, the script logs `SKIPPED` to `/var/backups/dashflo/offsite.log`
+  and exits 0, so it never breaks the on-host backup it runs after.
+
+  To activate, the operator:
+  1. Picks a provider (Backblaze B2 is the cheapest for this dump volume;
+     S3 or any other rclone-supported object store works identically).
+  2. Runs `rclone config` on the VPS as `dashflo` and creates a remote with
+     that provider's credentials. `rclone config` is interactive and the
+     credential is stored in `~dashflo/.config/rclone/rclone.conf` on the
+     VPS only, never in this repository.
+  3. Writes `deploy/backup/offsite.env` on the VPS (gitignored, not
+     committed) with one line: `OFFSITE_RCLONE_REMOTE=<remote-name>:<bucket-or-path>`,
+     e.g. `OFFSITE_RCLONE_REMOTE=dashflo-offsite:dashflo-backups`.
+
+  The next 03:00 UTC cron run starts uploading with no other change. Copies
+  only, never deletes: the on-host 14-day retention prunes locally, the
+  off-site copy is meant to outlive that.
 
 - **Failure alerting.** A failed run is visible in `backup.log` and in
   `journalctl` / cron's own mail if the host has a working local MTA, but

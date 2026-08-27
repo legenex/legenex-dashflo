@@ -5887,3 +5887,123 @@ invalidation is a `NULL` write to a token that was already flagged
 compromised and unusable regardless; nothing else read or depended on it
 in the few minutes it existed. No application code, configuration file, or
 deployment changed in this phase either.
+
+## Full production acceptance and functional restoration, 27 August 2026
+
+The operator confirmed Google owner login now works and asked for a full,
+autonomous production acceptance pass: team authentication for all three
+real accounts, every major UI/API surface, recovered-data correctness,
+integration status, reporting correctness, buyer/supplier operations, lead
+distribution readiness, and backups, with native commercial delivery kept
+disabled throughout. This entry covers team authentication and backups;
+later entries in this same session cover the remaining sections.
+
+### Team authentication: James and Danelle bridged the same way as Nick
+
+Audited all three real `e_user` rows directly (`nick@legenex.com`,
+`james@legenex.com`, `danelle@legenex.com`), read-only, before changing
+anything:
+
+- `nick@legenex.com`, id `6a4957e7b03e9b10c170d29f`, role `admin`, base_role
+  `owner`, full owner permission set, not disabled. `auth_credentials`
+  already existed (added in the prior incident entry), `has_google_sub=true`
+  now, confirming the operator's own successful Google sign-in.
+- `james@legenex.com`, id `6a4cc7a363ce4abaa72f1822`, role `user`, base_role
+  `manager`, a working-level permission set (no `set_users`, `set_billing`,
+  `finances`, etc.), not disabled. Zero `auth_credentials` rows.
+- `danelle@legenex.com`, id `6a510bb17eefaff8b9eb7db9`, role `admin`,
+  base_role `admin`, a full admin permission set short of `finances`/
+  `bank_feed`, not disabled. Zero `auth_credentials` rows.
+
+Neither James nor Danelle had ever had a working login since the migration:
+`auth_credentials` is a native DashFlo table outside the Base44 migration
+entity set (see the incident entry above), so no import path could have
+populated it for anyone.
+
+Read `googleAccountLink.js` and `routes/auth.js` directly rather than
+assuming: `decideGoogleLink`'s `LINK_AND_LOGIN` path only requires exactly
+one `auth_credentials` row matching the verified email, with no
+`google_sub` already set to a different value. It does not require a
+password hash or a reset token. Role, base_role and permissions are read
+from the existing `e_user` row and are never written by the link.
+
+**Fix applied**, additive only, identical shape to the existing Nick row and
+to each other, no `e_user` row touched:
+
+```sql
+INSERT INTO auth_credentials (user_id, email) VALUES
+  ('6a4cc7a363ce4abaa72f1822', 'james@legenex.com'),
+  ('6a510bb17eefaff8b9eb7db9', 'danelle@legenex.com');
+```
+
+No password_hash, no google_sub, no reset_token: the operator's instruction
+was explicit that a password should not be required when Google login is
+sufficient, and the code above confirms none of those fields are needed for
+`LINK_AND_LOGIN` to succeed on each person's next Google sign-in. Verified
+immediately after: three `auth_credentials` rows total, one per real
+account, zero duplicates by email, none disabled, James and Danelle both
+`has_password=false has_google_sub=false` (will link on first sign-in),
+matching Nick's own state before his first Google login.
+
+No role was assigned or changed. No permission was added or removed. No
+duplicate `User` record was created. Google sign-in configuration
+(`SystemKey` provider `google`) was already working from the prior incident
+and was not touched again here.
+
+### Backups: post-cutover scheduled backup verified against real data
+
+The existing on-host backup mechanism was only ever verified against the
+empty pre-cutover schema (see "Backup cron ownership fixed and
+restore-verified" above). Ran the literal cron command by hand as `dashflo`
+again, now that the database holds the recovered Aug 22 candidate: exit 0,
+wrote `dashflo-20260827T213008Z.dump`, 18,205,332 bytes against every
+pre-cutover dump's 163,583 bytes. Restored it with
+`pg_restore --no-owner --no-acl` into a disposable `backup_restore_verify`
+database: clean exit, `e_lead` 1984, `e_buyer` 13, 101 tables, matching the
+cutover's own numbers exactly. Scratch database dropped immediately after.
+Full detail in `docs/BACKUP-RESTORE.md`.
+
+**Off-site replication prepared, not activated.** `rclone` (v1.60.1)
+installed on the VPS via `apt-get`. Added `deploy/backup/offsite-sync.sh`,
+which copies every dump to an `rclone` remote named by
+`OFFSITE_RCLONE_REMOTE` (read from a new, gitignored
+`deploy/backup/offsite.env`), and wired it into
+`deploy/backup/pg-backup.cron` to run immediately after the existing
+backup, in the same cron line. Deliberately a no-op (logs `SKIPPED`, exits
+0) until a remote is configured, so it cannot break the on-host backup it
+depends on and cannot be mistaken for already being active. The only
+missing inputs are a provider decision (Backblaze B2 or S3 recommended) and
+that provider's credential, both of which only the operator can supply; see
+`docs/BACKUP-RESTORE.md` for the exact three-step activation once decided.
+This is the one item from this phase left for the operator, per the
+standing instruction to bundle it as a single final question rather than
+raise it mid-stream.
+
+### Evidence
+
+- Direct `e_user` and `auth_credentials` queries against production,
+  before and after, over SSH via `docker compose exec db psql`. No
+  password hash, Google subject, or token value was displayed in this
+  session's output at any point.
+- `SELECT email, count(*) FROM auth_credentials GROUP BY email HAVING
+  count(*) > 1` returned zero rows, ruling out duplicates.
+- `pg_restore` exit code and direct `SELECT count(*)` on `e_lead`/`e_buyer`
+  inside the disposable restore-verify database, not the backup log's
+  self-reported size alone.
+- `rclone version` confirming installation; `offsite-sync.sh` was not run
+  against a real remote since none is configured yet, so no network call to
+  any storage provider happened in this phase.
+- `NATIVE_RETRY_WORKER_ENABLED` absent and `BASE44_SYNC_ENABLED=0`, checked
+  again after the `auth_credentials` writes, confirming this phase did not
+  touch commercial-delivery safety.
+
+### Rollback
+
+The two `auth_credentials` inserts are additive on a table that did not
+previously reference either user and reverse cleanly with `DELETE FROM
+auth_credentials WHERE email IN ('james@legenex.com',
+'danelle@legenex.com')` if ever needed; neither modifies or recreates the
+`e_user` rows they point at. The backup restore-verify database was
+disposable and already dropped. `offsite-sync.sh` and the cron change are
+inert until a remote is configured and do not alter the existing on-host
+backup behavior.

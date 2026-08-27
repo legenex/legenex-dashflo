@@ -11,6 +11,7 @@ build/
 .env.local
 server/.env
 client/.env
+deploy/backup/offsite.env
 
 # Uploads / runtime data
 server/uploads/
