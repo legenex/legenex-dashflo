@@ -5626,3 +5626,171 @@ Not triggered; every check passed. If it had been needed, the pre-cutover
 backup at `/var/backups/dashflo/pre-cutover-20260827T202418Z.dump` restores
 the prior empty, schema-only state exactly as documented in
 `docs/PRODUCTION-CUTOVER-RUNBOOK.md`'s own rollback section.
+
+## Post-cutover login incident: real root cause found, owner account bridged
+   for safe first Google login, Google Client ID recovery blocked on Console,
+   27 August 2026
+
+The operator reported the Google sign-in button missing at
+`https://app.dashflo.io/login` and password login for `nick@legenex.com`
+failing with "Invalid email or password" immediately after the cutover
+above. Both were investigated to a real, evidenced root cause rather than
+left at the operator's own working hypotheses.
+
+**Google sign-in.** `GET https://api.dashflo.io/api/auth/google/config`
+returned `{"enabled":false,"client_id":"","source":"none"}`, confirming
+`resolveGoogleAppCreds()` finds neither a `SystemKey` row nor a
+`GOOGLE_CLIENT_ID` environment value. Queried `dashflo_recovery_final`'s
+`e_system_key` table directly (the same database production was restored
+from): exactly two rows, `anthropic` and `openai`, no `google` row. This
+matches the "Session 17 August 2026" entry's own `UNPROVEN` note that
+Google sign-in had no Client ID configured even before the VPS loss.
+
+**Password login, real root cause.** Not a stale password from the Aug 22
+snapshot, as the operator's own working hypothesis suggested; there is
+evidence against that specific explanation. `auth_credentials` is a native
+DashFlo table, outside `MIGRATION_ENTITY_ORDER` (`SystemKey`, `ApiKey`,
+`BuyerApiKey`, `KeyAuditEvent` are the only credential-shaped entities the
+owner-kind Base44 migration import carries). No migration or recovery path
+in this lineage ever had a way to carry a real `password_hash` for
+`nick@legenex.com`, `james@legenex.com`, or `danelle@legenex.com`. Queried
+directly: before this session, production `auth_credentials` held exactly
+one row, `recovery-verify@local.invalid`, the scratch verification account
+from "Production cutover artifact produced and restore-verified" above.
+That entry recorded deleting the contamination "from `e_user`"; the
+corresponding `auth_credentials` row was not deleted in the same pass and
+rode along into the real cutover. The three real `e_user` rows
+(`nick@legenex.com` admin/owner, `james@legenex.com` user/manager,
+`danelle@legenex.com` admin/admin, ids unchanged from before this session)
+had zero matching `auth_credentials` rows, so `/login` was correctly
+reporting "Invalid email or password" for every real account, and would
+have kept doing so regardless of which password was tried.
+
+**Consequence for Google account-linking safety, found by reading
+`googleAccountLink.js` and the `/google` handler in `auth.js` directly.**
+With zero `auth_credentials` rows for the real accounts, a first Google
+sign-in for `nick@legenex.com` would hit `decideGoogleLink`'s
+`NOT_REGISTERED` refusal (no credential, no invitation, self-signup off by
+default here) rather than linking to the existing owner `e_user` record.
+The operator's stated requirement, that a first Google login link to the
+existing owner account rather than create a duplicate or new role, was not
+yet true of the live system and needed a fix beyond just the Client ID.
+
+**Fix applied directly to production `auth_credentials`**, additive only,
+no `e_user` row touched or created:
+
+- Inserted one row: `user_id = '6a4957e7b03e9b10c170d29f'` (the existing,
+  unmodified owner `e_user` id), `email = 'nick@legenex.com'`, no
+  `password_hash`, no `google_sub`, plus a fresh password-reset token
+  generated the same way `/auth/invite` generates one
+  (`crypto.randomBytes(24).toString('hex')`, 7-day expiry). This makes
+  `decideGoogleLink` see exactly one `auth_credentials` match by email on
+  the next Google sign-in for this address, so the correct path becomes
+  `LINK_AND_LOGIN` against the existing owner id, role and permissions read
+  unchanged from the existing `e_user` row and never rewritten by the link.
+  The reset token was handed to the operator directly in chat as a
+  `/reset-password?token=...` link so the operator sets their own new
+  password; the token itself is not recorded in this file or anywhere in
+  the repository, since a reset token is bearer-credential-shaped even
+  though it is not a password.
+- Deleted the leftover `recovery-verify@local.invalid` row, completing the
+  cleanup the cutover-artifact entry above intended but did not finish.
+
+`james@legenex.com` and `danelle@legenex.com` have the identical gap (real
+`e_user` rows, zero `auth_credentials` rows) and were deliberately left
+untouched; only the account the operator named was bridged. The same fix
+is a one-row insert if either is requested.
+
+**Google Client ID: exhaustively searched, not found, condition B.** Every
+source the operator asked to be checked was checked: full git history on
+`main` and both other remote branches, by pickaxe search and reflog, for
+`apps.googleusercontent.com` (every hit is a placeholder or a test fixture,
+never a real value); GitHub repository and `production` environment
+secrets and variables (`DEPLOY_SSH_KEY`, `DEPLOY_HOST`, `DEPLOY_USER`,
+`DEPLOY_PATH` only); `dashflo_recovery_final` queried directly plus a full
+per-table `data::text ILIKE '%googleusercontent%'` scan across all 101
+tables (zero matches anywhere, not just in `SystemKey`); the operator's
+`~/Downloads` and `~/Documents`, including old Base44 export bundles,
+diagnostic JSON dumps, and old built-frontend zip snapshots; shell history;
+and any Google OAuth-credential-shaped file on the workstation. No `gcloud`
+CLI is installed locally, so no authenticated Cloud API enumeration was
+possible either. One relevant find:
+`~/Downloads/legenex-database-eba823c0ce72.json` is a Google Cloud
+**service account** key, a different credential type; only its non-secret
+`project_id` (`legenex-database`) and `client_email` fields were read, its
+`private_key` was not, and it does not itself contain a Sign-In Client ID.
+The project id is recorded here only because it narrows where the operator
+needs to look, not as a substitute for the actual value.
+
+### Not done, and the one remaining manual step
+
+No new Google OAuth Client was created, per the operator's own instruction
+not to unless the existing one is genuinely unrecoverable; only this
+workstation's discoverable copies of it were exhausted, not Google Cloud
+Console itself, which only the operator can reach. No `SystemKey` row was
+written for Google since there is no genuine value yet to write. No
+password was set for `nick@legenex.com`; the operator sets their own via
+the reset link handed to them directly. `james@legenex.com` and
+`danelle@legenex.com` were not touched.
+
+**The one manual step:** Google Cloud Console, project `legenex-database`
+(or whichever project actually holds it, if that guess is wrong) → APIs &
+Services → Credentials → the OAuth 2.0 Client IDs section → open the Web
+application client used for DashFlo sign-in → copy the **Client ID** field
+(ends in `.apps.googleusercontent.com`; never the Client Secret) → while
+there, confirm `https://app.dashflo.io` is present under that client's
+Authorized JavaScript origins, since the sign-in flow is Google Identity
+Services ID-token, not an authorization-code redirect, so no redirect URI
+is needed. Once given, the value goes into a `SystemKey` row
+(`provider: google`, `client_id` only, no secret) the same way the
+Anthropic and OpenAI keys already are, and `/api/auth/google/config` is
+re-verified to flip to `enabled:true`.
+
+### Evidence
+
+- `GET https://api.dashflo.io/api/auth/google/config`: `{"enabled":false,
+  "client_id":"","source":"none","allowed_domains":[]}`, checked at the
+  start and end of this phase, unchanged since no Client ID was found to
+  configure.
+- Direct query against production `auth_credentials`: one row before this
+  phase (`recovery-verify@local.invalid` only); one row after
+  (`nick@legenex.com`, `user_id` matching the existing owner `e_user` row
+  exactly, `has_password=false`, `has_google_sub=false`,
+  `has_reset_token=true`, `disabled=false`). No password hash, Google
+  subject, or reset token value was displayed in this session's output.
+- Direct query against `dashflo_recovery_final`'s `e_system_key`: two rows,
+  `anthropic` and `openai`, both with an empty `client_id` column (that
+  column is unused for those providers) and their `secret` column not
+  read. A full per-table text scan of that database for `googleusercontent`
+  returned zero matches in every one of its 101 tables.
+- `git log --all -p -G'apps\.googleusercontent\.com'` across `main` and
+  both other remote branches: every match is `000000000000-xxxxxxxx...`
+  (a UI placeholder) or `1234567890-dashflo...` /
+  `9999999999-somebodyelse...` (test fixtures in
+  `googleIdentity.test.js`), never a value that could be real.
+- `gh api repos/legenex/legenex-dashflo/environments/production/secrets`
+  and `.../variables`: `DEPLOY_SSH_KEY`, `DEPLOY_HOST`, `DEPLOY_USER`,
+  `DEPLOY_PATH` only.
+- `NATIVE_RETRY_WORKER_ENABLED` absent, `BASE44_SYNC_ENABLED=0`, no
+  `distribution_mode` row in `e_app_settings`, all checked directly on the
+  VPS immediately after the `auth_credentials` writes, confirming this
+  phase did not touch commercial-delivery safety.
+- The row-count reconciliation the operator asked not to lose track of
+  (309,242 vs 154,620) was already closed in the "Production database
+  cutover executed and verified" entry immediately above this one (traced
+  to `e_meta_sync_run` plus `base44_record_provenance`, both legitimate,
+  dated before this recovery); not reopened or reinvestigated here.
+
+### Rollback
+
+The `recovery-verify@local.invalid` deletion completes an already-recorded,
+already-intended cleanup from the cutover-artifact entry above; nothing in
+the running application referenced that row, and its bcrypt hash was for a
+password only that prior session's own disposable process ever generated,
+now unrecoverable from any live credential. The `nick@legenex.com` insert
+is purely additive on a table it did not previously reference, does not
+modify or recreate the `e_user` row it points at, carries no password and
+no Google identity, and reverses cleanly with
+`DELETE FROM auth_credentials WHERE email = 'nick@legenex.com'` if ever
+needed. No application code, configuration file, or deployment changed in
+this phase.
