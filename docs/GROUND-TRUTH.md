@@ -55,7 +55,7 @@ must not remain permanently on the apex. The controlled sequence is app DNS,
 app certificate/vhost, application and login verification, canonical URL
 switch, then marketing cutover. As observed on 16 August 2026,
 `app.dashflo.io` had no DNS record; the required record is
-`A app.dashflo.io 2.24.130.44`.
+`A app.dashflo.io 2.25.138.44`.
 
 `dashboard.legenex.com`, `api.legenex.com` and
 `progress.dashboard.legenex.com` are inherited fallbacks from the Base44 era.

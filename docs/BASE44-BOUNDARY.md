@@ -16,7 +16,7 @@ Production endpoints:
 - Application: `https://app.dashflo.io`
 - Supplier API: `https://api.dashflo.io`
 - Documentation: `https://docs.dashflo.io`
-- VPS: `2.24.130.44`
+- VPS: `2.25.138.44`
 - Internal application listener: `127.0.0.1:4000`
 
 The VPS checkout is `/opt/apps/dashflo`. Docker Compose runs `dashflo-app` and
@@ -168,7 +168,7 @@ Do not perform cutover automatically.
 ## Current deployment gaps
 
 As observed on 16 August 2026, `app.dashflo.io` does not yet have DNS. Add an A
-record for `app.dashflo.io` pointing to `2.24.130.44`, then issue its certificate
+record for `app.dashflo.io` pointing to `2.25.138.44`, then issue its certificate
 and activate `deploy/nginx/app.dashflo.io.conf`. Keep `PUBLIC_BASE_URL` on the
 currently proven application origin until that succeeds; include both origins
 in `ALLOWED_ORIGINS` during the transition. Host-only sessions do not transfer

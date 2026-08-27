@@ -6,7 +6,7 @@ production data writes, or a live third-party call. Follow `docs/HUMAN-GATES.md`
 
 ## Known production shape
 
-- VPS: `2.24.130.44`, login user `dashflo`
+- VPS: `2.25.138.44`, login user `dashflo`
 - Checkout: `/opt/apps/dashflo`
 - Docker Compose application: `dashflo-app`
 - PostgreSQL: `dashflo-db`, database `dashflo_staging`
@@ -26,9 +26,9 @@ dig +short api.dashflo.io A
 dig +short docs.dashflo.io A
 ```
 
-Each application/API host must resolve to `2.24.130.44` before its certificate
+Each application/API host must resolve to `2.25.138.44` before its certificate
 work. As observed on 16 August 2026, the app record was absent; the required
-record is `A app.dashflo.io 2.24.130.44`.
+record is `A app.dashflo.io 2.25.138.44`.
 
 ## Environment
 
@@ -104,7 +104,7 @@ openssl s_client -connect api.dashflo.io:443 -servername api.dashflo.io
 
 Acceptance evidence required before calling the supplier API ready:
 
-1. DNS resolves to `2.24.130.44`.
+1. DNS resolves to `2.25.138.44`.
 2. Certificate hostname and chain validate for `api.dashflo.io`.
 3. `/api/health` reaches `dashflo-app` through nginx.
 4. Missing and invalid `X-API-KEY` requests are rejected without persistence.

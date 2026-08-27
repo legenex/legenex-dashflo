@@ -4890,3 +4890,161 @@ tool was available. A human visually confirming that an unauthorized/
 read-only account actually sees no edit controls, and that an authorized
 operator's Delivery editor still works end to end, remains the one
 genuinely manual check.
+
+## Production VPS lost and rebuilt on a new host, 27 August 2026
+
+The Hostinger VPS carrying production was permanently wiped during a
+Hostinger location migration: the PostgreSQL database, every Docker volume,
+`server/.env`, nginx configuration, TLS state, and
+`/usr/local/sbin/dashflo-deploy-root` are all gone with no recoverable
+backup. GitHub was unaffected and remained the source of truth: local `main`
+matched `origin/main` at `28b7ebb` with a clean working tree at the start of
+this session, confirming no work was lost.
+
+The operator provisioned a replacement VPS in Boston (`srv1907687`,
+`2.25.138.44`, Ubuntu 24.04, Linux user `dashflo`) with passwordless SSH and
+sudo, Docker, Docker Compose, nginx, git, ufw, and fail2ban already
+installed, and `/opt/apps/dashflo` already cloned and checked out on `main`
+at `28b7ebb`. The old IP, `2.24.130.44`, is dead and stays out of every
+config from this point on.
+
+### What was rebuilt this session
+
+**Environment.** Every `process.env.*` in `server/src` and
+`import.meta.env.*` in `client/src` was enumerated and classified. Four
+locally-owned secrets (`POSTGRES_PASSWORD`, `JWT_SECRET`, `DNC_HASH_KEY`,
+`OWNER_BOOTSTRAP_TOKEN`) were generated with `openssl rand -hex` directly in
+an SSH session on the VPS, so no value was ever printed to a local terminal,
+logged, or committed, and written straight to `/opt/apps/dashflo/.env`
+(compose-level, supplies `POSTGRES_PASSWORD`) and
+`/opt/apps/dashflo/server/.env` (app-level), both mode 600. Every
+third-party provider credential (SMTP, LeadByte, HLR, TrustedForm, Meta,
+Mercury, Stripe, Xero, Google OAuth client ID and service account, WhatsApp,
+Anthropic, OpenAI, Base44) was left unset rather than invented: GitHub held
+nothing recoverable for any of them (`gh api .../actions/secrets` and
+`.../environments/production/secrets` returned only the existing
+`DEPLOY_SSH_KEY`), and every one of these degrades safely when absent
+(`ANTHROPIC_API_KEY`/`OPENAI_API_KEY` return a clear "not configured"
+message rather than crashing; missing `SMTP_HOST` logs mail instead of
+sending and 503s the contact form) rather than blocking startup.
+`BASE44_SYNC_ENABLED` was left `0`.
+
+**Database.** Clean `postgres:16` via Compose, no fabricated historical
+data. The app's own `ensureSchema()` runs automatically on boot
+(`server/src/index.js`), so no separate migration step was needed; it
+produced 97 tables. No PostgreSQL extension is required by the schema.
+
+**Restricted deploy helper.** `/usr/local/sbin/dashflo-deploy-root` was
+never checked into the repository, only referenced by name in `AGENTS.md`
+and this file, so it was lost outright with the old host. Reconstructed at
+`deploy/dashflo-deploy-root.sh` from its documented contract (publish
+`marketing/dist`, install/validate/reload `deploy/nginx/*.conf`) and
+installed on the new VPS. Added a rollback the original design is not on
+record as having: since this host has no TLS certificates yet, the `nginx`
+action's `nginx -t` fails by construction right now, and the workflow calls
+it unconditionally on every deploy regardless of what changed. Without a
+rollback, a failed `-t` would still have symlinked the cert-requiring
+configs into `sites-enabled` before failing, leaving a host that works until
+the next reload or reboot and then takes every hostname down at once. The
+fix tracks which `sites-enabled` symlinks are new in the current invocation
+and removes only those on failure. Verified twice against the real pipeline,
+not just by hand: GitHub Actions runs `33102031907` (commit `66c9eb7`) and
+`33102409686` (commit `167b9de`) both show gate success, a full
+build/redeploy/health-check cycle succeeding, marketing republishing, then
+the nginx step failing at exactly `nginx -t` on the missing
+`/etc/letsencrypt/options-ssl-nginx.conf`, the rollback logging and
+completing, and the previously-working configuration still answering all
+five hostnames afterward.
+
+**Docker.** `dashflo-db` and `dashflo-app` both healthy, `restart:
+unless-stopped` from the committed `compose.yaml`, `docker` enabled at boot
+(`systemctl is-enabled docker` → `enabled`). `dashflo-db` publishes no port
+at all; `dashflo-app` binds `127.0.0.1:4000` only. Neither was changed from
+what is already committed.
+
+**nginx, interim.** The committed `deploy/nginx/*.conf` files assume a
+certificate already exists per host, so they cannot be installed yet. Wrote
+and installed separate `bootstrap-*.conf` files directly on the VPS (not
+committed: they exist only to serve HTTP and the ACME webroot until DNS and
+certificates are real, then get replaced by the `nginx` helper action) for
+all five hostnames plus the `/.well-known/acme-challenge/` webroot at
+`/var/www/html`. `marketing/dist` was published to `/var/www/dashflo` via
+the helper. Verified with `curl -H "Host: <name>" http://127.0.0.1/`
+end to end for all five hostnames, bypassing DNS, from the VPS itself.
+
+**GitHub Actions.** The `production` environment variable `DEPLOY_HOST` was
+`2.24.130.44` (dead) and is now `2.25.138.44`. `DEPLOY_SSH_KEY` was not
+rotated; the operator confirmed the existing key already authorizes against
+the new host and nothing indicated otherwise.
+
+**Backups.** `deploy/backup/pg-backup.sh` takes a daily `pg_dump -Fc` of
+`dashflo_staging` through the running `db` container to
+`/var/backups/dashflo`, outside every Docker volume, mode 600, with
+retention pruning and an OK/FAILED log line per run.
+`deploy/backup/pg-backup.cron` is installed in the `dashflo` crontab (daily
+03:00 UTC). Tested once by hand: wrote a 163583-byte dump successfully.
+`docs/BACKUP-RESTORE.md` documents the restore procedure and states plainly
+what is not done: every dump is on-host only, so losing this VPS the way the
+last one was lost would take its own backups with it. Off-server storage
+needs a provider decision (and a credential) from the operator.
+
+### Data recovery found, not applied
+
+`~/Documents/Projects/dashflo-recovery-backup/db/dashos-pre-refresh-20260815.dump`
+is a real, restore-verified `pg_dump -Fc` from 15 August 2026 (109,210 rows
+across 91 entity tables, per its own prior verification recorded earlier in
+this file), predating the wipe. It was located and reported to the operator,
+and deliberately not restored into the new production database: doing so is
+a production data import, which is an explicit human approval gate, and the
+dump's data is now up to 12 days stale relative to whatever Base44 and the
+old application held at the moment of loss. The decision of whether, and
+how, to reconcile it belongs to the operator.
+
+### Not done, pending the operator
+
+- DNS: every one of the six hostnames still resolves to the dead
+  `2.24.130.44`. Required change, reported to the operator, not applied:
+  `dashflo.io`, `app.dashflo.io`, `api.dashflo.io`, `docs.dashflo.io`,
+  `progress.dashflo.io` each need their `A` record repointed to
+  `2.25.138.44`; `www.dashflo.io` is an existing `CNAME` to the apex and
+  needs no separate change.
+- TLS: blocked on the DNS change above; `certbot` was not run.
+- Every third-party provider credential listed above.
+- Off-server backup storage, pending a provider decision.
+- Base44 sync: credentials not configured, sync stays disabled, no cron
+  installed. Whether to enable it, and against which App ID, is an operator
+  decision, not resumed automatically per the Base44 migration boundary.
+- The `OWNER_BOOTSTRAP_TOKEN` written into `server/.env` lets the operator
+  complete their own first registration at `/register` once `app.dashflo.io`
+  is reachable; it was reported to the operator directly, not committed or
+  logged, and should be cleared from `server/.env` after that registration
+  succeeds.
+- Whether to reconcile the 15 August local dump above.
+
+### Evidence
+
+- Local repository: clean, `main` matched `origin/main` at `28b7ebb` before
+  any change, confirmed with `git fetch` before touching anything.
+- `npm run gate`: PASS, all eight steps, at both commits in this stage
+  (`66c9eb7`, `167b9de`).
+- GitHub Actions runs `33102031907` and `33102409686`: gate job success on
+  both; deploy job reaches, on both, a healthy redeployed container, a
+  passing local health check, and a republished marketing site before
+  failing at the nginx step for the documented, currently-expected reason.
+- VPS state directly inspected after each run: `docker compose ps` shows
+  both containers healthy, `/api/health` returns `{"status":"ok"}`, and all
+  five hostnames return HTTP 200 by Host header from the VPS itself.
+- No secret value was printed to a terminal, logged, or committed at any
+  point. `npm run scan:secrets` (part of the gate) passed on every commit.
+- No DNS record was changed. No certificate was requested. No production
+  data was imported. No commercial delivery path was touched or enabled.
+
+### Rollback
+
+Application commits (`66c9eb7`, `167b9de`) revert the normal way, `git
+revert` and redeploy; neither touched application behavior. Nothing done
+directly on the VPS is destructive or needs rolling back: the host had no
+prior application state to disturb, `docker compose down` (not run) would be
+the only way to stop the newly created stack, and the interim nginx
+configuration was designed from the start to be replaced, not reverted,
+once TLS exists.
