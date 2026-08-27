@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { spendRows, spendInWindow, computeMetrics, registerInternalSuppliers } from '@/lib/reportMetrics';
+import { spendRows, spendInWindow, computeMetrics, registerInternalSuppliers, leadEventInstant, leadEventDayKey } from '@/lib/reportMetrics';
 
 // leadCost consults a registered set of Internal suppliers by default. Reset it
 // between suites so one test's registration cannot leak into another.
@@ -67,6 +67,29 @@ describe('spendRows', () => {
   it('returns nothing for empty input', () => {
     expect(spendRows([])).toEqual([]);
     expect(spendRows()).toEqual([]);
+  });
+});
+
+// leadEventInstant's two naive-wall-clock branches (ISO and MM/DD/YYYY) must
+// agree on the same instant: both are already-local APP_TZ strings, and only
+// one of them was actually being converted from APP_TZ to UTC before this
+// regression test was added, which misbucketed leads whose local hour fell in
+// APP_TZ's 6-hour offset from UTC into the wrong calendar day.
+describe('leadEventInstant', () => {
+  it('applies the APP_TZ offset the same way for the MM/DD/YYYY branch as the ISO branch', () => {
+    const iso = { mapped_fields: JSON.stringify({ timestamp: '2026-07-17 04:29:52' }) };
+    const slash = { mapped_fields: JSON.stringify({ timestamp: '07/17/2026 04:29:52' }) };
+    expect(leadEventInstant(slash).getTime()).toBe(leadEventInstant(iso).getTime());
+  });
+
+  it('keeps an early-morning APP_TZ lead on its true calendar day', () => {
+    // A naive local hour before the 6-hour APP_TZ offset (00:00-05:59) is
+    // exactly the case the old Date.UTC() branch got wrong: treating
+    // 04:29:52 as if it were already UTC, then converting back to APP_TZ for
+    // the day key, subtracted 6 hours a second time and rolled the date back
+    // to 2026-07-16 - one calendar day early - for every lead in that window.
+    const lead = { mapped_fields: JSON.stringify({ timestamp: '07/17/2026 04:29:52' }) };
+    expect(leadEventDayKey(lead)).toBe('2026-07-17');
   });
 });
 

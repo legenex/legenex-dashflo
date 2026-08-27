@@ -233,8 +233,12 @@ export function leadEventInstant(lead) {
     if (/^\d{2}\/\d{2}\/\d{4} \d{2}:\d{2}:\d{2}$/.test(trimmed)) {
       const [datePart, timePart] = trimmed.split(' ');
       const [month, day, year] = datePart.split('/').map(Number);
-      const [hours, minutes, seconds] = timePart.split(':').map(Number);
-      const d = new Date(Date.UTC(year, month - 1, day, hours, minutes, seconds));
+      const pad = (n) => String(n).padStart(2, '0');
+      // Naive wall-clock in APP_TZ, same as the ISO branch above - not UTC,
+      // which previously misbucketed every lead whose local hour fell in
+      // APP_TZ's 6-hour offset from UTC into the wrong calendar day.
+      const iso = `${year}-${pad(month)}-${pad(day)}T${timePart}`;
+      const d = fromZonedTime(iso, APP_TZ);
       if (!isNaN(d.getTime())) return d;
     }
   }

@@ -6007,3 +6007,217 @@ auth_credentials WHERE email IN ('james@legenex.com',
 disposable and already dropped. `offsite-sync.sh` and the cron change are
 inert until a remote is configured and do not alter the existing on-host
 backup behavior.
+
+## Full production acceptance, part 2: five parallel audits, real bugs found and fixed, 28 August 2026
+
+Continuing the same acceptance pass. Five read-only audit agents were run in
+parallel against production (a temporary synthetic QA admin account,
+`qa-acceptance-test@dashflo.internal`, was created for API-level testing
+since no browser automation is available in this environment; deleted at
+the end of this phase, see below) covering: CRM pages (Buyers/Suppliers/
+Campaigns/Leads/Operations), reporting and financial correctness,
+integrations/API keys/webhooks, lead distribution readiness, and deep data
+integrity. Full findings are in each agent's own report; this entry covers
+what they found and what was fixed.
+
+### Bugs found and fixed
+
+**1. Buyer billing runs returned $0 for every buyer (critical, financial).**
+`generateBillingRun.js`'s buyer-scope path filtered `Lead.buyer_id =
+buyerId`, but `Lead.buyer_id` is the legacy overloaded field (holds a
+buyer_code, never a record id, confirmed across all 432 populated leads).
+Live-tested against Walker Advertising's real August window before the fix:
+the preview endpoint returned `total_leads: 0` while 124 of Walker's leads
+actually fall in that window. Fixed to filter on `buyer_record_id`, the
+additive, unambiguous field the identity backfill already maintains
+(`server/src/lib/buyerIdentity.js`), which is populated on 100% of leads
+that have a buyer. No BillingRun was generated (commit=false preview only)
+before or after this fix; nothing was billed incorrectly, but every prior
+attempt to preview or generate a buyer billing run since the cutover would
+have silently under-reported.
+
+**2. Supplier billing runs and the Lead resend UI silently drop 712 of
+1984 leads with a stale key reference (financial + operational).** LeadFlow
+(87% of lead volume) has zero currently-existing `ApiKey` rows; 712 of its
+leads carry `supplier_key_id` pointing at a key id
+(`6a4a807a088df98c63bb4c48`) that no longer exists (LeadFlow's "LGNX
+Master" key was reissued with a new id, most likely during the disaster
+recovery migration). `generateBillingRun.js`'s supplier-name fallback
+explicitly skipped any lead with a non-empty `supplier_key_id`, reasoning
+"key present but not ours," which is wrong when the key is merely stale
+rather than genuinely belonging to a different supplier. A LeadFlow billing
+run today would have silently omitted 41% of LeadFlow's billable volume
+with no error. Fixed: the fallback now checks whether `supplier_key_id`
+resolves to *any* currently-existing key (not just this supplier's); if it
+resolves to nothing at all, the lead is treated the same as a keyless lead
+and included via the name match, with its own distinct note in the
+generated run explaining why. A lead whose key resolves to a real,
+different supplier's key is still correctly excluded.
+
+The Lead resend/resubmit feature (`LeadsTable.jsx`, `Leads.jsx`,
+`LeadDetailModal.jsx`) has the identical root symptom for the same 712
+leads, but was deliberately **not fixed** in this pass: it fetches
+`ApiKey.filter({id: lead.supplier_key_id})` and reads `.key` off the
+result, and the generic entity route strips the raw `key` field from every
+`ApiKey` response unconditionally (`READ_DENY_FIELDS`) by design, for every
+lead, not just the 712 with a stale reference. This looks like a
+pre-existing, broader problem than the recovery surfaced (the client can
+never legitimately read a raw supplier posting key back out this way,
+recovered data or not) and touches a real lead-intake replay path
+(`processLead`, an integrator-only surface). It needs a proper fix - a
+server-side function that resolves the supplier's current key and replays
+intake without ever handing the raw key to the client, mirroring
+`issueApiKey.js`'s pattern - not a quick patch under this pass. Left open,
+reported here for whoever picks it up next.
+
+**3. Live outbound supplier credential exposed via the generic entity
+route (security).** `LeadByteConnector.headers` (a JSON array of `{key,
+value}` header rows) is returned in full by `GET /api/entities/
+LeadByteConnector` to any admin, including a real, live LeadByte `X_KEY`
+auth header value on one of the 4 connector rows. `SubDelivery.headers`
+already had exactly this protection (`redactHeaderSecrets` in
+`entityPolicy.js`, added in an earlier S4 pass) but `LeadByteConnector` was
+never added to `READ_TRANSFORM_FIELDS`, and the redaction function itself
+only handled an object-map header shape, not `LeadByteConnector`'s
+array-of-`{key,value}` shape. Fixed both: `redactHeaderSecrets` now
+handles either shape (failing closed to the same `[unreadable, redacted for
+safety]` sentinel for anything that matches neither), `x_key` was added to
+the secret-key-name list (LeadByte's own credential header name, per
+`docs/BASE44-BOUNDARY.md`), and `LeadByteConnector: { headers:
+redactHeaderSecrets }` was added to `READ_TRANSFORM_FIELDS`. Verified the
+existing `entityPolicy.test.js` array-malformed-input regression test still
+passes (an array that isn't genuinely `{key,value}`-shaped still redacts
+wholesale, not passed through) and added no new gap.
+
+**4. Daily/hourly report buckets misdated for leads with a slash-format
+timestamp (reporting correctness).** `reportMetrics.js`'s
+`leadEventInstant()` has two naive-wall-clock parsing branches for the same
+kind of value (an already-APP_TZ local timestamp with no zone suffix): the
+ISO branch correctly converts APP_TZ to UTC via `fromZonedTime`; the
+MM/DD/YYYY branch (common in Base44-sourced payloads, 30% of leads) used
+`Date.UTC()` directly on the wall-clock digits, which is not the same
+value. Concretely, for a lead with a local hour before the 6-hour APP_TZ
+offset (00:00-05:59, ~96 leads per the audit), converting the resulting
+wrong instant back to APP_TZ for day-bucketing subtracted 6 hours a second
+time and rolled the calendar day back by one - every Overview/Reports/Ad
+Manager day and hour breakdown had those specific leads on the wrong day.
+Monthly and all-time totals were unaffected (confirmed by the same audit
+against direct SQL) since the bug only ever moves a lead to an adjacent
+day, never drops or duplicates it. Fixed to use `fromZonedTime` for both
+branches identically. Added a regression test pinning both branches to
+produce the same instant for the same wall-clock value, and a day-key test
+for the specific early-morning case that used to roll back a day.
+
+**5. Settings > Integrations showed Stripe (and would show Xero/Mercury/
+WhatsApp) as "Not connected" despite a real, working, database-stored
+credential (status-accuracy, not a functional break).** `integrationStatus.js`
+checked only `process.env` (via a `ctx.config.integrations` binding that is
+itself populated once from `process.env` at boot, per `server/src/config.js`
+- never from the database) while the actual credential these providers use
+lives in the `IntegrationConfig` entity, written through
+`saveIntegrationConfig`. Confirmed live: a real `IntegrationConfig(stripe)`
+row exists with `secret_key` set, and `syncStripe.js` reads and uses it
+successfully, while the status badge said "Not connected." Fixed by also
+checking `IntegrationConfig` for stripe/xero/mercury/whatsapp (presence of
+any non-empty value in the stored config, not a hardcoded field name per
+provider), OR'd with the existing env check so nothing already working via
+env regresses. Added a focused test file, `integrationStatus.test.js`.
+
+### Verified, not changed
+
+- **OpenAI and Anthropic: MISSING CREDENTIAL, confirmed live, not just
+  inferred.** Ran the app's own existing `aiHealth.js` diagnostic (a
+  purpose-built, minimal-cost live probe - a 1-token Anthropic completion
+  and an OpenAI models list call, never returns either key) through the QA
+  account: `ALL_PROVIDERS_DOWN`, both `KEY_MISSING`. Matches the VPS
+  rebuild's own record that every third-party credential was left unset
+  rather than invented. A related but currently-moot architecture gap:
+  `server/src/integrations/llm.js` reads only `process.env.*` and would not
+  pick up a credential saved through the System Keys UI (unlike
+  `googleAppCreds.js`/`metaAppCreds.js`, which prefer `SystemKey`) - not
+  fixed in this pass since no key exists in either place right now and the
+  fix is more invasive (would need `db` threaded to every LLM call site);
+  worth doing before either credential is actually added.
+- **Meta: WORKING (live), but its own refresh path is at risk.** A real,
+  active Meta OAuth connection is syncing real ad spend today. Its token
+  expires 2026-09-19 and cannot be refreshed automatically because no
+  `meta_app` (App ID/Secret) is configured anywhere (SystemKey,
+  IntegrationConfig, or env) - flagged for the operator, not something this
+  session can fix without a credential.
+- **LeadByte: CONFIGURED BUT UNVERIFIED** (a live send to the real
+  production destination was correctly out of scope). **TrustedForm:
+  INTENTIONALLY DISABLED** (validation is a client-side URL-format check;
+  there has never been a live API call to make). **Xero, Mercury,
+  WhatsApp: MISSING CREDENTIAL**, confirmed via both `IntegrationConfig`
+  and env, no live call attempted since none would have anything to call.
+  **SMTP: left UNVERIFIED** - env var names exist but confirming a real
+  value or working send would mean either exposing a secret or sending a
+  real email, both correctly out of bounds for this pass.
+- Lead distribution: re-checked the five specific findings from the
+  earlier recovery audit (LeadFlow missing an API key, WC/MVA campaigns
+  with no buyer routing, 12 unroutable RouteMembers, 10 with no Delivery, 2
+  Walker routes with no active SubDelivery) against current production.
+  All five still apply, unchanged in shape and ids from before this
+  session's database cutover, because production was restored from an Aug
+  22 snapshot that predates the earlier Stage 4/6/7 fixes. One was
+  provably re-appliable without inventing anything: Walker's Tier 1/Tier 3
+  `target_url`/`headers`/`payload_template` (previously verified correct
+  against Walker's real screenshots in Stage 2/4) was re-applied by
+  re-running `node server/scripts/configure-walker-native-delivery.js
+  --apply` against production, restoring exactly the configuration that
+  was already decided and verified but did not survive being on an older
+  DB snapshot. `Delivery.status` stays `draft`; nothing was activated. The
+  other four require a real operator decision (issuing LeadFlow a fresh
+  key resumes a live external intake feed; WC/MVA buyer routing and the 10
+  no-Delivery RouteMembers need a real business answer this session has no
+  authority to invent) and are listed as remaining blockers in the final
+  report.
+- Data integrity: Buyer/Supplier/SupplierSource/Campaign/BuyerStateCpl/
+  RouteGroup/RouteMember/Delivery/SubDelivery/ApiKey/SystemKey/
+  MetaConnection/AdSpend/BankTransaction/BillingRun/Report/AppSettings/
+  ProgressSnapshot all confirmed clean (referentially sound, no cleartext
+  keys, sane shapes). One exception found and left as-is: 2 of 8
+  `BuyerOnboarding` rows reference a buyer id that no longer exists (dated
+  July 2026, predating the current 13-buyer set); the reading code
+  (`OnboardingDrawer.jsx`) already degrades gracefully with no crash, so
+  this was documented rather than mutated - archiving it would need the
+  same kind of deliberate, reviewed tooling `archive-invalid-route-
+  members.js` used for the analogous RouteMember case, not an ad hoc
+  delete under this pass. Also noted: the recovered database has grown
+  ordinarily since the cutover baseline was recorded (AdSpend 246->265,
+  SystemKey 2->3 for the Google Sign-In row already recorded above,
+  BankTransaction/others unchanged) - normal forward progress, not a
+  discrepancy.
+
+### Evidence
+
+- Each fix has a focused regression test (`integrationStatus.test.js`,
+  the two new `reportMetrics.test.js` cases) plus the existing suite,
+  including `entityPolicy.test.js`'s redaction tests, all passing.
+- `npm run gate`: PASS, all eight steps.
+- The buyer-billing fix was confirmed against real production data before
+  and after: the preview endpoint (commit=false, no write) for Walker
+  Advertising's real August window went from `total_leads: 0` to matching
+  SQL's real count once deployed (see the next entry for the deployed
+  commit and post-deploy verification).
+- No secret value (API key, client secret, password, private key, X_KEY
+  header value) was ever printed to this session's own output; where a
+  live value needed inspecting for shape (the LeadByteConnector headers
+  key names), only the key names were queried, never the values.
+- The temporary QA account used for all API-level testing in this phase
+  (`qa-acceptance-test@dashflo.internal`, plus a second row created only to
+  exercise `/auth/invite`'s existing-vs-new-credential code path,
+  `qa-invite-test@dashflo.internal`) is deleted in the next entry below,
+  once all five audit agents' findings were fully triaged.
+
+### Rollback
+
+Every fix here is additive or corrective, not a behavior removal: reverting
+any single commit returns that one function to its prior (buggy) behavior,
+which is why each is called out individually rather than as one bundled
+diff. The Walker `SubDelivery` config write is the only production data
+change in this entry: reversible with a direct
+`UPDATE e_sub_delivery SET data = data - 'target_url' - 'headers' -
+'payload_template' WHERE id IN (...)` if ever needed, though there is no
+reason to want that since `Delivery.status` staying `draft` already keeps
+it inert.

@@ -239,7 +239,10 @@ export const READ_DENY_FIELDS = {
 // credential never has a reason to be typed into a header in the first
 // place - so it deliberately errs toward over-redacting a plausible secret
 // key name rather than under-redacting one.
-const HEADER_SECRET_KEYS = ['authorization', 'api_key', 'apikey', 'x-api-key', 'password', 'secret', 'token', 'bearer', 'cookie'];
+// "x_key" covers LeadByte's own X_KEY outbound auth header by name (see
+// docs/BASE44-BOUNDARY.md).
+const HEADER_SECRET_KEYS = ['authorization', 'api_key', 'apikey', 'x-api-key', 'x_key', 'password', 'secret', 'token', 'bearer', 'cookie'];
+const isSecretHeaderKey = (k) => HEADER_SECRET_KEYS.some((s) => String(k || '').toLowerCase().includes(s));
 function redactHeaderSecrets(raw) {
   if (raw == null || raw === '') return raw;
   let parsed;
@@ -248,16 +251,30 @@ function redactHeaderSecrets(raw) {
   // (the original, unexamined string) - the whole point is that this value
   // cannot be trusted to be free of secret material.
   try { parsed = typeof raw === 'string' ? JSON.parse(raw) : raw; } catch { return '[unreadable, redacted for safety]'; }
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return '[unreadable, redacted for safety]';
-  const out = {};
-  for (const [k, v] of Object.entries(parsed)) {
-    out[k] = HEADER_SECRET_KEYS.some((s) => k.toLowerCase().includes(s)) ? '[redacted]' : v;
+  if (!parsed || typeof parsed !== 'object') return '[unreadable, redacted for safety]';
+
+  let out;
+  if (Array.isArray(parsed)) {
+    // LeadByteConnector.headers shape: [{key, value}, ...]. Anything that
+    // does not actually match that shape is not a recognized header list -
+    // fail closed the same as any other unrecognized value, rather than
+    // passing an unvalidated array element through untouched.
+    const isKeyValueRow = (row) => row && typeof row === 'object' && !Array.isArray(row) && 'key' in row;
+    if (!parsed.every(isKeyValueRow)) return '[unreadable, redacted for safety]';
+    out = parsed.map((row) => (isSecretHeaderKey(row.key) ? { ...row, value: '[redacted]' } : row));
+  } else {
+    // SubDelivery.headers shape: { headerName: value, ... }.
+    out = {};
+    for (const [k, v] of Object.entries(parsed)) {
+      out[k] = isSecretHeaderKey(k) ? '[redacted]' : v;
+    }
   }
   return typeof raw === 'string' ? JSON.stringify(out) : out;
 }
 
 export const READ_TRANSFORM_FIELDS = {
   SubDelivery: { headers: redactHeaderSecrets },
+  LeadByteConnector: { headers: redactHeaderSecrets },
 };
 
 // Fields that cannot be set or changed through the generic route, because

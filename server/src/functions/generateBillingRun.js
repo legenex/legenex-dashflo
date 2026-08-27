@@ -214,19 +214,35 @@ export default async function generateBillingRun(ctx) {
     if (scope === 'buyer') {
       buyerRecord = await svc.entities.Buyer.get(buyerId).catch(() => null);
       if (!buyerRecord) return ctx.json({ error: 'Buyer not found' }, 404);
-      leadFilter = { buyer_id: buyerId };
+      // Lead.buyer_id is the legacy overloaded field (holds a buyer_code, not
+      // a record id, on every lead observed in production - see
+      // server/src/lib/buyerIdentity.js). Filtering on it here always
+      // returned zero rows against a real Buyer record id. buyer_record_id
+      // is the additive, unambiguous field the identity backfill maintains.
+      leadFilter = { buyer_record_id: buyerId };
     } else {
       supplierRecord = await svc.entities.Supplier.get(supplierId).catch(() => null);
       if (!supplierRecord) return ctx.json({ error: 'Supplier not found' }, 404);
     }
 
     // For a supplier run, select by supplier_key_id, falling back to
-    // supplier_name only when the key is absent. We resolve the supplier's
-    // ApiKey ids first, then scan; leads without a key are matched by name.
+    // supplier_name when the key is absent OR stale (a key id that no longer
+    // resolves to any current ApiKey, e.g. after a key was reissued and
+    // rotated to a new id, as happened for LeadFlow's "LGNX Master" key
+    // during the August 2026 disaster-recovery migration). We resolve the
+    // supplier's ApiKey ids first, then scan; leads whose supplier_key_id
+    // still resolves to a DIFFERENT supplier's real key are correctly
+    // excluded by the fallback below, since only a stale/absent key id is
+    // treated as "no usable key".
     let supplierKeyIds = [];
+    let allKeyIds = new Set();
     if (scope === 'supplier') {
-      const keys = await loadAll(svc.entities.ApiKey, { supplier_id: supplierId });
+      const [keys, allKeys] = await Promise.all([
+        loadAll(svc.entities.ApiKey, { supplier_id: supplierId }),
+        loadAll(svc.entities.ApiKey, {}),
+      ]);
       supplierKeyIds = keys.map((k) => k.id);
+      allKeyIds = new Set(allKeys.map((k) => k.id));
     }
 
     // Load leads for the counterparty. Buyer runs filter server side by buyer_id.
@@ -241,19 +257,29 @@ export default async function generateBillingRun(ctx) {
         byKey.push(...batch);
       }
       const seen = new Set(byKey.map((l) => l.id));
-      // Name fallback: leads attributed to this supplier by name with no key id.
+      // Name fallback: leads attributed to this supplier by name with no
+      // usable key id. "Usable" excludes a key id that still resolves to
+      // some current ApiKey (that is a real, different supplier's key, so
+      // the lead genuinely is not ours) but includes a key id that resolves
+      // to nothing at all (stale: the key it was issued under has since been
+      // deleted or reissued, which is not evidence the lead belongs to
+      // someone else).
       const byName = await loadAll(svc.entities.Lead, { supplier_name: supplierRecord.name });
       let fallbackCount = 0;
+      let staleKeyFallbackCount = 0;
       for (const l of byName) {
         if (seen.has(l.id)) continue;
-        if (l.supplier_key_id) continue; // key present but not ours: not this supplier
+        if (l.supplier_key_id && allKeyIds.has(l.supplier_key_id)) continue; // resolves to a real, different supplier's key
         byKey.push(l);
         seen.add(l.id);
-        fallbackCount += 1;
+        if (l.supplier_key_id) staleKeyFallbackCount += 1; else fallbackCount += 1;
       }
-      supplierFallbackUsed = fallbackCount;
+      supplierFallbackUsed = fallbackCount + staleKeyFallbackCount;
       if (fallbackCount > 0) {
         notes.push(`${fallbackCount} leads matched by supplier_name because supplier_key_id was absent.`);
+      }
+      if (staleKeyFallbackCount > 0) {
+        notes.push(`${staleKeyFallbackCount} leads matched by supplier_name because supplier_key_id no longer resolves to any current key (stale/rotated key reference).`);
       }
       candidateLeads = byKey;
     }
