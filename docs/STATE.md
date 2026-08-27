@@ -6221,3 +6221,59 @@ change in this entry: reversible with a direct
 'payload_template' WHERE id IN (...)` if ever needed, though there is no
 reason to want that since `Delivery.status` staying `draft` already keeps
 it inert.
+
+## Full production acceptance, part 3: QA account teardown and evidence cleanup, 28 August 2026
+
+Closing steps once the acceptance pass above was fully triaged.
+
+**QA accounts deleted.** `qa-acceptance-test@dashflo.internal` (`e_user` +
+`auth_credentials`) and `qa-invite-test@dashflo.internal`
+(`auth_credentials` only, per `/auth/invite`'s own contract of not creating
+a `User` row until first login) were both deleted from production.
+Verified after: `e_user` back to exactly 3 rows, `auth_credentials` back to
+exactly the 3 real accounts (nick/james/danelle), and the QA bearer token
+immediately returns 401 (`attachUser` re-fetches the `User` row on every
+request, so deleting it invalidates the token instantly regardless of its
+30-day expiry).
+
+**Local recovery evidence cleaned up, per the standing condition that this
+only happens once production acceptance passes, the post-cutover backup is
+restore-tested, team authentication is fixed, and data integrity is
+verified - all four are true as of this session.** The local
+`dashflo-recovery-pg` Docker container (and its anonymous volume) on the
+operator's workstation, holding `dashflo_recovery`, `dashflo_recovery_final`,
+and `dashflo_aug15_compare`, was stopped and removed. Nothing was lost:
+every one of those three databases is fully represented by a durable file
+already on disk and untouched by this cleanup -
+`~/Documents/Projects/dashflo-recovery-backup/artifacts/dashflo-recovery-final-2026-08-27.dump`
+(+ its recorded SHA-256, the exact artifact production was cut over from),
+`~/Documents/Projects/dashflo-recovery-backup/db/dashos-pre-refresh-20260815.dump`,
+and `~/Documents/Projects/dashflo-recovery-backup/cutover-local-20260815.bundle`.
+The VPS-side rollback dump, `/var/backups/dashflo/pre-cutover-20260827T202418Z.dump`,
+was confirmed still present and untouched.
+`docs/PRODUCTION-CUTOVER-RUNBOOK.md` and `docs/BACKUP-RESTORE.md` remain as
+the documented procedure. Nothing else was deleted.
+
+### Evidence
+
+- `SELECT count(*) FROM e_user` -> 3; `SELECT email FROM auth_credentials`
+  -> the three real addresses only, queried directly after the delete.
+- `GET /api/auth/me` with the deleted QA account's still-unexpired token ->
+  401, confirmed live.
+- `docker ps -a` after removal: no `dashflo-recovery-pg` container remains
+  locally.
+- `ls` on all three retained evidence paths, confirming presence and
+  leaving them unmodified.
+- Final commercial-safety re-check, same as every prior phase:
+  `NATIVE_RETRY_WORKER_ENABLED` absent, `BASE44_SYNC_ENABLED=0`, no
+  `distribution_mode` override, 0 active `RouteGroup` rows.
+
+### Rollback
+
+The QA account deletions are the intended end state of a temporary,
+self-created test identity; nothing else ever referenced those ids. The
+local container removal is not reversible by itself, but is fully
+equivalent to a restore: `pg_restore` the retained
+`dashflo-recovery-final-2026-08-27.dump` (checksum-verified) into a fresh
+container would reproduce `dashflo_recovery_final` exactly, and the Aug 15
+dump likewise for `dashflo_aug15_compare`, if either is ever needed again.
