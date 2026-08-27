@@ -23,6 +23,39 @@ recoverable backup on 27 August 2026.
   the byte size, or `FAILED` with the reason. There is no push alert yet; see
   Gaps below.
 
+## Verified working as the `dashflo` user, 27 August 2026
+
+`/var/backups/dashflo` was created `root:root` mode 700 during initial VPS
+setup, so the `dashflo` cron user could not write to it; the one dump present
+before this fix was written by a manual root-privileged test, not by cron.
+Fixed with `chown -R dashflo:dashflo /var/backups/dashflo` (mode stays 700).
+
+Verified end to end as `dashflo`, not root, running the exact crontab command
+(`flock -n /tmp/dashflo-pg-backup.cron.lock
+/opt/apps/dashflo/deploy/backup/pg-backup.sh >> /var/backups/dashflo/cron.log
+2>&1`):
+
+- exit code 0
+- new dump written: `dashflo-20260827T190026Z.dump`, 163583 bytes, `file`
+  confirms `PostgreSQL custom database dump - v1.15-0`
+- `backup.log` recorded `OK: wrote ... (163583 bytes)`
+- `/var/backups/dashflo` is `700 dashflo:dashflo`; every `.dump` file is `600
+  dashflo:dashflo`; `cron.log` was tightened from cron's default `664` to
+  `600`. The containing directory being `700` already blocked any other user
+  from traversing to the files regardless.
+- restored the fresh dump with `pg_restore --no-owner` into a disposable
+  `dashflo_restore_verify` database in the same container, clean exit, no
+  errors
+- restored database has 97 tables in `public`, matching live `dashflo_staging`
+  exactly (97)
+- exact row count across every table in the restored database is 0, matching
+  live `dashflo_staging`, which is correct: this is the clean rebuilt database
+  from the 27 August VPS recovery with no data imported yet
+- scratch database dropped after verification
+
+This closes on-host backup verification. Off-server replication remains open,
+see below.
+
 ## What is still missing
 
 - **Off-server storage.** Every dump above lives on the same VPS as the

@@ -5048,3 +5048,46 @@ prior application state to disturb, `docker compose down` (not run) would be
 the only way to stop the newly created stack, and the interim nginx
 configuration was designed from the start to be replaced, not reverted,
 once TLS exists.
+
+## Backup cron ownership fixed and restore-verified as dashflo, 27 August 2026
+
+Operator-approved data-recovery preparation, phase 1 of 9. `/var/backups/dashflo`
+was `root:root` mode 700 since VPS setup, so the `dashflo` cron user could
+never actually write to it; the one dump present was from a manual
+root-privileged test run, not from cron. Fixed with `chown -R
+dashflo:dashflo /var/backups/dashflo`, mode unchanged at 700.
+
+Ran the literal crontab command as `dashflo` (not root): exit 0, a genuine
+`pg_dump -Fc` written (`file` confirms `PostgreSQL custom database dump`),
+non-empty (163583 bytes), `backup.log` recorded `OK`, directory and dump
+permissions are `700`/`600` `dashflo:dashflo` throughout (tightened
+cron.log from cron's default `664` to `600` as well). Restored that dump
+with `pg_restore --no-owner` into a disposable `dashflo_restore_verify`
+database in the existing `db` container: clean restore, 97 tables in
+`public` matching live `dashflo_staging` exactly, exact total row count 0
+in both, which is correct for the clean rebuilt database with nothing
+imported yet. Scratch database dropped afterward. Full detail in
+`docs/BACKUP-RESTORE.md`.
+
+This proves the on-host backup path works end to end as actually scheduled.
+It does not solve off-server storage, which remains open and requires a
+provider decision and credential from the operator, tracked in
+`docs/BACKUP-RESTORE.md`.
+
+### Evidence
+
+- `stat -c '%a %U:%G'` on `/var/backups/dashflo` and its dump files, before
+  and after the chown, captured directly over SSH.
+- Cron command run manually as `dashflo`, exit code captured.
+- `pg_restore` exit code, `information_schema.tables` count, and a real
+  per-table `count(*)` sum (not `pg_stat_user_tables.n_live_tup`, which can
+  lag immediately after a restore) captured directly over SSH.
+- No production database was touched. `dashflo_staging` was only read from,
+  never written to, during this verification.
+
+### Rollback
+
+Nothing destructive happened. The chown only widened `dashflo`'s own access
+to a directory it already logically owned; reverting to `root:root` would
+simply reintroduce the bug. The scratch database was created and dropped
+within this session and never referenced by the application.
