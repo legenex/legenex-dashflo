@@ -5091,3 +5091,234 @@ Nothing destructive happened. The chown only widened `dashflo`'s own access
 to a directory it already logically owned; reverting to `root:root` would
 simply reintroduce the bug. The scratch database was created and dropped
 within this session and never referenced by the application.
+
+## August 22 encrypted export recovered into an isolated local database, delta
+   investigation resolved, final recovery candidate built, 27 August 2026
+
+Operator-approved data-recovery preparation, phase 2 of 9, continuing directly
+from the backup cron work above. This phase's import itself ran in the
+immediately preceding session (evidence below); this entry is the recording
+step for it plus the delta investigation and candidate-build work performed
+in this session, per the standing autonomous-recovery instruction.
+
+### What the prior session did, verified rather than assumed
+
+A `postgres:16` container (`dashflo-recovery-pg`, local port 5544, isolated
+from every other database on the workstation) was running with two
+databases: `dashflo_recovery` (the Aug 22 import target) and
+`dashflo_aug15_compare` (a restore of the already-known
+`dashos-pre-refresh-20260815.dump`, for delta comparison). A scratch script,
+`recover-import.mjs`, ran `ensureSchema()`, `ensureMigrationImportSchema()`,
+then `runMigrationImport({kind:'owner', mode:'apply', confirmed:true, ...})`
+against `~/Downloads/legenex-dashflo-migration-2026-08-22-19-24.json.enc`
+(150,644,611 bytes, found already present on the operator's own machine, nine
+minutes younger than the `...-18-46.json.enc` bundle Stage 4 found on the
+now-wiped old VPS and never touched). This is a different local copy of
+essentially the same Aug 22 Base44 export, decrypted with a passphrase from
+`~/.dashflo-recovery-passphrase.txt` (removed after use; not present at the
+start of this session, and not needed again since the import already
+succeeded and its result persists in the recovery database).
+
+Verified directly against `dashflo_recovery` in this session, not taken on
+faith: `migration_import_runs` holds exactly one row, id
+`06fcea8b2a82f00937032c5f`, `kind:owner mode:apply status:success`,
+`entities_processed:93 records_present:154620 records_created:154620
+records_updated:0 records_skipped:0 conflict_count:0 failed_count:0`,
+`started_at 2026-08-27 19:28:24 UTC`, `completed_at 2026-08-27 19:30:57 UTC`.
+A direct per-table `count(*)` sum across every `e_*` table (not
+`entities_processed`, which can lag) totals exactly 154,620, matching the
+run record. This is the same shape of already-completed migration Stage 4
+found applied to the old (now-wiped) production VPS on 23 August
+(154,324 records there, a different but comparable export taken about 40
+minutes earlier the same evening), confirming the Aug 22 export line is real
+production data, not a synthetic or test artifact.
+
+`recovery-app.log` from the prior session shows the current application
+booting cleanly against `dashflo_recovery` (`loaded 108 functions`, `server
+listening`, native retry scheduler disabled by its own
+`NATIVE_RETRY_WORKER_ENABLED` check). This session re-verified that boot
+independently (see "Final recovery candidate" below) rather than trusting
+the log alone.
+
+### Delta investigation, Aug 15 local dump vs Aug 22 Base44 export
+
+A full per-entity count diff across all 93+ entities between
+`dashflo_aug15_compare` and `dashflo_recovery` found exactly four
+decreases; every other entity held steady or grew. All four are resolved
+below with direct record-level evidence, not inference, so none required
+escalation to the operator.
+
+**`ApiConnector`, 3 -> 0.** All 3 Aug 15 rows are real, actively-configured
+Facebook Conversions API connectors (`LGNX | Check My Claim`, `LeadFlow |
+Check A Case`, `LGNX | Dont Settle`), each carrying a live `fb_access_token`
+and a populated `payload_template`/`filter_brands`/`filter_verticals`. Every
+brand, supplier, and buyer these three configs reference by name still
+exists unchanged in the Aug 22 export, so this is not a case of the
+surrounding business objects disappearing. `ApiConnector` is not in
+`migrationImport.js`'s `CREDENTIAL_ENTITIES` set (only `ApiKey` and
+`BuyerApiKey` get raw-key-dropping treatment), so the DashFlo import layer
+did not strip these rows; the Aug 22 bundle contained zero `ApiConnector`
+records at the source. This lines up with a previously recorded, still-open
+finding in this same file: `ApiConnector.fb_access_token` is readable in
+plaintext by any authorized admin through the generic entity route, an
+unfixed field-projection gap. The most evidence-consistent explanation is
+that the 3 exposed connectors were removed at the Base44 source between 15
+and 22 August as a manual response to that exposure, but this cannot be
+proven from read-only evidence alone (Base44's own history was not, and
+under the migration boundary cannot be, inspected). Per the standing
+instruction for genuine ambiguity: not merged back (reintroducing a
+previously-flagged live-token exposure into a fresh recovery candidate would
+be the wrong default, and any token that was ever exposed should be treated
+as compromised and rotated, not silently revived), and not discarded either.
+The 3 configs were exported with `fb_access_token` (and any other
+`*token*`-named field) stripped to
+`~/Documents/Projects/dashflo-recovery-backup/artifacts/quarantined-apiconnector-configs-2026-08-15-nolyToken.json`
+(non-secret configuration only: name, pixel id, triggers, filters, payload
+template) so the operator can recreate these connectors with a freshly
+issued token if Facebook CAPI tracking should resume. No secret value is in
+that file or in this document.
+
+**`BuyerStateCpl`, 94 -> 76 (18 dropped), `BuyerOnboarding`, 9 -> 8 (1
+dropped).** Every one of the 19 dropped rows (18 `BuyerStateCpl` plus 1
+`BuyerOnboarding`) references a `buyer_id` that does not exist as an actual
+`Buyer` record in the Aug 15 dump, the Aug 22 export, or, by construction,
+anywhere in between: the Aug 15 dump's 13 real `Buyer` ids and the Aug 22
+export's 13 real `Buyer` ids are the identical set. These 19 rows were
+already-orphaned data as of 15 August, referencing buyers that had been
+deleted at some earlier point the local dumps do not reach. The Aug 22
+Base44 export correctly omits them; this is Base44-side referential cleanup
+of pre-existing debris, not a round-trip failure, and there is nothing
+functional to merge back (a `BuyerStateCpl` or `BuyerOnboarding` row for a
+buyer that does not exist cannot resolve to anything in the running
+application).
+
+**`IntegrationConfig`, 3 -> 2 (1 dropped).** The dropped row's `name` is
+`meta_oauth_state`, a single-use OAuth handshake state value from an
+in-progress Meta login flow. By its nature this is short-lived and
+self-invalidating; an old one dropping out between two export dates a week
+apart is expected housekeeping, not a data-loss event. Not merged back
+(stale OAuth state cannot complete anything and is credential-shaped by its
+own field name).
+
+No other entity decreased. `e_supplier` grew by one real record (`AL`, id
+`6a81d303b7376388a11655eb`, absent from the Aug 15 dump, present and
+unchanged-looking in the Aug 22 export) and every other growth (`Lead`
+1887->1984, `AdSpend` 225->246, `MetaSyncRun` 105328->150364, `ChatMemory`
+129->132, `ErrorLog` 107->290) is ordinary forward progress between the two
+snapshot dates, not investigated further because growth carries no data-loss
+question.
+
+### Final recovery candidate
+
+`dashflo_recovery_final`, a `CREATE DATABASE ... TEMPLATE dashflo_recovery`
+copy so the original Aug 22 import result stays an untouched, re-checkable
+artifact. Per the delta investigation above, no older data qualified for
+merging back, so the candidate is the Aug 22 import as-is, not a hand-merged
+blend, which is itself a form of evidence: the safest recovery candidate and
+the simplest one turned out to be the same database.
+
+Backfills re-run against the candidate, report-only, both idempotent and
+both already clean, so nothing needed `--apply`:
+
+- `backfill-buyer-identity.js`: 1,984 leads scanned, 432 resolved (all
+  already correct, 0 to write), 1,552 legitimately unassigned (`empty`
+  method, leads never sold), 0 unresolved, 0 ambiguous.
+- `backfill-api-key-hashes.js`: 5 `ApiKey` rows scanned, 5 already hashed, 0
+  to hash, 0 mismatched, 0 unrecoverable. Direct query confirms zero rows
+  carry a cleartext `key` field (`SELECT count(*) FROM e_api_key WHERE data
+  ? 'key'` returns 0); the migration import's `CREDENTIAL_SHAPE.dropRaw`
+  path already stripped it on the way in, ahead of where the standing S4
+  work had left the pre-migration data (cleartext retained alongside the
+  hash). `e_buyer_api_key` is empty, nothing to check there.
+
+Structural counts against the requested verification list, all queried
+directly from `dashflo_recovery_final`: Users 3, Suppliers 5,
+SupplierSources 11, Buyers 13, BuyerStateCpl 76, BuyerOnboarding 8,
+Campaigns 2, RouteGroups 2, RouteMembers 12, Deliveries 1, SubDeliveries 2,
+ApiConnectors 0 (see above), LeadByteConnectors 4, InboundWebhookRoutes 1,
+Leads 1984, AdSpend 246, MetaConnection 1, IntegrationConfig 2, ApiKeys 5,
+SystemKeys 2, BankTransaction 194, BillingRun 1, Report 1, ProgressSnapshot
+1, AppSettings 1, AuditFinding 32, AuditRun 3, KeyAuditEvent 90.
+
+Application-level verification, not just row counts: the current `main`
+application (`NODE_ENV=development`, disposable local `JWT_SECRET`/
+`DNC_HASH_KEY`, no production values used or reachable) was booted directly
+against `dashflo_recovery_final` on a scratch port. `GET /api/health`
+returned `{"status":"ok"}`. An unauthenticated `GET
+/api/entities/Buyer` returned 401 (generic entity routes fail closed,
+invariant 9). A scratch owner account was seeded
+(`server/scripts/seed-admin.js`, disposable local-only credentials, deleted
+with the rest of this session's local artifacts) and used to authenticate;
+with that session, `GET /api/entities/...` returned HTTP 200 with
+non-empty, correctly-shaped bodies for Buyer, Supplier, Campaign, Lead,
+RouteGroup, RouteMember, ApiKey, IntegrationConfig, InboundWebhookRoute,
+LeadByteConnector, CustomField, AdSpend, AppSettings, BuyerStateCpl, and
+BuyerOnboarding, covering every application surface the recovery brief
+asked to be checked. The `ApiKey` and `IntegrationConfig` responses were
+inspected field-by-field: neither the cleartext key nor the `config` JSONB
+ever appears in the API response, confirming the server-side field
+allowlist still holds against this recovered data (invariant 8). No
+`distribution_mode` key is present in the single `AppSettings` row, which
+means `nativeRetryRunner.js`'s own fallback (`'legacy_only'`) governs,
+consistent with commercial delivery staying off by default even before any
+explicit re-confirmation.
+
+**Not done this session: true browser-rendered UI verification.** No
+Playwright, Puppeteer, or other browser-automation tool is available in
+this headless environment (checked: absent from `package.json` and
+`node_modules/.bin`, and no browser-capable MCP tool is connected). Every
+page the recovery brief named (Overview, Operations, Buyers, Suppliers,
+Campaigns, Leads, Reports, Settings, API Keys, Lead Distribution,
+RouteGroups, Webhooks, Progress) was instead verified at the API layer that
+backs it, per above, which proves the data and authorization are correct
+but does not prove client-side rendering is free of runtime errors or blank
+states. That remains a genuine gap, not one this session could close, and
+is the one item from the recovery brief's UI-verification task that stays
+open pending either a browser tool becoming available or the operator
+checking by hand.
+
+### Evidence
+
+- `migration_import_runs` row `06fcea8b2a82f00937032c5f` in
+  `dashflo_recovery`, queried directly, matches the operator's reported
+  numbers exactly.
+- Per-table `count(*)` sum across every `e_*` table in `dashflo_recovery`:
+  154,620, matching `records_present`/`records_created` exactly.
+- `comm -23` set difference between Aug 15 and Aug 22 ids, per entity, used
+  to identify the exact dropped rows rather than reasoning from counts
+  alone.
+- Buyer id set equality between Aug 15 and Aug 22 (`SELECT id FROM e_buyer`
+  in both, identical 13-id sets), used to prove the 19 orphaned
+  `BuyerStateCpl`/`BuyerOnboarding` rows were already unattached to any real
+  buyer before this recovery, not casualties of it.
+- `grep -c` confirmed zero occurrences of any `token`-shaped field in the
+  quarantined `ApiConnector` export file.
+- Direct field-by-field inspection of live API responses for `ApiKey` and
+  `IntegrationConfig`, not just a schema read, to confirm secret fields are
+  actually absent from what the server sends.
+- Nothing in this phase touched the real production VPS, its database, or
+  any GitHub Actions run. `dashflo_recovery`, `dashflo_aug15_compare`, and
+  `dashflo_recovery_final` are all local-only, isolated Docker Postgres
+  databases on the operator's own workstation, unreachable from the
+  internet.
+
+### Rollback
+
+Nothing here is destructive. `dashflo_recovery` (the import result) was
+never written to after the import; `dashflo_recovery_final` is a disposable
+copy of it and can be dropped and recreated from the template at any time.
+The scratch application instance and its seeded admin account are local,
+disposable, and torn down with the rest of this session's scratch state. No
+production system was reachable from any command in this phase.
+
+### Not done, and why
+
+- **Production cutover itself.** This phase builds and verifies the
+  candidate; it does not yet produce the exact dump/checksum/restore-tested
+  artifact for the real cutover, which is separate work continuing in this
+  session (see below in this file if that work completed, or the final
+  session report if it is still open).
+- **The ApiConnector removal's root cause is not fully provable**, only
+  well-evidenced; see above. The quarantined config preserves the option to
+  recreate the connectors without resurrecting the exposed token.
+- **Browser-rendered UI verification**, as detailed above.
