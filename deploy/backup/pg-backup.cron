@@ -1,0 +1,5 @@
+# DashFlo automated PostgreSQL backup.
+# Install by merging this line into the dashflo user's crontab on the VPS.
+# The VPS timezone is UTC and CRON_TZ pins the schedule even if that changes.
+CRON_TZ=UTC
+0 3 * * * /usr/bin/flock -n /tmp/dashflo-pg-backup.cron.lock /opt/apps/dashflo/deploy/backup/pg-backup.sh >> /var/backups/dashflo/cron.log 2>&1
