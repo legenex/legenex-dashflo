@@ -19,15 +19,30 @@ Update this file after every completed or blocked task. It is the persistent han
   persistently disabled on the operator workstation, 15 August 2026. See
   "Gate A resolution" below for the verification evidence. Nothing is writing to
   `main` on a schedule.
-- Current phase: Phase 1 complete, Phase 2 in progress
+- Current phase: Phase 1 complete, Phase 2 in progress. Production
+  infrastructure (VPS, TLS, deploy pipeline, backups) is fully rebuilt and
+  verified as of 27 August 2026. The one open item is the production
+  database cutover itself: a verified, checksummed, restore-tested recovery
+  artifact is ready at `docs/PRODUCTION-CUTOVER-RUNBOOK.md`, pending the
+  explicit approval a production data import requires under `AGENTS.md`
+  section 13.
 - Active human gate: Gate A approved and closed. Gate B pending. LIVE URL GATE
   open, see `docs/LIVE-URL-GATE.md`. Ordinary application releases no longer sit
-  behind a manual deployment gate.
-- Production commit: `117a3f1`, placed there by GitHub Actions run 32141125172
-  on 18 August 2026
-- Last green commit: `117a3f1`
-- Last full gate: PASS at `117a3f1` in GitHub Actions run 32141125172, seven
-  steps
+  behind a manual deployment gate. New as of 27 August: the production
+  database cutover in `docs/PRODUCTION-CUTOVER-RUNBOOK.md` is its own gate,
+  "production data import" under section 13, independent of Gates A-D.
+- Production VPS: Boston host `srv1907687`, `2.25.138.44` (the earlier
+  Hostinger host and its `2.24.130.44` IP were permanently lost 27 August
+  2026; see "Production VPS lost and rebuilt on a new host" below). DNS,
+  TLS, and the deploy pipeline are fully live as of 27 August 2026; the
+  production database itself is still schema-only pending the cutover
+  above.
+- Production commit: `23ab499`, deployed clean (gate and deploy both green,
+  including nginx/TLS for the first time since the host rebuild) by GitHub
+  Actions run 33110598868 on 27 August 2026.
+- Last green commit: `23ab499`
+- Last full gate: PASS at `23ab499`, locally and in GitHub Actions run
+  33110598868, eight steps.
 
 ## Delta audit, audited base to current base
 
@@ -5313,12 +5328,204 @@ production system was reachable from any command in this phase.
 
 ### Not done, and why
 
-- **Production cutover itself.** This phase builds and verifies the
-  candidate; it does not yet produce the exact dump/checksum/restore-tested
-  artifact for the real cutover, which is separate work continuing in this
-  session (see below in this file if that work completed, or the final
-  session report if it is still open).
 - **The ApiConnector removal's root cause is not fully provable**, only
   well-evidenced; see above. The quarantined config preserves the option to
   recreate the connectors without resurrecting the exposed token.
 - **Browser-rendered UI verification**, as detailed above.
+
+The production cutover artifact itself, and DNS/TLS, are covered in the next
+two entries below, completed later in the same session.
+
+## DNS confirmed live, TLS issued and activated, deploy pipeline fully green
+   again, 27 August 2026
+
+Continuing the same session. A read-only infrastructure audit (dispatched in
+parallel with the work above) found that all five production hostnames
+(`dashflo.io`, `app.`, `api.`, `docs.`, `progress.`) already resolved to the
+new Boston VPS's `2.25.138.44`, not the dead `2.24.130.44` this file had
+recorded as still pending. Independently re-verified from this session
+before acting on it, against three resolvers (the local resolver, Google
+`8.8.8.8`, Cloudflare `1.1.1.1`): all six hostnames (five plus the existing
+`www.dashflo.io` CNAME) agreed exactly. The operator had evidently changed
+the DNS records without a further prompt; per the standing instruction to
+treat DNS verification, certificate issuance, and permanent nginx activation
+as one autonomous sequence once DNS is confirmed changed, this session
+proceeded through all of it without stopping.
+
+**Certificates.** `certbot` was not installed (confirmed by the same audit);
+installed via `apt-get`. Externally-reachable ACME HTTP-01 validation was
+checked by hand first (a throwaway file under the bootstrap nginx's
+`/var/www/html/.well-known/acme-challenge/`, fetched successfully over plain
+HTTP through `dashflo.io`, `api.dashflo.io`, and `progress.dashflo.io` from
+outside the VPS) before requesting anything real. Five `certbot certonly
+--webroot` invocations, one cert per `deploy/nginx/*.conf` file's own
+`ssl_certificate` path: `dashflo.io` (covering `dashflo.io` and
+`www.dashflo.io` together, matching that one config file's shared
+certificate), `app.dashflo.io`, `api.dashflo.io`, `docs.dashflo.io`,
+`progress.dashflo.io`. All five succeeded on the first attempt, expiring 25
+November 2026. `certbot certonly` (as opposed to the nginx plugin) does not
+generate `/etc/letsencrypt/options-ssl-nginx.conf` or `ssl-dhparams.pem`,
+which every committed nginx config `include`s; both were created directly
+rather than letting the nginx plugin edit the repository's own configs
+(`ssl-dhparams.pem` via `openssl dhparam -out ... 2048`, `options-ssl-nginx.conf`
+with certbot's own standard, publicly documented recommended TLS settings,
+verbatim).
+
+**Activation.** `sudo dashflo-deploy-root nginx` installed the five real
+configs, ran `nginx -t` (passed, only "conflicting server name" warnings
+from the bootstrap configs still being simultaneously enabled), and
+reloaded. All six hostnames verified over real HTTPS immediately after
+(`curl -o /dev/null -w '%{http_code}'`, `200`/`301` as expected for each,
+`ssl_verify_result=0` meaning the certificate itself validated, not just
+that a connection succeeded). `/api/health` returned `{"status":"ok"}`
+through both `https://api.dashflo.io` and `https://app.dashflo.io`. The six
+`bootstrap-*.conf` files (both `sites-available` and their `sites-enabled`
+symlinks) were then removed as redundant, `nginx -t` and a reload repeated
+clean, and every hostname re-verified over HTTPS a second time to confirm
+the cleanup itself broke nothing. The stock Ubuntu `default` catch-all site
+was deliberately left in place: it only ever answers a raw-IP or
+unrecognized-Host request with the stock nginx page, does not conflict with
+any of the five named hosts (nginx matches by `server_name`, not
+listen-block order), and removing it was judged not to reduce risk enough
+to be worth touching a file this session did not need to change.
+
+**Renewal.** `certbot renew --dry-run` simulated all five renewals
+successfully. `certbot.timer` (installed automatically by the `apt` package)
+is `enabled`/`active`, next scheduled firing under nine hours out at the
+time of this check, confirming certificates renew unattended going forward
+rather than silently expiring in November.
+
+**Deploy pipeline.** The four most recent `deploy-production.yml` runs
+before this fix (`66c9eb7`, `167b9de`, `ee66fa5`, `7705340`) had all failed
+at exactly the documented, previously-expected `nginx -t` step, while still
+correctly deploying the application itself each time (image build,
+container health, `/api/health`, marketing publish all green): this file
+already carried the standing instruction not to treat that specific,
+understood failure as a new problem. With certificates now real, the latest
+run (`33110598868`, commit `23ab499`, originally failed at 19:53 UTC before
+this fix started) was re-run rather than waited on: full success, gate and
+deploy both green, for the first time since the 27 August VPS loss. This is
+the first real end-to-end proof that the rebuilt pipeline works exactly as
+designed, not just that its individually-tested pieces should.
+
+**Also fixed, local-only:** `~/.ssh/config`'s `dashflo-vps` alias still
+pointed at the dead `2.24.130.44` (a leftover from before the host move,
+never updated because Stage 4 onward had been using a working direct
+connection or the alias predated the rebuild). Updated to `2.25.138.44` on
+the operator's own workstation; not a repository change, and does not
+affect anything server-side.
+
+### Evidence
+
+- `dig +short` against three independent resolvers for all six hostnames,
+  run before touching any infrastructure, not after.
+- A throwaway ACME-path file fetched successfully over the public internet
+  through three of the five hostnames before requesting a real certificate.
+- `sudo certbot certificates` listing all five certs with matching domain
+  names and a 25 November 2026 expiry.
+- `curl -w '%{http_code} ssl_verify=%{ssl_verify_result}'` against all six
+  hostnames, twice (once right after activation, once again after the
+  bootstrap-config cleanup).
+- `certbot renew --dry-run` output showing all five simulated renewals
+  succeeding, plus `systemctl status certbot.timer` showing it enabled and
+  active with a concrete next-trigger time.
+- `gh run view 33110598868 --json status,conclusion`: `completed`/`success`.
+- `NATIVE_RETRY_WORKER_ENABLED` absent and `BASE44_SYNC_ENABLED=0` in the
+  live `server/.env`, checked directly on the VPS immediately after this
+  work, confirming none of it touched commercial-delivery safety.
+
+### Rollback
+
+Every nginx and certificate change here is the one this infrastructure has
+been missing since the host rebuild, not a risky departure from a working
+state; the deploy helper's own new-symlink-only rollback (added during the
+VPS rebuild, see above in this file) would have undone a failed `nginx -t`
+automatically, and it was not triggered because validation passed cleanly.
+If a real rollback were ever needed: `certbot` certificates can be left in
+place harmlessly, and reverting to the bootstrap HTTP-only configuration
+would mean restoring the deleted `bootstrap-*.conf` files from this file's
+own git history (or from `docs/STATE.md`'s prior "Production VPS lost and
+rebuilt on a new host" entry, which has their content) and re-running
+`dashflo-deploy-root nginx` after temporarily moving the real configs aside.
+The `~/.ssh/config` edit is local, one line, and trivially reversible.
+
+## Production cutover artifact produced and restore-verified, 27 August 2026
+
+`dashflo_recovery_final` (the merge-free Aug 22 candidate from the entry
+above) was dumped, checksummed, and restore-tested end to end, closing out
+the "produce and validate the actual dump or import artifact" requirement
+rather than leaving it as a plan.
+
+**Contamination found and fixed before finalizing.** The first dump/restore
+cycle came back with 154,621 rows, one more than the 154,620 the migration
+import itself produced. Traced to a scratch owner account
+(`recovery-verify@local.invalid`) this session had seeded into
+`dashflo_recovery_final` earlier, purely to authenticate against the
+application's API for the verification pass in the entry above. Deleted
+from `e_user`, and the dump/checksum/restore cycle repeated from a
+genuinely clean candidate. This is exactly the kind of self-contamination a
+restore-verify step exists to catch, and it did.
+
+**Artifact:** `dashflo-recovery-final-2026-08-27.dump` (`pg_dump -Fc`, 18.2
+MB), SHA-256 `889ef3d8b6637649ac7a964c717fa6f765df6d5d39b035d5c0f91e6457e8a506`,
+at `~/Documents/Projects/dashflo-recovery-backup/artifacts/` on the
+operator's workstation. Not committed to the repository and not copied
+anywhere else.
+
+**Restore-verified independently of the database that produced it:** a
+brand new, disposable `postgres:16` container (unrelated to
+`dashflo-recovery-pg`) was created, the checksum re-verified against the
+artifact immediately before use, and `pg_restore --no-owner --no-acl`
+completed with no errors. The restored copy's per-table row sum (154,620,
+exact), table count (101), and `migration_import_runs` row all matched the
+source exactly. The current `main` application then booted directly against
+that freshly restored copy on a scratch port and answered `GET /api/health`
+with `{"status":"ok"}`, proving the artifact itself, not just the working
+database it came from, is production-ready.
+
+**Rollback preparation:** a fresh backup of the real, current (empty)
+production database was taken by hand on the VPS
+(`/var/backups/dashflo/dashflo-20260827T200135Z.dump`, 163,583 bytes,
+matching the size of every prior backup of the same empty schema, so
+nothing unexpected is in production right now), separate from the routine
+03:00 UTC cron backup. The exact cutover procedure, rollback procedure, and
+pre/post-cutover verification commands are written out in full in the new
+`docs/PRODUCTION-CUTOVER-RUNBOOK.md`, ready to execute mechanically rather
+than designed under time pressure at cutover time.
+
+**Not done, deliberately:** the cutover itself. Replacing the live
+production database is an explicit human approval gate
+(`AGENTS.md` section 13, "production data import"), independent of how
+thoroughly the artifact has been prepared and verified. Every precondition
+the operator's own cutover checklist asked for is now ready: verified
+recovery artifact, checksum, verified restore test, current production
+backup, rollback procedure, expected downtime (under two minutes), exact
+commands, post-cutover verification, and commercial-delivery safety
+verification (`NATIVE_RETRY_WORKER_ENABLED` absent, `BASE44_SYNC_ENABLED=0`,
+no `distribution_mode` in the recovered data so the application's own
+`legacy_only` default governs). This is the one item this session cannot
+complete on its own.
+
+### Evidence
+
+- `shasum -a 256 -c` against the recorded checksum, both before the
+  contamination fix (passed, on the contaminated file) and after
+  (passed again, on the corrected file with a different hash).
+- `pg_restore` exit code and a direct per-table `count(*)` sum inside the
+  fresh disposable container, not `migration_import_runs.records_created`
+  alone.
+- `GET /api/health` returning `{"status":"ok"}` from the application booted
+  directly against the restored (not the original) database.
+- The disposable restore-verification container was removed after the
+  check; `dashflo_recovery`, `dashflo_recovery_final`, and
+  `dashflo_aug15_compare` were kept, per the standing instruction not to
+  tear down recovery databases before the real cutover is complete and
+  rollback confidence is established.
+
+### Rollback
+
+Nothing in this phase touched production. The scratch user contamination
+was caught and fixed inside a local, disposable database before it ever
+left the workstation. The one production-facing action, taking a fresh
+backup, is purely additive (a new file in `/var/backups/dashflo/`) and
+reads the live database without writing to it.
