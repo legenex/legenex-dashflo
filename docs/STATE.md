@@ -21,28 +21,29 @@ Update this file after every completed or blocked task. It is the persistent han
   `main` on a schedule.
 - Current phase: Phase 1 complete, Phase 2 in progress. Production
   infrastructure (VPS, TLS, deploy pipeline, backups) is fully rebuilt and
-  verified as of 27 August 2026. The one open item is the production
-  database cutover itself: a verified, checksummed, restore-tested recovery
-  artifact is ready at `docs/PRODUCTION-CUTOVER-RUNBOOK.md`, pending the
-  explicit approval a production data import requires under `AGENTS.md`
-  section 13.
+  verified as of 27 August 2026. The production database cutover itself
+  executed and verified 27 August 2026 under owner approval; see
+  "Production database cutover executed and verified" below. The one
+  remaining item is the operator's own real-account login check, which
+  nobody else can perform.
 - Active human gate: Gate A approved and closed. Gate B pending. LIVE URL GATE
   open, see `docs/LIVE-URL-GATE.md`. Ordinary application releases no longer sit
-  behind a manual deployment gate. New as of 27 August: the production
-  database cutover in `docs/PRODUCTION-CUTOVER-RUNBOOK.md` is its own gate,
-  "production data import" under section 13, independent of Gates A-D.
+  behind a manual deployment gate. The production database cutover gate
+  (`AGENTS.md` section 13, "production data import") was explicitly approved
+  by the operator in chat on 27 August 2026 and executed the same session;
+  see "Production database cutover executed and verified" below.
 - Production VPS: Boston host `srv1907687`, `2.25.138.44` (the earlier
   Hostinger host and its `2.24.130.44` IP were permanently lost 27 August
   2026; see "Production VPS lost and rebuilt on a new host" below). DNS,
-  TLS, and the deploy pipeline are fully live as of 27 August 2026; the
-  production database itself is still schema-only pending the cutover
-  above.
-- Production commit: `23ab499`, deployed clean (gate and deploy both green,
-  including nginx/TLS for the first time since the host rebuild) by GitHub
-  Actions run 33110598868 on 27 August 2026.
-- Last green commit: `23ab499`
-- Last full gate: PASS at `23ab499`, locally and in GitHub Actions run
-  33110598868, eight steps.
+  TLS, and the deploy pipeline are fully live as of 27 August 2026. The
+  production database now holds the restored Aug 22 recovery candidate as
+  of the same date; it is no longer schema-only.
+- Production commit: `11750f3`, deployed clean by GitHub Actions run
+  33111644720 on 27 August 2026. The cutover itself was a database
+  operation, not a code deploy, and did not change this commit.
+- Last green commit: `11750f3`
+- Last full gate: PASS at `11750f3`, GitHub Actions run 33111644720, eight
+  steps.
 
 ## Delta audit, audited base to current base
 
@@ -5529,3 +5530,99 @@ was caught and fixed inside a local, disposable database before it ever
 left the workstation. The one production-facing action, taking a fresh
 backup, is purely additive (a new file in `/var/backups/dashflo/`) and
 reads the live database without writing to it.
+
+## Production database cutover executed and verified, 27 August 2026
+
+The operator gave explicit chat approval for the `AGENTS.md` section 13
+"production data import" gate, naming the exact artifact
+(`dashflo-recovery-final-2026-08-27.dump`) and its recorded SHA-256, and
+authorized the full runbook procedure end to end without a further
+approval checkpoint. `docs/PRODUCTION-CUTOVER-RUNBOOK.md` was executed
+exactly as written.
+
+**Pre-cutover checks**, all passed before touching anything: `main` HEAD
+(`11750f3`) matched the commit already deployed and healthy on the VPS,
+confirmed by the latest green `deploy-production.yml` run (33111644720);
+both containers healthy; the local artifact's SHA-256 matched the runbook's
+recorded value; `NATIVE_RETRY_WORKER_ENABLED` absent and
+`BASE44_SYNC_ENABLED=0` on the VPS; all five public hosts returning 200 as
+a pre-cutover baseline.
+
+**Procedure**, run over SSH from `/opt/apps/dashflo`: stopped `app`; took a
+fresh pre-cutover backup of the outgoing empty database
+(`/var/backups/dashflo/pre-cutover-20260827T202418Z.dump`, 163,583 bytes,
+matching the size of every prior empty-schema backup); transferred the
+artifact via `scp` and re-verified its SHA-256 on the VPS, matched exactly;
+dropped and recreated `dashflo_staging`; `pg_restore --no-owner --no-acl`,
+exit 0, no errors; brought `app` back up; removed the transferred dump from
+`/tmp`.
+
+**Post-cutover verification**, all from the runbook: `GET /api/health`
+returns `{"status":"ok"}`; `e_lead` count 1984; `e_buyer` count 13;
+`migration_import_runs` contains exactly the one expected row,
+`06fcea8b2a82f00937032c5f`; `NATIVE_RETRY_WORKER_ENABLED` still absent;
+`BASE44_SYNC_ENABLED=0`; no row in the restored `e_app_settings` sets
+`distribution_mode`, so the application's `legacy_only` default still
+governs; all five public hosts returning 200 after cutover; no
+error/fatal/exception lines in the app container's logs since restart; the
+three real operator accounts (`nick@legenex.com`, `james@legenex.com`,
+`danelle@legenex.com`) present with their expected roles, queried without
+touching password data.
+
+**Row-count discrepancy investigated, resolved as benign.** The
+restore-verification entry above ("Production cutover artifact produced
+and restore-verified") recorded a disposable-container test of this exact,
+same-SHA-256 artifact finding a table count of 101 and a per-table row sum
+of "154,620, exact." Production's table count matches (101), but its exact
+`SELECT count(*)` sum across every table is 309,242, not 154,620. Traced
+the gap to `e_meta_sync_run` (150,364 rows) plus `base44_record_provenance`
+(154,620 rows, matching the migration import's own record count) and the
+usual smaller operational tables. `e_meta_sync_run`'s `created_date` values
+range from 2026-07-21 to 2026-08-22, entirely before both today's restore
+and the artifact's own build date, ruling out contamination from this
+session or from anything written after the app restarted. This is real,
+dated Meta Ads sync history that was already part of the recovered
+database `dashflo_recovery_final` was dumped from; the earlier entry's
+"154,620, exact" figure almost certainly described the migration-import
+tables specifically rather than a literal sum across all 101 tables, since
+a byte-identical file restored twice cannot legitimately produce two
+different totals. Recorded here rather than silently reconciled, per the
+standing instruction to label an unproven fact rather than assume it away;
+it did not block the cutover because every quantity the runbook's own
+verification script actually checks (`e_lead`, `e_buyer`,
+`migration_import_runs`, the two delivery-safety flags) matched exactly,
+and nothing safety-relevant (`distribution_mode`, native retry, Base44
+sync) was affected.
+
+**Not done, deliberately:** logging into `https://app.dashflo.io` with a
+real account. This is the one step in the runbook only the operator can
+perform, since nobody else holds those passwords. Everything else the
+runbook and the operator's approval asked for autonomous verification of
+is complete. Native commercial distribution, the native retry worker,
+Base44 sync, live RouteGroups, buyer deliveries, commercial webhooks, and
+real lead sends were not activated and were not touched by this cutover.
+The local recovery databases, source bundle, final recovery dump, and
+rollback artifacts (`dashflo_recovery`, `dashflo_recovery_final`,
+`dashflo_aug15_compare`, the pre-cutover VPS backup) were left intact per
+the operator's instruction, pending their own confirmation of login.
+
+### Evidence
+
+- `sha256sum` on the VPS after transfer matched the runbook's recorded
+  value exactly.
+- `pg_restore` exit code 0, no error output.
+- `GET /api/health` returning `{"status":"ok"}` post-restart.
+- Direct `SELECT count(*)` queries (not `migration_import_runs` self-report
+  or `pg_stat` estimates) for `e_lead`, `e_buyer`, and the full 101-table
+  sum.
+- `docker compose logs app --since 5m` grepped for
+  `error|fatal|exception`, no matches.
+- All five public hosts checked with `curl -s -o /dev/null -w
+  "status=%{http_code}"` before and after.
+
+### Rollback
+
+Not triggered; every check passed. If it had been needed, the pre-cutover
+backup at `/var/backups/dashflo/pre-cutover-20260827T202418Z.dump` restores
+the prior empty, schema-only state exactly as documented in
+`docs/PRODUCTION-CUTOVER-RUNBOOK.md`'s own rollback section.
