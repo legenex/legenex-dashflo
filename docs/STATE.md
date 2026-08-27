@@ -5794,3 +5794,96 @@ no Google identity, and reverses cleanly with
 `DELETE FROM auth_credentials WHERE email = 'nick@legenex.com'` if ever
 needed. No application code, configuration file, or deployment changed in
 this phase.
+
+## Google Client ID recovered from Google Cloud Console, SystemKey written,
+   production Google sign-in restored, 27 August 2026
+
+The operator retrieved the existing Web OAuth Client ID directly from
+Google Cloud Console (the one manual step the entry above identified) and
+confirmed `https://app.dashflo.io` is already an Authorized JavaScript
+origin on that client. Closing action for this incident.
+
+**Written directly to production**, same pattern as the existing
+`anthropic`/`openai` rows and re-verified for zero duplicates before and
+after: one `SystemKey` row, `provider: google`, the recovered `client_id`,
+`active: true`, no `secret`. `resolveGoogleAppCreds()` picked it up
+immediately with no restart, since it queries `SystemKey` on every
+`/google/config` request rather than caching it.
+
+`GET https://api.dashflo.io/api/auth/google/config` now returns
+`enabled: true`, a populated `client_id`, `source: "system_key"`, matching
+exactly what was requested. `resolveGoogleAppCreds()` prefers `SystemKey`
+over the `GOOGLE_CLIENT_ID` environment fallback, so a value was never
+also set there, avoiding two sources of truth.
+
+`google_sub` on the `nick@legenex.com` `auth_credentials` row (inserted in
+the entry above) was deliberately left null, per the operator's own
+instruction: the verified Google login flow links it on the operator's own
+first successful sign-in, through the existing `LINK_AND_LOGIN` path in
+`googleAccountLink.js`, not through anything written by this session.
+
+**The previously-issued password-reset token was invalidated** (the
+operator flagged it as exposed once it had appeared in chat, correctly,
+since a reset token is bearer-credential-shaped): `auth_credentials.reset_
+token` and `reset_expires` for `nick@legenex.com` set back to `NULL`.
+Per the operator's own stated preference, no replacement token was issued
+in this phase; password login stays down deliberately until requested,
+after Google sign-in is confirmed working. Restoring it later can go
+through the same `/auth/invite` code path an owner already uses on other
+people, run against the owner's own address, since no dedicated
+authenticated change-password route exists yet, only the token-based
+`/reset-password-request` and `/reset-password` pair, and the `/invite`
+one an authenticated owner/admin can call for any address including their
+own.
+
+### Not done, and why
+
+**Browser-rendered confirmation that the button actually appears and the
+account chooser opens** is the one item this phase could not do. No
+browser automation tool is available in this environment now, same as
+every prior phase this file has recorded. What was verified instead:
+`GoogleSignInButton.jsx`'s own logic reads directly, confirming it only
+renders `null` while `state` is `'checking'` or `'unavailable'`, and
+`'unavailable'` is reached only when `config.enabled` or `config.client_id`
+is falsy; since the live config endpoint now returns both truthy, the
+component's own code guarantees it proceeds to `loadGoogleIdentityServices()`
+and calls `gis.renderButton(...)`, rather than short-circuiting to nothing
+as it did all session before this point. That is evidence the button will
+attempt to render, not a screenshot proving it did. Actually clicking
+"Continue with Google" and completing account selection is, as instructed,
+left to the operator.
+
+### Evidence
+
+- `GET https://api.dashflo.io/api/auth/google/config`, before this phase:
+  `{"enabled":false,"client_id":"","source":"none"}`; after:
+  `{"enabled":true,"client_id":"<recovered id>","source":"system_key"}`.
+- `SELECT count(*) FROM e_system_key WHERE data->>'provider' = 'google'`:
+  `1`, both immediately after the insert and again after the config
+  endpoint was re-checked, ruling out a duplicate row.
+- Direct query of the `nick@legenex.com` `auth_credentials` row after this
+  phase: `user_id` unchanged from the entry above (still the original
+  owner `e_user` id), `has_password=false`, `has_google_sub=false`,
+  `reset_token` now `NULL`, `disabled=false`; joined against `e_user`:
+  `role=admin`, `base_role=owner`, both unchanged from before this
+  incident began.
+- `NATIVE_RETRY_WORKER_ENABLED` still absent, `BASE44_SYNC_ENABLED` still
+  `0`, `distribution_mode` still unset, rechecked after the `SystemKey`
+  write, confirming this phase did not touch commercial-delivery safety
+  either.
+- No Client Secret was written anywhere; the inserted `SystemKey` row's
+  `secret` field is empty, matching the operator's explicit instruction and
+  the login flow's own requirement (Google ID-token verification needs
+  only the Client ID).
+
+### Rollback
+
+The `SystemKey` insert is additive on a table already holding two other
+provider rows in the identical shape; deleting the one `id` returned by
+this phase's insert (recorded in this session's command history, not
+repeated here since it is an internal identifier rather than a credential)
+restores the exact prior `enabled:false` state. The reset-token
+invalidation is a `NULL` write to a token that was already flagged
+compromised and unusable regardless; nothing else read or depended on it
+in the few minutes it existed. No application code, configuration file, or
+deployment changed in this phase either.
