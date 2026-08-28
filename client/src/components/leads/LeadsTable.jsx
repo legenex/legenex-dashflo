@@ -14,7 +14,7 @@ import { Panel, Tag, riseIn } from '@/components/settings/settingsUi';
 import { Checkbox } from '@/components/ui/checkbox';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
 import { toast } from 'sonner';
-import { processLead } from '@/functions/processLead';
+import { resubmitLead } from '@/functions/resubmitLead';
 import { bulkDeleteLeads } from '@/functions/bulkDeleteLeads';
 import { loadColumnConfig, saveColumnConfig, getColumnDef, buildAvailableColumns } from '@/lib/columnConfig';
 import { leadEventInstant, leadField } from '@/lib/reportMetrics';
@@ -598,12 +598,8 @@ export default function LeadsTable({ view }) {
     for (let i = 0; i < leadsToResubmit.length; i++) {
       const lead = leadsToResubmit[i];
       try {
-        const payload = JSON.parse(lead.raw_payload || '{}');
-        const keys = await api.entities.ApiKey.filter({ id: lead.supplier_key_id });
-        const key = keys[0]?.key;
-        if (!key) { failed++; continue; }
-        await processLead({ ...payload, _supplier_key: key });
-        success++;
+        const resp = await resubmitLead({ id: lead.id });
+        if (resp.data?.results?.[0]?.ok) success++; else failed++;
       } catch {
         failed++;
       }

@@ -276,6 +276,11 @@ export default function SettingsApiConnectors() {
     if (editing.kind === 'facebook_capi') {
       data.payload_template = testPayloadStr;
     }
+    // The server never sends fb_access_token back once set, so an edit that
+    // doesn't touch this field arrives here blank. Omit it rather than
+    // sending '', which would otherwise wipe an already-configured token the
+    // moment the operator changes anything else on the connector.
+    if (editing.id && !String(data.fb_access_token || '').trim()) delete data.fb_access_token;
     if (editing.id) {
       await api.entities.ApiConnector.update(editing.id, data);
     } else {

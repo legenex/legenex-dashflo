@@ -9,7 +9,7 @@ import { SearchableSelect } from '@/components/ui/searchable-select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
 import { DownloadCloud, Play, RefreshCw, FlaskConical, Trash2, Pencil } from 'lucide-react';
-import ApiKeyField, { maskKey } from '@/components/settings/ApiKeyField';
+import ApiKeyField from '@/components/settings/ApiKeyField';
 import { webhookTypeClass } from '@/lib/tagColors';
 import { format } from 'date-fns';
 import { toast } from 'sonner';
@@ -68,6 +68,12 @@ const SettingsPullSources = forwardRef(function SettingsPullSources(_props, ref)
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [busyId, setBusyId] = useState(null);
   const [testResult, setTestResult] = useState(null);
+  // The server never sends the real api_key back (READ_TRANSFORM_FIELDS
+  // masks it to a "••••last4" hint); this holds that hint for display in the
+  // edit dialog. form.api_key itself always starts blank on edit so a save
+  // that doesn't touch the key can't accidentally write the hint text over
+  // the real stored value.
+  const [existingKeyHint, setExistingKeyHint] = useState('');
 
   const { data: sources = [] } = useQuery({
     queryKey: ['pull-sources'],
@@ -80,15 +86,17 @@ const SettingsPullSources = forwardRef(function SettingsPullSources(_props, ref)
     setForm(DEFAULT_FORM);
     setEditingId(null);
     setTestResult(null);
+    setExistingKeyHint('');
     setOpen(true);
   };
 
   useImperativeHandle(ref, () => ({ openCreate }));
 
   const openEdit = (s) => {
-    setForm({ ...DEFAULT_FORM, ...s, supplier_rules: s.supplier_rules || '[]' });
+    setForm({ ...DEFAULT_FORM, ...s, api_key: '', supplier_rules: s.supplier_rules || '[]' });
     setEditingId(s.id);
     setTestResult(null);
+    setExistingKeyHint(s.api_key || '');
     setOpen(true);
   };
 
@@ -106,7 +114,6 @@ const SettingsPullSources = forwardRef(function SettingsPullSources(_props, ref)
       target: 'call_logs',
       enabled: !!form.enabled,
       account_id: form.account_id.trim(),
-      api_key: (form.api_key || '').trim(),
       credential_env: (form.credential_env || '').trim(),
       method: form.method,
       url: (form.url || '').trim(),
@@ -121,6 +128,12 @@ const SettingsPullSources = forwardRef(function SettingsPullSources(_props, ref)
       sync_interval: form.sync_interval,
       notes: form.notes,
     };
+    // Only include api_key when the operator actually typed a new one. The
+    // server never sends the real value back, so form.api_key starts blank
+    // on every edit; omitting it here (rather than sending '') means the
+    // stored key survives an edit that touches some other field.
+    const trimmedKey = (form.api_key || '').trim();
+    if (trimmedKey) payload.api_key = trimmedKey;
     try {
       if (editingId) await api.entities.PullSource.update(editingId, payload);
       else await api.entities.PullSource.create(payload);
@@ -205,7 +218,7 @@ const SettingsPullSources = forwardRef(function SettingsPullSources(_props, ref)
           </td>
           <td className="px-4 py-3 text-muted-foreground font-mono text-[12px]">{s.sync_interval || '1h'}</td>
           <td className="px-4 py-3 text-muted-foreground font-mono text-[11px] whitespace-nowrap">
-            {maskKey(s.api_key) || (s.credential_env ? 'env secret' : '-')}
+            {s.api_key || (s.credential_env ? 'env secret' : '-')}
           </td>
           <td className="px-4 py-3 text-muted-foreground text-[12px]">-</td>
           <td className="px-4 py-3">
@@ -271,7 +284,11 @@ const SettingsPullSources = forwardRef(function SettingsPullSources(_props, ref)
                   <Label>Ringba account ID</Label>
                   <Input value={form.account_id} onChange={(e) => set({ account_id: e.target.value })} placeholder="RA..." className="bg-background font-mono text-[12px]" />
                 </div>
-                <ApiKeyField value={form.api_key} onChange={(v) => set({ api_key: v })} />
+                <ApiKeyField
+                  value={form.api_key}
+                  onChange={(v) => set({ api_key: v })}
+                  hint={existingKeyHint ? `Key on file: ${existingKeyHint}. Leave blank to keep it.` : undefined}
+                />
               </div>
             ) : (
               <>
@@ -286,7 +303,11 @@ const SettingsPullSources = forwardRef(function SettingsPullSources(_props, ref)
                   </div>
                 </div>
                 <div className="grid grid-cols-2 gap-3">
-                  <ApiKeyField value={form.api_key} onChange={(v) => set({ api_key: v })} />
+                  <ApiKeyField
+                  value={form.api_key}
+                  onChange={(v) => set({ api_key: v })}
+                  hint={existingKeyHint ? `Key on file: ${existingKeyHint}. Leave blank to keep it.` : undefined}
+                />
                   <div className="space-y-1.5">
                     <Label>Authorization header</Label>
                     <Input value={form.auth_header} onChange={(e) => set({ auth_header: e.target.value })} placeholder="Bearer {{secret}}" className="bg-background font-mono text-[12px]" />

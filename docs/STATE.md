@@ -6277,3 +6277,282 @@ equivalent to a restore: `pg_restore` the retained
 `dashflo-recovery-final-2026-08-27.dump` (checksum-verified) into a fresh
 container would reproduce `dashflo_recovery_final` exactly, and the Aug 15
 dump likewise for `dashflo_aug15_compare`, if either is ever needed again.
+
+## Final engineering cleanup after production acceptance, 28 August 2026
+
+The operator asked for the acceptance pass's own remaining findings to be
+closed out: a security exposure sweep across everything queried during that
+pass, the resend/resubmit architectural fix that was deliberately left open,
+temporary auth state teardown, the two orphaned `BuyerOnboarding` rows, Meta
+credential readiness, and a fresh post-change backup. Commercial delivery
+stayed disabled throughout; no real lead was sent to any external
+destination.
+
+### 1. Security exposure sweep
+
+Went beyond the three named surfaces (LeadByteConnector, "LeadProsper", QA
+tokens) to check every field the app's own `client/src/lib/systemTransfer.js`
+already lists as `SECRET_FIELDS` (the config-transfer/backup export's own
+"never leaves the app" list) against `server/src/lib/entityPolicy.js`'s
+`READ_DENY_FIELDS`/`READ_TRANSFORM_FIELDS` (the generic entity route's own
+redaction list), since the two are supposed to agree and the LeadByteConnector
+bug fixed in the prior session was exactly a case of one having a protection
+the other lacked.
+
+- **"LeadProsper" does not exist anywhere in this codebase** - no schema, no
+  connector, no historical commit on any branch. `GET /api/entities/
+  LeadProsper` already 403s (`ENTITY_POLICY` fails closed for any unknown
+  name), so there is nothing to rotate or fix under that name. Most likely a
+  misremembered name from the acceptance session's own notes.
+- **`PullSource.api_key` (the Ringba call-logs credential) was readable in
+  full through the generic entity route, live, in production** - one row,
+  "Ringba Calls", api_key populated. The settings UI (`SettingsPullSources.jsx`)
+  computed its own "last 4 characters" list-view hint (`maskKey`) from the
+  value the server had just sent in full; `ApiKeyField`'s own comment already
+  said the raw value should be "never shown in list views," but the field was
+  simply absent from `entityPolicy.js`. `client/src/lib/systemTransfer.js`
+  already listed `PullSource: ['api_key']` as a secret to strip from config
+  transfer exports - the generic route was the one place that check was never
+  applied.
+- **`OutboundWebhook.api_key` had the identical bug** (`SettingsOutboundWebhooks.jsx`,
+  same `maskKey` pattern) - zero rows populated in production today, so no
+  live value was exposed, but the next operator to configure one would have
+  been.
+- **`ApiConnector.fb_access_token`, `InboundWebhookRoute.token_hash`,
+  `Webhook.secret`** - same gap, zero rows populated in any of the three
+  today. Added as defense in depth for the same reason `DncEntry.contact_hash`
+  already is: a HISTORICAL row from before this fix existed is exactly the
+  case a redaction list protects against, not just the next new row.
+- **`BotConfig.bot_key` was checked and is NOT a secret** despite appearing in
+  `systemTransfer.js`'s own `SECRET_FIELDS` list - it is an enum identifier
+  ("databot"/"buildbot", which bot this config is for), not a credential.
+  Left as is; `systemTransfer.js`'s inclusion is over-cautious, not wrong in a
+  way that matters (it redacts a non-secret during transfer, which is
+  harmless), and changing it is out of scope for a security-exposure pass.
+- **`LeadSource.webhook_key` was checked and is intentionally always visible**
+  - it is the value an operator copies into the inbound webhook URL they give
+  a lead source, not a credential DashFlo holds to authenticate itself
+  outbound. Stripping it would break the copy-URL feature. `systemTransfer.js`
+  redacting it from config-transfer exports (a different concern, protecting
+  it from ending up in a downloadable backup file) is correct and untouched.
+- **`MetaConnection.token`** (the live Meta OAuth access token) is not in
+  `ENTITY_POLICY` at all, so it already 403s on the generic route. No gap.
+
+**Fix** (`server/src/lib/entityPolicy.js`): added `ApiConnector:
+['fb_access_token']`, `InboundWebhookRoute: ['token_hash']`, `Webhook:
+['secret']` to `READ_DENY_FIELDS`; added a `maskTrailingSecret` transform
+(identical "last 4 characters" shape the client used to compute itself) to
+`READ_TRANSFORM_FIELDS` for `PullSource.api_key` and `OutboundWebhook.api_key`,
+so the list-view hint is unchanged but the full value now never leaves the
+server. Updated `SettingsPullSources.jsx` and `SettingsOutboundWebhooks.jsx`
+so the edit dialog's key field always starts blank (never pre-filled with the
+masked hint, which would otherwise get written back as a literal new key on
+save) and the save handler omits `api_key` entirely when the operator did not
+type a new one, so an edit to any other field cannot silently wipe a
+configured key. Applied the equivalent save-handler guard to
+`SettingsApiConnectors.jsx` for `fb_access_token`. Regression tests added to
+`entityPolicy.test.js` for every field above.
+
+**Not exposed to this session's own output at any point**: the Ringba key,
+any LeadByteConnector header value, or any other credential. Every query
+against production asked for shape (field names, presence, length, last 4
+characters via SQL) rather than full values.
+
+**Rotation status, by credential name/provider only, no value shown**:
+
+- LeadByte X_KEY header (LeadByteConnector, 4 rows, one carries a live-shaped
+  value) - the read-side bug was already fixed in the prior session
+  (`8e018a6`); the value itself is a LeadByte-issued credential DashFlo cannot
+  regenerate. **Provider-side rotation required** - obtain a new X_KEY from
+  LeadByte and re-enter it. Liveness could not be checked without contacting
+  LeadByte, which this pass correctly stayed out of scope for.
+- Ringba API key (`PullSource` "Ringba Calls") - same situation, Ringba-issued.
+  **Provider-side rotation required**, then re-enter it through the now-fixed
+  Settings > Pull Sources dialog (masked hint, never round-trips).
+- Every DashFlo-issued `ApiKey` (supplier/master posting keys) is confirmed
+  hash-only at rest in production right now (`SELECT count(*) FILTER (WHERE
+  length(data->>'key')>0) FROM e_api_key` = 0 of 5) and was never displayed in
+  this or the prior session. Nothing to rotate.
+- The temporary QA bearer tokens are not "rotated" because there is nothing
+  left to rotate onto: the underlying `e_user`/`auth_credentials` rows were
+  already deleted (see the prior entry), and `attachUser` re-fetches the User
+  row on every request, so any token for that identity is permanently and
+  totally invalid, re-confirmed this session (`e_user` = 3, `auth_credentials`
+  = the 3 real addresses only, zero QA rows in either table or
+  `e_invitation`).
+
+### 2. Lead resend/resubmit rebuilt as a dedicated server-side function
+
+The prior session's own audit (part 2, finding 2) proved the client-side
+implementation was architecturally wrong: it read `.key` off
+`ApiKey.filter({id: lead.supplier_key_id})` through the generic entity route,
+which strips `key`/`key_hash` unconditionally (`READ_DENY_FIELDS`, Task S4) -
+every resend silently failed with an undefined key, for all 1984 leads, not
+just the 712 with a stale `supplier_key_id`.
+
+**New**: `server/src/functions/resubmitLead.js`, admin/owner only
+(`requireAdmin`, same pattern as `issueApiKey.js`). Accepts `{id}` or
+`{ids:[...]}`. For each lead: loads it server-side, resolves its current
+supplier credential server-side (never asks the client for one), and replays
+intake through the exact same `processLead` pipeline every inbound lead uses
+(`getFunction('processLead')`, the identical in-process call shape
+`leads.js` already uses), returning a structured per-lead result.
+
+**Credential resolution** (`resolveSupplierCredential`, exported and unit
+tested on its own): trusts `lead.supplier_key_id` as-is when it still
+resolves to a live, active `ApiKey` - the same "resolves to nothing at all is
+stale, resolves to a real different key means a different supplier"
+distinction `generateBillingRun.js`'s own stale-key fallback already
+established for the identical staleness problem. Only when the id is absent
+or stale does it fall back to the `Supplier` record by name (not a bare
+`ApiKey.supplier_name` guess), and fails with a specific code rather than a
+generic error at every ambiguous point: `SUPPLIER_NOT_FOUND` (no Supplier
+matches), `SUPPLIER_AMBIGUOUS` (more than one does), `NO_ACTIVE_KEY` (the
+supplier has none), `KEY_AMBIGUOUS` (the supplier has more than one active
+key and there is no way to know which authenticated this lead),
+`NO_SUPPLIER_IDENTITY` (neither a key id nor a name to fall back on).
+
+**How the raw key never reaches the browser**: `processLead.js`'s AUTH section
+now accepts `ctx.__resolvedApiKey` (an already-resolved `ApiKey` record) as an
+alternative to a raw key string. This cannot be forged over HTTP -
+`routes/functions.js`'s `executeFunction` builds `ctx` from named fields only
+(`{body, user, db, env, config, req, json}`) and never spreads `req.body` into
+it, so an external POST can set `ctx.body` but never `ctx.__resolvedApiKey`.
+Only `resubmitLead.js`'s own in-process call can set it. The resolved
+`ApiKey` record itself (and any hash/legacy-cleartext field it might carry
+from the server-side DB read) never appears in `resubmitLead`'s JSON
+response - only its id, `supplier_name`, and the resolution method are
+surfaced.
+
+**Client**: `LeadDetailModal.jsx` (single resend), `LeadsTable.jsx` and
+`Leads.jsx` (bulk resubmit, two near-duplicate implementations, both had the
+identical bug) now call the new `client/src/functions/resubmitLead.js`
+wrapper instead of fetching a key and calling `processLead` directly. The
+per-lead progress bar UX is unchanged - each lead is still resubmitted one
+call at a time, sequentially, which also means a bulk resubmit cannot fan out
+concurrently against a real external destination just because the batch is
+large.
+
+**Tests** (`server/test/resubmitLead.test.js`, 13 cases): current valid key,
+stale key falling back to the Supplier record, an inactive key by id also
+falling back (not trusted just because the id resolves), every missing/
+ambiguous-supplier/ambiguous-key failure code, an unauthorized (non-admin)
+caller refused before any lead is touched, a bulk batch with one success and
+one failure (the failing lead never reaches the pipeline at all), a
+not-found lead, a pipeline rejection (duplicate) surfaced as a structured
+non-throwing result, and an explicit assertion that the full JSON response,
+serialized exactly as it would leave the server, never contains the raw key
+or its hash.
+
+Not fixed in this pass, unchanged from the prior audit: `generateBillingRun.js`
+already has its own equivalent stale-key fallback (that was the earlier fix);
+this pass did not touch billing.
+
+### 3. Temporary auth state
+
+Re-verified rather than re-done: `qa-acceptance-test@dashflo.internal` and
+`qa-invite-test@dashflo.internal` are confirmed absent from `e_user`,
+`auth_credentials`, and `e_invitation` (zero rows each). `e_user` is exactly
+3 rows. No `ErrorLog` or other audit row references either QA address, so
+there was nothing to preserve or clean up beyond what the prior session
+already did.
+
+**`OWNER_BOOTSTRAP_TOKEN` removed from production**, read `server/src/routes/
+auth.js` directly to confirm first: the token is read in exactly one place,
+gated by `isFirst` (`auth_credentials` count === 0, checked inside the same
+transaction that holds the bootstrap advisory lock). With 3 real
+`auth_credentials` rows already present, `isFirst` is always false in
+production now, so the token has zero effect on Nick/James/Danelle's existing
+or future login (Google sign-in never touches this code path; it only
+matters if `auth_credentials` were ever fully emptied again, at which point
+`npm run seed:admin` is the documented alternative per the route's own error
+message). Backed up `server/.env` to `server/.env.bak-pre-bootstrap-token-
+removal` (same permissions, VPS-local, not fetched or displayed) before
+editing; removed the `OWNER_BOOTSTRAP_TOKEN=` line with `sed`; recreated the
+app container with `docker compose up -d --no-deps app` (the same command the
+deploy workflow itself uses, so this is the same "safe restart" the pipeline
+already performs, not a new mechanism) so the change takes effect. No value
+was ever displayed, echoed, or logged at any point.
+
+### 4. `BuyerOnboarding` orphaned rows
+
+Re-audited the two rows the prior session found and deliberately left alone.
+Both are now provably obsolete test artifacts, not ambiguous: `company_name`
+is literally `"test"` and `"testjames"`, `contact_email` is blank on both,
+both were created and last touched within minutes of each other on 13/14 July
+2026 (six weeks with zero activity since), and both predate the current
+13-buyer set entirely. This clears the "clearly obsolete, provable" bar the
+operator set, unlike the ambiguous case that bar exists to protect against.
+
+No existing generic archive mechanism covers `BuyerOnboarding` (unlike
+`RouteMember`, which has its own dedicated `archive-invalid-route-
+members.js`/`routeMemberArchival.js` pair). Added
+`server/scripts/archive-orphaned-buyer-onboarding.js`, report-only by default,
+`--apply` required to write anything, following the same safety shape:
+prints every candidate before touching anything, writes only `status:
+'cancelled'` (an existing terminal value in the schema's own enum, not
+invented), never deletes the row, never touches `buyer_id` or any other
+field, and never invents a buyer association - a row is only ever a candidate
+when `buyer_id` is both present and unresolvable against the current `Buyer`
+set. Not yet run against production; see the follow-up entry below for the
+report-only and `--apply` results.
+
+### 5. Meta credential readiness
+
+Read `server/src/lib/metaAppCreds.js`, `SettingsSystemKeys.jsx`, and
+`metaOauthCallback.js` directly to confirm rather than trust the summary:
+`resolveMetaAppCreds` already reads `SystemKey(provider:'meta')`'s `client_id`/
+`secret` fields first, falls back to the legacy read-only `IntegrationConfig
+(meta_app)` row, then env - identical shape to `googleAppCreds.js`'s already-
+working pattern. `SettingsSystemKeys.jsx` already has a dedicated "Meta App"
+card (`provider:'meta'`, App ID -> `client_id`, App Secret -> `secret`) under
+Settings > API Keys > System Keys, saved through `systemKeys.js`'s
+`system_meta_save`, which writes exactly the shape `resolveMetaAppCreds`
+reads. `metaOauthCallback.js` already calls `resolveMetaAppCreds` for the
+token exchange/refresh. **Zero code changes were required or made.** Entering
+the Meta App ID and Secret through Settings > API Keys > System Keys is
+sufficient on its own to restore refresh capability before the current
+token's 2026-09-19 expiry. Not entered in this pass, per the operator's
+instruction not to request credentials while other autonomous work remained.
+
+### 6. Team authentication
+
+Re-verified, changed nothing: `auth_credentials` still exactly 3 rows
+(nick/james/danelle), zero duplicates by email, each `user_id` joins cleanly
+to its real `e_user` row with `role`/`base_role` unchanged from the prior
+entry (owner/admin, manager, admin respectively), none disabled. Nick's
+`has_google_sub=true` (confirmed prior sign-in); James and Danelle are
+`has_password=false has_google_sub=false`, the correct waiting-for-first-
+sign-in state, not an error.
+
+### Evidence
+
+- `npm run gate`: PASS, all eight steps, PostgreSQL reachable locally
+  (equivalent to the CI gate).
+- 51 tests across `entityPolicy.test.js` (38) and `resubmitLead.test.js` (13),
+  all passing, covering every credential-exposure fix and every resend
+  failure mode named in the operator's brief.
+- Direct production queries (shape/count/presence only, no secret value) for
+  every table this entry names, before and after each change.
+- `docker compose ps` and `curl .../api/health` = healthy immediately after
+  the `OWNER_BOOTSTRAP_TOKEN` restart; `POST /api/auth/google` with a garbage
+  token returned 401 (not 500), confirming the auth route itself still loads
+  and runs correctly post-restart.
+- `NATIVE_RETRY_WORKER_ENABLED` absent, `BASE44_SYNC_ENABLED=0`, no
+  `distribution_mode` override - checked again after every write in this
+  entry, unchanged throughout.
+
+### Rollback
+
+`entityPolicy.js`/client changes are read-side and save-handler behavior
+only; no data was migrated or moved, so a revert returns exactly to the prior
+(buggy but no worse) behavior. `resubmitLead.js` is new and additive;
+`processLead.js`'s only change is an additional, narrowly-scoped auth
+input that a normal HTTP caller can never set. `OWNER_BOOTSTRAP_TOKEN`
+removal reverses by restoring the line from
+`server/.env.bak-pre-bootstrap-token-removal` and re-running the same
+`docker compose up -d --no-deps app`. The `BuyerOnboarding` archive script
+has not been applied yet; once it is, reversing a single row is `UPDATE
+e_buyer_onboarding SET data = data || '{"status":"blocked"}'::jsonb WHERE
+id = '...'` (or `'submitted'` for the other), restoring its exact prior
+status.

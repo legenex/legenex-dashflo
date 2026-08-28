@@ -18,7 +18,7 @@ import { formatLeadTime } from '@/lib/leadTime';
 import { formatInTimeZone } from 'date-fns-tz';
 import { APP_TZ } from '@/lib/periodRange';
 import { leadEventInstant } from '@/lib/reportMetrics';
-import { processLead } from '@/functions/processLead';
+import { resubmitLead } from '@/functions/resubmitLead';
 import { invalidateLeadCaches } from '@/lib/leadCaches';
 
 // ---- Lead Details field registry ---------------------------------------------
@@ -194,16 +194,16 @@ export default function LeadDetailModal({ lead, open, onClose, initialTab = 'sum
   const handleResend = async () => {
     setResending(true);
     try {
-      const payload = JSON.parse(lead.raw_payload || '{}');
-      // Find the API key for this lead
-      const keys = await api.entities.ApiKey.filter({ id: lead.supplier_key_id });
-      const key = keys[0]?.key;
-      if (!key) { toast.error('Supplier key not found'); return; }
-      const resp = await processLead({ ...payload, _supplier_key: key });
-      toast.success(`Resend result: ${resp.data?.Response || 'Unknown'}`);
+      const resp = await resubmitLead({ id: lead.id });
+      const result = resp.data?.results?.[0];
+      if (result?.ok) {
+        toast.success(`Resend result: ${result.acceptance || result.lead_status || 'accepted'}`);
+      } else {
+        toast.error(result?.reason || 'Resend failed');
+      }
       invalidateLeadCaches(qc);
     } catch (err) {
-      toast.error('Resend failed');
+      toast.error(err?.message || 'Resend failed');
     } finally {
       setResending(false);
     }

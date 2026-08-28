@@ -259,6 +259,51 @@ describe('secret material never leaves through the route', () => {
     expect(projectRead('SubDelivery', { id: 'sd1', headers: '"just a string"' }).headers).toBe('[unreadable, redacted for safety]');
     expect(projectRead('SubDelivery', { id: 'sd1', headers: '["a","b"]' }).headers).toBe('[unreadable, redacted for safety]');
   });
+
+  // Regression: PullSource.api_key and OutboundWebhook.api_key were readable
+  // in full through the generic route (the settings UI computed its "last 4
+  // characters" list-view hint client side, from the full value it had just
+  // been sent). Both entities are already in ENTITY_POLICY as adminOnly, so
+  // this was a real live exposure for any admin, not a hypothetical one.
+  it('masks PullSource.api_key to a last-4 hint instead of returning the full value', () => {
+    const row = { id: 'p1', name: 'Ringba Calls', provider: 'ringba', api_key: 'ringba-live-secret-9f21' };
+    const projected = projectRead('PullSource', row);
+    expect(projected.api_key).toBe('••••9f21');
+    expect(JSON.stringify(projected)).not.toContain('ringba-live-secret');
+  });
+
+  it('masks OutboundWebhook.api_key the same way', () => {
+    const row = { id: 'w1', name: 'Ops alert', api_key: 'whsec-live-value-wxyz' };
+    const projected = projectRead('OutboundWebhook', row);
+    expect(projected.api_key).toBe('••••wxyz');
+    expect(JSON.stringify(projected)).not.toContain('whsec-live-value-wxyz');
+  });
+
+  it('leaves PullSource/OutboundWebhook untouched when no key is set', () => {
+    expect(projectRead('PullSource', { id: 'p1', api_key: '' }).api_key).toBe('');
+    expect(projectRead('PullSource', { id: 'p1' }).api_key).toBeUndefined();
+  });
+
+  it('strips ApiConnector.fb_access_token entirely', () => {
+    const row = { id: 'c1', name: 'Meta CAPI', kind: 'facebook_capi', fb_access_token: 'EAAG-live-token-value', fb_pixel_id: '123' };
+    const projected = projectRead('ApiConnector', row);
+    expect(projected.fb_access_token).toBeUndefined();
+    expect(projected.fb_pixel_id).toBe('123');
+  });
+
+  it('strips InboundWebhookRoute.token_hash entirely', () => {
+    const row = { id: 'r1', name: 'Supplier post', token_hash: 'deadbeef', api_key_id: 'k1' };
+    const projected = projectRead('InboundWebhookRoute', row);
+    expect(projected.token_hash).toBeUndefined();
+    expect(projected.api_key_id).toBe('k1');
+  });
+
+  it('strips Webhook.secret entirely', () => {
+    const row = { id: 'wh1', name: 'Lead sold ping', url: 'https://example.test/hook', secret: 'hmac-live-secret' };
+    const projected = projectRead('Webhook', row);
+    expect(projected.secret).toBeUndefined();
+    expect(projected.url).toBe('https://example.test/hook');
+  });
 });
 
 describe('privilege escalation through writes is blocked', () => {

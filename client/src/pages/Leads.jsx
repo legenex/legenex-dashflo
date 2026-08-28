@@ -18,7 +18,7 @@ import {
 import { Download, Search, Inbox, ChevronLeft, ChevronRight } from 'lucide-react';
 import { format } from 'date-fns';
 import { toast } from 'sonner';
-import { processLead } from '@/functions/processLead';
+import { resubmitLead } from '@/functions/resubmitLead';
 
 export default function Leads() {
   const qc = useQueryClient();
@@ -149,12 +149,8 @@ export default function Leads() {
     for (let i = 0; i < targets.length; i++) {
       const lead = targets[i];
       try {
-        const payload = JSON.parse(lead.raw_payload || '{}');
-        const keys = await api.entities.ApiKey.filter({ id: lead.supplier_key_id });
-        const key = keys[0]?.key;
-        if (!key) { failCount++; setProgress({ done: i + 1, total: targets.length }); continue; }
-        await processLead({ ...payload, _supplier_key: key });
-        okCount++;
+        const resp = await resubmitLead({ id: lead.id });
+        if (resp.data?.results?.[0]?.ok) okCount++; else failCount++;
       } catch {
         failCount++;
       }

@@ -227,6 +227,20 @@ export const READ_DENY_FIELDS = {
   // correlate the same person across exports even without reversing it.
   // Operators see contact_display, which is masked.
   DncEntry: ['contact_hash'],
+  // Outbound credentials DashFlo holds to authenticate itself to an external
+  // destination (a Facebook long-lived access token). Same rationale as
+  // ApiKey.key: it never has a reason to round-trip back to the browser once
+  // set, and the settings UI reads and writes it through the generic route
+  // rather than a dedicated mint/rotate function. Currently unpopulated in
+  // production; denied for the next row rather than the first one found live.
+  ApiConnector: ['fb_access_token'],
+  // The verifier hash for an inbound posting route. Same offline-attack
+  // rationale as ApiKey.key_hash above.
+  InboundWebhookRoute: ['token_hash'],
+  // HMAC signing secret for an outbound webhook. Same "never round-trips"
+  // rationale as ApiConnector.fb_access_token above. Currently unpopulated in
+  // production (this entity has zero rows).
+  Webhook: ['secret'],
 };
 
 // Fields whose VALUE must be redacted (not deleted outright) before leaving
@@ -272,9 +286,26 @@ function redactHeaderSecrets(raw) {
   return typeof raw === 'string' ? JSON.stringify(out) : out;
 }
 
+// Same defense-in-depth reasoning as redactHeaderSecrets above, for a single
+// scalar credential field rather than a header list: PullSource.api_key and
+// OutboundWebhook.api_key are outbound credentials DashFlo holds to
+// authenticate itself to an external destination, entered once by an
+// operator and never legitimately needed back on screen. The settings UI for
+// both already computed this exact "last 4 characters" hint client side from
+// the full value it had just been sent - which was the exposure. Computing it
+// here means the full value now never leaves the server at all, while the
+// list view keeps showing the same hint as before.
+function maskTrailingSecret(raw) {
+  const v = String(raw || '').trim();
+  if (!v) return raw;
+  return `••••${v.slice(-4)}`;
+}
+
 export const READ_TRANSFORM_FIELDS = {
   SubDelivery: { headers: redactHeaderSecrets },
   LeadByteConnector: { headers: redactHeaderSecrets },
+  PullSource: { api_key: maskTrailingSecret },
+  OutboundWebhook: { api_key: maskTrailingSecret },
 };
 
 // Fields that cannot be set or changed through the generic route, because

@@ -1385,8 +1385,19 @@ export default async function processLead(ctx) {
     // Resolution goes through lib/apiKeys.js, which matches on the SHA-256
     // hash and only falls back to the legacy cleartext column while
     // DASHFLO_APIKEY_LEGACY_CLEARTEXT allows it. Task S4.
+    //
+    // ctx.__resolvedApiKey lets a trusted in-process caller (resubmitLead.js)
+    // supply an ApiKey record it already resolved server-side, instead of a
+    // raw secret. This cannot be forged over HTTP: routes/functions.js builds
+    // ctx from named fields only and never spreads req.body into it, so an
+    // external POST can set ctx.body but never ctx.__resolvedApiKey. This is
+    // the only other way in besides a raw key, and it exists because a raw
+    // supplier key cannot be recovered from storage (hash-only, Task S4) to
+    // replay intake for an existing lead the normal way.
     let apiKeyRecord = null;
-    if (supplierKeyRaw) {
+    if (ctx.__resolvedApiKey && ctx.__resolvedApiKey.id) {
+      apiKeyRecord = ctx.__resolvedApiKey;
+    } else if (supplierKeyRaw) {
       apiKeyRecord = await resolveActiveApiKey(db, supplierKeyRaw);
     }
     if (!apiKeyRecord) {
