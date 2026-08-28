@@ -6556,3 +6556,104 @@ has not been applied yet; once it is, reversing a single row is `UPDATE
 e_buyer_onboarding SET data = data || '{"status":"blocked"}'::jsonb WHERE
 id = '...'` (or `'submitted'` for the other), restoring its exact prior
 status.
+
+## Final engineering cleanup, deploy and production steps, 28 August 2026
+
+Continuing the same session. `8d2dcb5` (the commit covering the entry above)
+deployed successfully; this entry covers everything done against production
+once it was live.
+
+### Deployment
+
+GitHub Actions run `33147743996`: Gate and Deploy to production both
+`success`. `git rev-parse HEAD` on the VPS matches `8d2dcb5`. All five public
+hosts (`dashflo.io`, `app.dashflo.io`, `api.dashflo.io/api/health`,
+`docs.dashflo.io`) returned 200 immediately after. `docker compose logs app`
+shows no `[functions] failed to load` line for `resubmitLead.js` or anything
+else; the boot log shows `[dashos] loaded 109 functions`.
+
+### Integration metadata re-tested live, without sending anything
+
+Ran the exact, deployed `projectRead()` from `entityPolicy.js` (imported
+directly, inside the running `app` container) against the real
+`PullSource`/`LeadByteConnector` rows, printing only the projected result:
+
+- `PullSource` "Ringba Calls": masked to `"••••c97f"` (the real value is 232
+  characters, never printed - only its length was logged, to prove a real
+  value exists without showing it).
+- `LeadByteConnector`, all 4 rows: the one row with a real `X_KEY` header
+  masks to `[{"...Content-Type...","application/json"},{"key":"X_KEY",
+  "value":"[redacted]"}]`; the other three (Content-Type only, no secret-shaped
+  key) pass through unchanged, confirming the redaction is selective, not a
+  wholesale wipe.
+
+No live call was made to LeadByte, Ringba, or any other external provider -
+this only exercised DashFlo's own read-side code against data already in its
+own database.
+
+### `BuyerOnboarding` archival applied
+
+`node server/scripts/archive-orphaned-buyer-onboarding.js` (report only) on
+the deployed code found exactly the same 2 rows as the pre-deploy dry run.
+`--apply` set `status: 'cancelled'` on both; verified directly after
+(`data->>'status'` = `cancelled` for both ids) and confirmed idempotent (a
+third run finds nothing left to do). No other field was touched, `buyer_id`
+was not altered or invented on either row.
+
+### Post-cleanup production backup, restore-tested with a real application boot
+
+Ran `deploy/backup/pg-backup.sh` by hand as `dashflo` (the same script cron
+runs nightly): `dashflo-20260828T062844Z.dump`, 18,205,918 bytes, exit 0.
+SHA-256: `cf71f1180cb1054f666bd048d3ccfc820ecabbe6a950de8ba005518ba8704cfb`.
+
+Restored with `pg_restore --no-owner --no-acl` into a disposable
+`backup_restore_verify_20260828` database: clean exit. Verified against the
+restored copy, not the live database: `e_lead` 1984, `e_buyer` 13,
+`e_supplier` 5, `auth_credentials` 3, 101 tables, and - proving this backup is
+genuinely post-cleanup rather than stale - exactly 2 `BuyerOnboarding` rows
+with `status='cancelled'`, matching the archival applied minutes earlier.
+
+**Application boot verified against the restored data**, not just the
+`pg_restore` exit code: `docker compose run --rm --no-deps` started a
+disposable, unpublished (no port mapping to the host) instance of the real
+`app` image with `PGDATABASE` pointed at the restored database. It printed
+`[dashos] loaded 109 functions` and `[dashos] server listening on
+http://localhost:4001 (production)` - a real Express boot, past config
+loading, function loading and the DB connection the health check itself
+depends on, against the restored copy. Removed afterward (`--rm`); the
+disposable database was dropped and the copied dump file removed from the
+`db` container's `/tmp`.
+
+Retention: `pg-backup.sh`'s own 14-day window (`DASHFLO_BACKUP_RETENTION_DAYS`)
+pruned 0 dumps this run - nothing currently on disk is old enough to prune.
+No change was made to the retention policy itself.
+
+### Off-site backup and commercial safety, re-confirmed unchanged
+
+`deploy/backup/offsite.env` still does not exist on the VPS - the off-site
+sync step stays a no-op exactly as the prior session left it; no provider
+decision or credential was introduced this session. `NATIVE_RETRY_WORKER_ENABLED`
+absent, `BASE44_SYNC_ENABLED=0`, 0 active `RouteGroup` rows, checked again
+after every write in both entries of this session.
+
+### Evidence
+
+- GitHub Actions run `33147743996`, both jobs `success`.
+- `docker compose ps`: both containers healthy throughout; no restart other
+  than the one deliberate `OWNER_BOOTSTRAP_TOKEN` recreate in the entry above.
+- Direct `SELECT` against both the live database and the disposable restore
+  copy for every count in this entry.
+- `pg_restore` exit code, `sha256sum` of the dump file, and the disposable
+  app instance's own startup log lines.
+- Idempotency of the `BuyerOnboarding` archive script, proven by a third,
+  no-op run.
+
+### Rollback
+
+Nothing in this entry is destructive: the deploy is the already-gated commit
+from the entry above, the `BuyerOnboarding` rows reverse exactly as that
+entry's rollback section describes, and the backup/restore-verify work only
+ever touched a disposable database and a temp file inside the `db`
+container, both already removed. The fresh backup itself is a new, additive
+artifact retained under the existing policy, not a replacement for any prior
+one.
