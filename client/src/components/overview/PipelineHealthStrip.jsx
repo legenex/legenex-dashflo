@@ -1,23 +1,26 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
+import { LEAD_STATUS, resolveLeadStatus } from '@/lib/leadStatus';
 
-// Horizontal strip of counts per final_status for the period. Each count links
-// to the matching Leads view. Reads the passed leads only, never fabricates rows.
+// Horizontal strip of counts per lead_status for the period. Each count links
+// to the matching Leads view. Reads the passed leads only, never fabricates
+// rows. Seven-value vocabulary (forge-pack/CONTRACT.md D1): Processing,
+// Duplicate and Error no longer have their own tile; D4 collapses them into
+// Queued (Processing, Error) or Rejected (Duplicate).
 const STATUSES = [
-  { key: 'Processing', label: 'Processing', cls: 'status-processing', to: '/leads' },
-  { key: 'Sold', label: 'Sold', cls: 'status-sold', to: '/leads/sold' },
-  { key: 'Unsold', label: 'Unsold', cls: 'status-unsold', to: '/leads/unsold' },
-  { key: 'Disqualified', label: 'Disqualified', cls: 'status-disqualified', to: '/leads/disqualified' },
-  { key: 'Queued', label: 'Queued', cls: 'status-queued', to: '/leads/queued' },
-  { key: 'Returned', label: 'Returned', cls: 'status-returned', to: '/leads' },
-  { key: 'Duplicate', label: 'Duplicate', cls: 'status-duplicate', to: '/leads' },
-  { key: 'Error', label: 'Error', cls: 'status-error', to: '/leads' },
+  { key: LEAD_STATUS.SOLD, label: 'Sold', cls: 'status-sold', to: '/leads/sold' },
+  { key: LEAD_STATUS.UNSOLD, label: 'Unsold', cls: 'status-unsold', to: '/leads/unsold' },
+  { key: LEAD_STATUS.DISQUALIFIED, label: 'Disqualified', cls: 'status-disqualified', to: '/leads/disqualified' },
+  { key: LEAD_STATUS.QUEUED, label: 'Queued', cls: 'status-queued', to: '/leads/queued' },
+  { key: LEAD_STATUS.RETURNED, label: 'Returned', cls: 'status-returned', to: '/leads' },
+  { key: LEAD_STATUS.REJECTED, label: 'Rejected', cls: 'status-rejected', to: '/leads/rejected' },
+  { key: LEAD_STATUS.CONVERTED, label: 'Converted', cls: 'status-converted', to: '/leads/converted' },
 ];
 
 export default function PipelineHealthStrip({ leads = [] }) {
   const counts = {};
   for (const l of leads) {
-    const s = l.final_status || 'Processing';
+    const s = resolveLeadStatus(l) || LEAD_STATUS.QUEUED;
     counts[s] = (counts[s] || 0) + 1;
   }
 
@@ -28,7 +31,7 @@ export default function PipelineHealthStrip({ leads = [] }) {
   }
 
   return (
-    <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2 p-4">
+    <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2 p-4">
       {STATUSES.map(s => (
         <Link
           key={s.key}

@@ -7,6 +7,7 @@ import { differenceInHours } from 'date-fns';
 import SubNavShell from '@/components/layout/SubNavShell';
 import { defaultLeadsPeriod, resolvePeriod } from '@/lib/periodRange';
 import { leadEventInstant } from '@/lib/reportMetrics';
+import { LEAD_STATUS, matchesLeadView, resolveLeadStatus } from '@/lib/leadStatus';
 
 const ITEMS = [
   { label: 'All Leads', path: '/leads', icon: List, view: 'all' },
@@ -19,23 +20,6 @@ const ITEMS = [
   // Calls are CallRecords rather than leads and now live in their own
   // top-level Calls section, so they are no longer listed here.
 ];
-
-function matchesView(lead, view) {
-  switch (view) {
-    case 'all': return true;
-    case 'sold': return lead.final_status === 'Sold';
-    case 'unsold': return lead.final_status === 'Unsold';
-    case 'disqualified':
-      return lead.final_status === 'Disqualified' || lead.final_status === 'Error' || /disqual|dq/i.test(lead.leadbyte_record_status || '');
-    case 'rejected':
-      // Was matching final_status === 'Duplicate', which is wrong now that
-      // Duplicate is a real merge outcome rather than a stand-in for Rejected.
-      return lead.final_status === 'Rejected' || /reject/i.test(lead.leadbyte_record_status || '');
-    case 'converted': return lead.final_status === 'Converted';
-    case 'queued': return lead.final_status === 'Queued';
-    default: return true;
-  }
-}
 
 // Left sub-sidebar for the Leads section: LEADS group label, per-view icons with
 // live count badges, active red pill, and a queued-alert card for old queued leads.
@@ -87,7 +71,7 @@ export default function LeadsNav() {
     });
     const c = {};
     for (const item of ITEMS) {
-      c[item.view] = inWindow.filter(l => matchesView(l, item.view)).length;
+      c[item.view] = inWindow.filter(l => matchesLeadView(l, item.view)).length;
     }
     return c;
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -95,7 +79,7 @@ export default function LeadsNav() {
 
   const queuedOld = useMemo(() => {
     const now = new Date();
-    return leads.filter(l => l.final_status === 'Queued' && l.created_date && differenceInHours(now, new Date(l.created_date)) >= 5).length;
+    return leads.filter(l => resolveLeadStatus(l) === LEAD_STATUS.QUEUED && l.created_date && differenceInHours(now, new Date(l.created_date)) >= 5).length;
   }, [leads]);
 
   const railItems = ITEMS.map(item => ({ label: item.label, icon: item.icon, to: item.path, active: location.pathname === item.path }));

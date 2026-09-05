@@ -21,6 +21,7 @@ import { leadEventInstant, leadField } from '@/lib/reportMetrics';
 import { invalidateLeadCaches } from '@/lib/leadCaches';
 import { defaultLeadsPeriod, resolvePeriod } from '@/lib/periodRange';
 import LeadCountsStrip, { leadCounts } from '@/components/shared/LeadCountsStrip';
+import { LEAD_STATUS, LEAD_STATUS_LABEL, LEGACY_FINAL_STATUS, matchesLeadView, resolveLeadStatus } from '@/lib/leadStatus';
 
 function getFieldValue(lead, field) {
   if (lead[field] != null && lead[field] !== '') return String(lead[field]);
@@ -28,23 +29,6 @@ function getFieldValue(lead, field) {
   try { mf = JSON.parse(lead.mapped_fields || '{}'); } catch {}
   if (mf[field] != null && mf[field] !== '') return String(mf[field]);
   return '';
-}
-
-function matchesView(lead, view) {
-  switch (view) {
-    case 'all': return true;
-    case 'sold': return lead.final_status === 'Sold';
-    case 'unsold': return lead.final_status === 'Unsold';
-    case 'disqualified':
-      return lead.final_status === 'Disqualified' || lead.final_status === 'Error' || /disqual|dq/i.test(lead.leadbyte_record_status || '');
-    case 'rejected':
-      // Was matching final_status === 'Duplicate', which is wrong now that
-      // Duplicate is a real merge outcome rather than a stand-in for Rejected.
-      return lead.final_status === 'Rejected' || /reject/i.test(lead.leadbyte_record_status || '');
-    case 'converted': return lead.final_status === 'Converted';
-    case 'queued': return lead.final_status === 'Queued';
-    default: return true;
-  }
 }
 
 function matchesFilter(lead, filter) {
@@ -75,19 +59,14 @@ function matchesSearch(lead, q) {
     || (lead.supplier_name || '').toLowerCase().includes(query);
 }
 
-// Permanent filter dropdown options shown above every leads table.
-const STATUS_FILTER_OPTIONS = [
-  { value: 'Sold', label: 'Sold' },
-  { value: 'Converted', label: 'Converted' },
-  { value: 'Qualified', label: 'Qualified' },
-  { value: 'Disqualified', label: 'Disqualified' },
-  { value: 'Unsold', label: 'Unsold' },
-  { value: 'Rejected', label: 'Rejected' },
-  { value: 'Returned', label: 'Returned' },
-  { value: 'Queued', label: 'Queued' },
-  { value: 'Error', label: 'Error' },
-  { value: 'Duplicate', label: 'Duplicate' },
-];
+// Status filter options, shown only on the All Leads view (see
+// showStatusFilter below): the other tabs already imply a single status, so
+// offering this control there would be redundant at best and contradictory
+// at worst. Seven-value vocabulary (forge-pack/CONTRACT.md D1); values match
+// the canonical LEAD_STATUS constants, not a raw final_status literal.
+const STATUS_FILTER_OPTIONS = Object.values(LEAD_STATUS).map((value) => ({
+  value, label: LEAD_STATUS_LABEL[value],
+}));
 
 function getSource(lead) {
   let mf = {};
@@ -335,13 +314,13 @@ export default function LeadsTable({ view }) {
   const scoped = useMemo(() => {
     const { start, end } = resolvePeriod(period, customPeriod);
     return leads.filter(lead => {
-      if (!matchesView(lead, view)) return false;
+      if (!matchesLeadView(lead, view)) return false;
       const inst = leadEventInstant(lead);
       if (start && (!inst || inst < start)) return false;
       if (end && (!inst || inst > end)) return false;
       if (!customFilters.every(f => matchesFilter(lead, f))) return false;
       if (search && !matchesSearch(lead, search)) return false;
-      if (statusFilter.length > 0 && !statusFilter.includes(lead.final_status)) return false;
+      if (statusFilter.length > 0 && !statusFilter.includes(resolveLeadStatus(lead))) return false;
       return true;
     });
   }, [leads, view, period, customPeriod, customFilters, search, statusFilter]);
@@ -475,9 +454,11 @@ export default function LeadsTable({ view }) {
 
   const telemetry = useMemo(() => ({
     total: periodLeads.length,
-    sold: periodLeads.filter(l => l.final_status === 'Sold').length,
-    queued: periodLeads.filter(l => l.final_status === 'Queued').length,
-    errors: periodLeads.filter(l => l.final_status === 'Error').length,
+    sold: periodLeads.filter(l => resolveLeadStatus(l) === LEAD_STATUS.SOLD).length,
+    queued: periodLeads.filter(l => resolveLeadStatus(l) === LEAD_STATUS.QUEUED).length,
+    // A stuck lead (D4: the retired Error final_status collapses into queued
+    // + processing_state failed), not a distinct final outcome.
+    errors: periodLeads.filter(l => l.processing_state === 'failed').length,
     lastLeadAt: leads[0]?.created_date || null,
   }), [periodLeads, leads]);
 
@@ -582,7 +563,16 @@ export default function LeadsTable({ view }) {
   const handleBulkQueue = async () => {
     const ids = Array.from(selectedIds);
     for (const id of ids) {
-      await api.entities.Lead.update(id, { final_status: 'Queued' });
+      // Dual-write final_status and lead_status: this is a direct client
+      // mutation through the generic entity API, bypassing
+      // server/src/functions/processLead.js entirely, so it is responsible
+      // for its own new-vocabulary write (forge-pack/CONTRACT.md D1) the same
+      // way client/src/lib/importFinalize.js is for CSV imports.
+      await api.entities.Lead.update(id, {
+        final_status: LEGACY_FINAL_STATUS.QUEUED,
+        lead_status: LEAD_STATUS.QUEUED,
+        processing_state: 'settled',
+      });
     }
     toast.success(`${ids.length} lead${ids.length !== 1 ? 's' : ''} queued`);
     clearSelection();
@@ -657,6 +647,11 @@ export default function LeadsTable({ view }) {
         onApplySet={applySavedSet}
         filterFields={filterFields}
         resultCount={filtered.length}
+        // Only All Leads may offer a Status filter: every other tab already
+        // implies a single status, so the control would be redundant there
+        // (Sold, Unsold, Disqualified, Rejected) or otherwise never the
+        // literal tab it names (Queued, Converted).
+        showStatusFilter={view === 'all'}
         statusFilter={statusFilter}
         setStatusFilter={setStatusFilter}
         statusOptions={STATUS_FILTER_OPTIONS}
@@ -818,7 +813,7 @@ export default function LeadsTable({ view }) {
                       const value = ls && ls !== '-' ? String(ls) : '';
                       return (
                         <td key={col.key} className="px-4 py-3" style={widthStyle}>
-                          {value && value !== 'Qualified' ? <StatusPill status={value} /> : <span className="text-muted-foreground">-</span>}
+                          {value && value !== LEGACY_FINAL_STATUS.QUALIFIED ? <StatusPill status={value} /> : <span className="text-muted-foreground">-</span>}
                         </td>
                       );
                     }

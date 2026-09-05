@@ -11,7 +11,7 @@ import SectionHeader from '@/components/shared/SectionHeader';
 import RefreshButton from '@/components/shared/RefreshButton';
 import PeriodTabs from '@/components/shared/PeriodTabs';
 import { resolvePeriod, priorWindow, PERIOD_LABELS } from '@/lib/periodRange';
-import { operationalMetrics, leadsOverTime, supplierBreakdown } from '@/lib/distributionMetrics';
+import { operationalMetrics, leadsOverTime, supplierBreakdown, unsoldReasonBreakdown } from '@/lib/distributionMetrics';
 import {
   ResponsiveContainer, ComposedChart, Area, Line, XAxis, YAxis, Tooltip, CartesianGrid, ReferenceLine,
 } from 'recharts';
@@ -132,6 +132,11 @@ export default function DistributionDashboard() {
   const priorM = useMemo(() => operationalMetrics(leads, errors, prior), [leads, errors, prior]);
   const series = useMemo(() => leadsOverTime(m.leads, win), [m.leads, win]);
   const chartData = useMemo(() => series.map(d => ({ day: d.date, volume: d.Total, sold: d.Sold })), [series]);
+  // Unsold reason breakdown (forge-pack/CONTRACT.md D1: qualified, entered
+  // distribution, no buyer bought it - includes buyers being asked and
+  // saying no). WORK-UNITS.yaml W3-UI-STATUS acceptance criterion: this must
+  // appear as a dimension on the Distribution report.
+  const unsoldReasons = useMemo(() => unsoldReasonBreakdown(m.leads), [m.leads]);
 
   const hlrProvider = hlrArr[0]?.provider_name;
   const emailActive = emailArr.length > 0 ? (emailArr[0]?.enabled !== false) : true;
@@ -166,7 +171,8 @@ export default function DistributionDashboard() {
       pctDq: priorM.pctDq, pctError: priorM.pctError,
     },
     suppliers: supplierBreakdown(m.leads).slice(0, 15),
-  }), [m, priorM, period]);
+    unsoldReasons: unsoldReasons.rows,
+  }), [m, priorM, period, unsoldReasons]);
 
   const copyEndpoint = () => {
     try { navigator.clipboard.writeText(endpointUrl); toast.success('Endpoint copied'); } catch { /* noop */ }
@@ -287,6 +293,34 @@ export default function DistributionDashboard() {
             })}
           </div>
         </Panel>
+
+        {/* Top Unsold Reasons: qualified, entered distribution, no buyer
+            bought it (forge-pack/CONTRACT.md D1), including buyers being
+            asked and saying no. */}
+        {unsoldReasons.rows.length > 0 && (
+          <Panel>
+            <div className="flex items-center justify-between px-5 pt-4 pb-2">
+              <div className="flex items-center gap-2">
+                <XCircle size={15} className="text-muted-foreground" />
+                <h3 className="text-[13px] font-semibold text-foreground">Top Unsold Reasons · {PERIOD_LABELS[period]}</h3>
+              </div>
+              <Tag tone="amber">{unsoldReasons.total} unsold</Tag>
+            </div>
+            <div className="px-5 pb-5 space-y-2">
+              {unsoldReasons.rows.map((row) => (
+                <div key={row.reason}>
+                  <div className="flex items-center justify-between text-[12px] mb-1">
+                    <span className="text-foreground truncate max-w-[70%]">{row.reason}</span>
+                    <span className="font-mono text-muted-foreground">{row.count} <span className="text-muted-foreground/60">({row.pct}%)</span></span>
+                  </div>
+                  <div className="h-1.5 rounded-full bg-muted/50 overflow-hidden">
+                    <div className="h-full bg-status-unsold rounded-full" style={{ width: `${row.pct}%` }} />
+                  </div>
+                </div>
+              ))}
+            </div>
+          </Panel>
+        )}
 
         {/* Chart + AI */}
         <div className="grid grid-cols-1 xl:grid-cols-[1.6fr_1fr] gap-4">

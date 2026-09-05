@@ -5,6 +5,7 @@ import { leadField, leadEventInstant, leadEventDayKey, spendRows, leadCost, inte
 import { formatInTimeZone } from 'date-fns-tz';
 import { APP_TZ } from '@/lib/periodRange';
 import { format, isWithinInterval, startOfDay, subDays } from 'date-fns';
+import { LEAD_STATUS, resolveLeadStatus } from '@/lib/leadStatus';
 
 function num(v) { const n = Number(v); return isNaN(n) ? 0 : n; }
 const inWin = (d, win) => d && isWithinInterval(new Date(d), { start: win.start, end: win.end });
@@ -73,7 +74,7 @@ export function financialTruth({ leads, buyers, suppliers, invoices, payments, p
   const totalCost = accruedCost + trackedSpend;
   // CPL is cost per SOLD lead, not per lead received. Dividing by every lead
   // (DQs are the majority) understates what a sold lead actually costs.
-  const soldCount = wLeads.filter((l) => String(l.final_status || '') === 'Sold').length;
+  const soldCount = wLeads.filter((l) => resolveLeadStatus(l) === LEAD_STATUS.SOLD).length;
   const blendedCpl = soldCount > 0 ? totalCost / soldCount : 0;
 
   const kpis = {
@@ -153,21 +154,25 @@ export function actionQueue({ reconRows, wb }, txns) {
   return { items: items.sort((a, b) => b.amount - a.amount), totalAtRisk };
 }
 
-// Leads-by-status donut (financial framing).
+// Leads-by-status donut (financial framing). Seven-value vocabulary
+// (forge-pack/CONTRACT.md D1): Duplicate and Error no longer have their own
+// slice, since D4 collapses Duplicate into Rejected and Error into Queued
+// (a stuck, still-processing lead, not a distinct outcome).
 export function financeDonut(wLeads) {
-  const by = (s) => wLeads.filter(l => l.final_status === s).length;
+  const by = (s) => wLeads.filter(l => resolveLeadStatus(l) === s).length;
   const unmatchedLeads = wLeads.filter(l => !leadField(l, 'buyer_id')).length;
   // `tone` is the semantic status class (DESIGN-SYSTEM.md); consumers that draw
   // with CSS use it with bg-current so both themes resolve correctly. `color` is
   // retained for recharts consumers that need a literal fill.
   return [
-    { name: 'Sold', value: by('Sold'), color: '#22C55E', tone: 'status-sold' },
-    { name: 'Duplicate', value: by('Duplicate'), color: '#64748B', tone: 'status-duplicate' },
-    { name: 'Returned', value: by('Returned'), color: '#06B6D4', tone: 'status-returned' },
-    { name: 'Unsold', value: by('Unsold'), color: '#F59E0B', tone: 'status-unsold' },
-    { name: 'Rejected', value: wLeads.filter(l => (l.leadbyte_record_status || '').toLowerCase() === 'rejected').length, color: '#EF4444', tone: 'status-rejected' },
-    { name: 'Error', value: by('Error'), color: '#DC2626', tone: 'status-lead-error' },
-    { name: 'Unmatched', value: unmatchedLeads, color: '#A855F7', tone: 'status-queued' },
+    { name: 'Sold', value: by(LEAD_STATUS.SOLD), color: '#22C55E', tone: 'status-sold' },
+    { name: 'Unsold', value: by(LEAD_STATUS.UNSOLD), color: '#F59E0B', tone: 'status-unsold' },
+    { name: 'Disqualified', value: by(LEAD_STATUS.DISQUALIFIED), color: '#F97316', tone: 'status-disqualified' },
+    { name: 'Queued', value: by(LEAD_STATUS.QUEUED), color: '#A855F7', tone: 'status-queued' },
+    { name: 'Returned', value: by(LEAD_STATUS.RETURNED), color: '#06B6D4', tone: 'status-returned' },
+    { name: 'Rejected', value: by(LEAD_STATUS.REJECTED), color: '#EF4444', tone: 'status-rejected' },
+    { name: 'Converted', value: by(LEAD_STATUS.CONVERTED), color: '#3B82F6', tone: 'status-converted' },
+    { name: 'Unmatched', value: unmatchedLeads, color: '#94A3B8', tone: 'status-queued' },
   ].filter(d => d.value > 0);
 }
 
@@ -195,7 +200,7 @@ export function topCampaigns(wLeads) {
     if (!groups[key]) groups[key] = { name: key, leads: 0, estimated: 0, verified: 0 };
     groups[key].leads += 1;
     groups[key].estimated += num(l.revenue) - leadCost(l);
-    if (l.final_status === 'Sold') groups[key].verified += num(l.revenue) - leadCost(l);
+    if (resolveLeadStatus(l) === LEAD_STATUS.SOLD) groups[key].verified += num(l.revenue) - leadCost(l);
   }
   return Object.values(groups)
     .map(g => ({

@@ -56,7 +56,12 @@ export function brandColor(code) {
 // Neutral grey pill for operation / meta tags (Default, conditions, Brands, etc.)
 export const TAG_NEUTRAL = 'tag-neutral';
 
-// Final / lead-status pill classes (bg + text).
+// Final / lead-status pill classes (bg + text). Seven-value vocabulary
+// (forge-pack/CONTRACT.md D1). "Duplicate" and "Fake" collapse into Rejected
+// under D4 and no longer have their own tag; a caller passing a raw legacy
+// label through this map should resolve it to the new vocabulary first (see
+// client/src/lib/leadStatus.js's resolveLeadStatus / leadStatusLabel) rather
+// than expecting a retired label to still resolve here.
 export const STATUS_TAG = {
   Sold: 'bg-status-sold status-sold',
   Unsold: 'bg-status-unsold status-unsold',
@@ -64,12 +69,8 @@ export const STATUS_TAG = {
   Returned: 'bg-status-returned status-returned',
   Rejected: 'bg-status-rejected status-rejected',
   Converted: 'bg-status-converted status-converted',
-  Error: 'bg-status-lead-error status-lead-error',
-  Processing: 'bg-status-processing status-processing',
   Queued: 'bg-status-queued status-queued',
-  Duplicate: 'bg-status-duplicate status-duplicate',
   '24m Lead': 'bg-status-24m status-24m',
-  Qualified: 'bg-status-qualified status-qualified',
 };
 
 // Text-only colour class for a status (used in tables that show coloured text).
@@ -80,26 +81,24 @@ const STATUS_TEXT = {
   Returned: 'status-returned',
   Rejected: 'status-rejected',
   Converted: 'status-converted',
-  Error: 'status-lead-error',
-  Processing: 'status-processing',
   Queued: 'status-queued',
-  Duplicate: 'status-duplicate',
   '24m Lead': 'status-24m',
-  Qualified: 'status-qualified',
 };
 
 function normalize(s) {
   return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 }
 
-// Pill class (bg + text) for a status label. Handles aliases like "24m_lead" and
-// "leadbyte duplicate" → Duplicate.
+// Pill class (bg + text) for a status label. Handles the "24m_lead" alias and
+// folds a leftover "duplicate" label (a row that has not been through the
+// D4 migration's rejected collapse yet) onto Rejected rather than a retired
+// tag of its own.
 export function statusTagClass(status) {
   if (!status) return 'bg-muted text-muted-foreground';
   if (STATUS_TAG[status]) return STATUS_TAG[status];
   const n = normalize(status);
   if (n === '24m lead') return STATUS_TAG['24m Lead'];
-  if (n === 'leadbyte duplicate' || n === 'duplicate') return STATUS_TAG.Duplicate;
+  if (n === 'leadbyte duplicate' || n === 'duplicate' || n === 'fake') return STATUS_TAG.Rejected;
   return 'bg-muted text-muted-foreground';
 }
 
@@ -109,22 +108,32 @@ export function statusTextClass(status) {
   if (STATUS_TEXT[status]) return STATUS_TEXT[status];
   const n = normalize(status);
   if (n === '24m lead') return STATUS_TEXT['24m Lead'];
-  if (n === 'leadbyte duplicate' || n === 'duplicate') return STATUS_TEXT.Duplicate;
+  if (n === 'leadbyte duplicate' || n === 'duplicate' || n === 'fake') return STATUS_TEXT.Rejected;
   return 'text-muted-foreground';
 }
 
-// Trigger key -> { label, className }
+// Trigger key -> { label, className }. Canonical keys match
+// server/src/lib/leadStatus.js's TRIGGER export. "on_qualified" is the intake
+// trigger (fires once, when a submission is first durably accepted); D1
+// retired "Qualified" as a displayed status but the underlying intake event
+// still exists and keeps a non-retired label here. A stored connector still
+// carrying one of the four retired keys server/src/lib/leadStatus.js's
+// LEGACY_TRIGGER names is not in this map and falls back to the generic
+// on_<slug> label upstream (see client/src/lib/leadStatus.js's
+// statusLabelFor) until the unowned pass forge-pack/state/BLOCKERS.md
+// describes migrates the settings screens that still write those keys.
 export const TRIGGER_TAG = {
-  on_received: { label: 'Qualified', className: 'bg-status-qualified status-qualified' },
+  on_qualified: { label: 'Lead Accepted', className: 'bg-status-queued status-queued' },
   on_sold: { label: 'Sold', className: 'bg-status-sold status-sold' },
   on_unsold: { label: 'Unsold', className: 'bg-status-unsold status-unsold' },
-  on_dq: { label: 'Disqualified', className: 'bg-status-disqualified status-disqualified' },
+  on_disqualified: { label: 'Disqualified', className: 'bg-status-disqualified status-disqualified' },
   on_queued: { label: 'Queued', className: 'bg-status-queued status-queued' },
   on_rejected: { label: 'Rejected', className: 'bg-status-rejected status-rejected' },
-  on_duplicates: { label: 'Duplicate', className: 'bg-status-duplicate status-duplicate' },
+  on_rejected_duplicate: { label: 'Rejected (Duplicate)', className: 'bg-status-rejected status-rejected' },
   on_24m_lead: { label: '24m Lead', className: 'bg-status-24m status-24m' },
   on_returned: { label: 'Returned', className: 'bg-status-returned status-returned' },
-  on_error: { label: 'Error', className: 'bg-status-lead-error status-lead-error' },
+  on_converted: { label: 'Converted', className: 'bg-status-converted status-converted' },
+  on_processing_failed: { label: 'Processing Failed', className: 'bg-status-queued status-queued' },
 };
 
 export function triggerTagClass(triggerKey) {

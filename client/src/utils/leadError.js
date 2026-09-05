@@ -1,5 +1,7 @@
-// Extract the real failure reason for a lead with final_status === 'Error'.
-// Returns a short human-readable string pulled from the lead's stored fields,
+// Extract the real failure reason for a stuck lead (lead_status queued,
+// processing_state failed - forge-pack/CONTRACT.md D4 collapses the retired
+// Error final_status here). Returns a short human-readable string pulled
+// from the lead's stored fields,
 // optionally enriched with a related ErrorLog entry.
 //
 // Priority:

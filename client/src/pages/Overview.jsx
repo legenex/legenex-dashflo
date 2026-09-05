@@ -21,6 +21,7 @@ import PipelineHealthStrip from '@/components/overview/PipelineHealthStrip';
 import LeadVolumeByStatus from '@/components/overview/LeadVolumeByStatus';
 import OverviewRejectionReasons from '@/components/overview/OverviewRejectionReasons';
 import SupplierLeaderboard from '@/components/overview/SupplierLeaderboard';
+import { LEAD_STATUS } from '@/lib/leadStatus';
 import { Badge } from '@/components/ui/badge';
 import {
   Bar, Line, ComposedChart, XAxis, YAxis, Tooltip, Legend,
@@ -28,7 +29,7 @@ import {
 } from 'recharts';
 import {
   DollarSign, TrendingUp, Megaphone, Users, Layers, Trophy, ShieldAlert, ArrowUpRight,
-  CheckCircle2, AlertTriangle, Activity, GitBranch, BarChart3, ListFilter, Award,
+  CheckCircle2, AlertTriangle, Activity, GitBranch, BarChart3, ListFilter, Award, UserX,
 } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { resolvePeriod, PERIOD_LABELS } from '@/lib/periodRange';
@@ -567,16 +568,33 @@ export default function Overview() {
         </AnimatedPanel>
       </Reveal>
 
+      {/* Top Rejection Reasons (post-time rejections, the `rejected` status)
+          and Top Unsold Reasons (buyer-side and routing rejections, the
+          `unsold` status, including buyers being asked and saying no) used to
+          be one "Top Rejection Reasons" card mixing Queued, Disqualified and
+          Error leads together. forge-pack/CONTRACT.md D1 / WORK-UNITS.yaml
+          W3-UI-STATUS splits it into the two real, distinct D1 statuses. */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-4">
         <Reveal delay={0.05}>
           <AnimatedPanel duration={6.2}>
             <div className="overflow-hidden">
               <PanelSectionHeader icon={ListFilter} title="Top Rejection Reasons" meta={PERIOD_LABELS[period]} />
-              <OverviewRejectionReasons leads={periodLeads} />
+              <OverviewRejectionReasons leads={periodLeads} status={LEAD_STATUS.REJECTED} />
             </div>
           </AnimatedPanel>
         </Reveal>
 
+        <Reveal delay={0.1}>
+          <AnimatedPanel duration={6}>
+            <div className="overflow-hidden">
+              <PanelSectionHeader icon={UserX} title="Top Unsold Reasons" meta={PERIOD_LABELS[period]} />
+              <OverviewRejectionReasons leads={periodLeads} status={LEAD_STATUS.UNSOLD} />
+            </div>
+          </AnimatedPanel>
+        </Reveal>
+      </div>
+
+      <div className="grid grid-cols-1 mt-4">
         <Reveal delay={0.1}>
           <AnimatedPanel duration={5.8}>
             <div className="overflow-hidden">

@@ -34,6 +34,11 @@ export default function LeadsFilterBar({
   savedSets, onSaveSet, onDeleteSet, onApplySet,
   filterFields,
   resultCount,
+  // Only the All Leads view passes true. Every other tab already implies a
+  // single status (or, for Queued/Converted, is exactly the status a Status
+  // filter would just re-select), so the control is hidden there rather than
+  // offered and ignored.
+  showStatusFilter = true,
   statusFilter, setStatusFilter, statusOptions,
   supplierFilter, setSupplierFilter, supplierOptions,
   buyerFilter, setBuyerFilter, buyerOptions = [],
@@ -106,13 +111,15 @@ export default function LeadsFilterBar({
   // inline on desktop and inside the mobile sheet. Identical markup either way.
   const controls = (
     <>
-      <MultiSelect
-        value={Array.isArray(statusFilter) ? statusFilter : []}
-        onValueChange={setStatusFilter}
-        className="w-full lg:w-[160px] bg-card border-border"
-        options={statusOptions}
-        placeholder="All Status"
-      />
+      {showStatusFilter && (
+        <MultiSelect
+          value={Array.isArray(statusFilter) ? statusFilter : []}
+          onValueChange={setStatusFilter}
+          className="w-full lg:w-[160px] bg-card border-border"
+          options={statusOptions}
+          placeholder="All Status"
+        />
+      )}
       <MultiSelect
         value={Array.isArray(supplierFilter) ? supplierFilter : []}
         onValueChange={setSupplierFilter}

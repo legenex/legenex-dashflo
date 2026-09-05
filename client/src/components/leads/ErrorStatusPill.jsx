@@ -3,15 +3,28 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import StatusPill from '@/components/shared/StatusPill';
 import { getLeadErrorReason } from '@/utils/leadError';
+import { LEAD_STATUS, leadStatusLabel, resolveLeadStatus } from '@/lib/leadStatus';
 import { AlertCircle, Clock, Copy } from 'lucide-react';
+
+// The one reason code D4 names specifically for a Duplicate collapse
+// (forge-pack/CONTRACT.md D4; server/src/lib/leadStatus.js's
+// STATUS_REASON.REJECTED_DUPLICATE). Not a retired status value: a reason
+// code the new vocabulary introduces, so it is not subject to
+// forge-pack/scripts/check-status-vocabulary.mjs's retired-literal check.
+const REJECTED_DUPLICATE_REASON = 'REJECTED_DUPLICATE';
 
 export default function ErrorStatusPill({ lead, errorLogEntry, onOpenDetail, size = 'sm' }) {
   const [open, setOpen] = useState(false);
 
   if (!lead) return <StatusPill status={undefined} size={size} />;
 
-  // Queued status: show queue_reason in tooltip and popover
-  if (lead.final_status === 'Queued') {
+  const status = resolveLeadStatus(lead);
+
+  // Queued: show queue_reason in tooltip and popover. Covers every legacy
+  // value D4 collapses into queued (the retired Processing/Qualified/Error
+  // final_status values), not only a lead whose final_status is literally
+  // "Queued".
+  if (status === LEAD_STATUS.QUEUED && lead.processing_state !== 'failed') {
     const reason = lead.queue_reason || 'Queued for manual handling';
     return (
       <TooltipProvider delayDuration={150}>
@@ -50,7 +63,13 @@ export default function ErrorStatusPill({ lead, errorLogEntry, onOpenDetail, siz
     );
   }
 
-  if (lead.final_status === 'Duplicate') {
+  // Rejected specifically for the duplicate reason D4 names
+  // (forge-pack/CONTRACT.md D4: the retired Duplicate final_status collapses
+  // into rejected, status_reason REJECTED_DUPLICATE, linked to the original
+  // lead). Still worth its own visual treatment: the lead genuinely is a
+  // duplicate submission, D1 just files that under rejected rather than
+  // giving it a status of its own.
+  if (status === LEAD_STATUS.REJECTED && lead.status_reason === REJECTED_DUPLICATE_REASON) {
     const reason = lead.queue_reason || 'Duplicate lead detected';
     return (
       <TooltipProvider delayDuration={150}>
@@ -89,8 +108,11 @@ export default function ErrorStatusPill({ lead, errorLogEntry, onOpenDetail, siz
     );
   }
 
-  if (lead.final_status !== 'Error') {
-    return <StatusPill status={lead.final_status} size={size} />;
+  // Everything left is either a genuinely stuck lead (queued, but
+  // processing_state failed - D4: the retired Error final_status collapses
+  // here) or a settled outcome the generic pill already knows how to render.
+  if (lead.processing_state !== 'failed') {
+    return <StatusPill status={leadStatusLabel(lead) || lead.final_status} size={size} />;
   }
 
   const reason = getLeadErrorReason(lead, errorLogEntry);
@@ -105,7 +127,7 @@ export default function ErrorStatusPill({ lead, errorLogEntry, onOpenDetail, siz
               <button type="button" className="inline-flex items-center gap-1 focus:outline-none">
                 <span className="inline-flex items-center rounded-full bg-status-error status-error px-2 py-0.5 text-[11px] font-semibold gap-1">
                   <AlertCircle className="w-3 h-3" />
-                  Error
+                  Stuck
                 </span>
               </button>
             </PopoverTrigger>
