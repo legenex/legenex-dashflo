@@ -86,6 +86,10 @@ describe.skipIf(!reachable)('W2-STATUS: seven-status migration', () => {
   let hashApiKey;
   let mintApiKey;
   let dncLib;
+  let webhook;
+  let leadbyteWebhook;
+  let migrationScript;
+  let sha256Hex;
 
   beforeAll(async () => {
     await maintenance(`DROP DATABASE IF EXISTS ${TEST_DB}`);
@@ -106,6 +110,14 @@ describe.skipIf(!reachable)('W2-STATUS: seven-status migration', () => {
     dncLib = await import('../src/lib/dnc.js');
     ({ hashApiKey, mintApiKey } = await import('../src/lib/apiKeys.js'));
     processLead = (await import('../src/functions/processLead.js')).default;
+    // The two live outcome endpoints, exercised for real rather than by
+    // reading their source. Adversarial QA finding B2.
+    webhook = (await import('../src/functions/webhook.js')).default;
+    leadbyteWebhook = (await import('../src/functions/leadbyteWebhook.js')).default;
+    // The migration's invokable entry point. Adversarial QA finding B1.
+    migrationScript = await import('../scripts/migrate-status-vocabulary.js');
+    const { createHash } = await import('node:crypto');
+    sha256Hex = (input) => createHash('sha256').update(input).digest('hex');
   });
 
   afterAll(async () => {
@@ -386,10 +398,17 @@ describe.skipIf(!reachable)('W2-STATUS: seven-status migration', () => {
 
     const second = await status.migrateStatusVocabulary(db);
     expect(second.leads.counts.newly_migrated).toBe(0);
+    expect(second.leads.counts.verified_consistent).toBe(0);
     expect(second.connectors.counts.api_connectors_remapped).toBe(0);
     expect(second.connectors.counts.leadbyte_connectors_remapped).toBe(0);
     expect(second.connectors.counts.inbound_routes_remapped).toBe(0);
-    expect(second.verification.clean).toBe(true);
+    // NOT clean, and that is the point of finding S1 below: this fixture
+    // deliberately contains a lead on a value the mapping does not know and a
+    // duplicate with no identifiable original. Both need a human. This
+    // assertion used to read `toBe(true)`, which is how a verification that
+    // ignored its own exception list managed to look green on a dirty
+    // dataset for as long as it did.
+    expect(second.verification.clean).toBe(false);
 
     for (const lead of await db.entities.Lead.list('-created_date', 500, 0)) {
       expect(JSON.stringify(lead), `row changed on the second run: ${lead.id}`).toBe(snapshot.get(lead.id));
@@ -612,9 +631,10 @@ describe.skipIf(!reachable)('W2-STATUS: seven-status migration', () => {
     // routing, which is indistinguishable from a lead in flight right now, and
     // a historical Queued row looks exactly like one waiting for an operator.
     // Every migrated row is excluded, which is the superset that cannot flood.
+    // The only row not covered is the one the migration refused to touch,
+    // because its final_status is a value nothing knows how to map.
     const all = await db.entities.Lead.list('-created_date', 500, 0);
-    const migratedRows = all.filter((l) => l.id !== leads.unmappable.id
-      && l.id !== leads.alreadyRejectedDnc.id && l.id !== leads.alreadySold.id);
+    const migratedRows = all.filter((l) => l.id !== leads.unmappable.id);
     for (const lead of migratedRows) {
       expect(status.isExcludedFromRedrive(lead), `${lead.id} is re-drive eligible`).toBe(true);
     }
@@ -627,25 +647,112 @@ describe.skipIf(!reachable)('W2-STATUS: seven-status migration', () => {
     expect(stuckAndEligible).toEqual([]);
   });
 
-  it('leaves a lead already on a target status completely alone', async () => {
+  it('rewrites nothing on a lead already on a target status, and records that it looked', async () => {
+    // Adversarial QA finding S2. This test used to assert that such a row came
+    // out byte-identical, INCLUDING carrying no migrated_at, on the reasoning
+    // that a lead the live path already wrote correctly is not a migration
+    // candidate. It is: the migration examined it and confirmed it. Leaving no
+    // trace made it indistinguishable from a row the migration never reached,
+    // which broke the unit's fourth claim for exactly the rows a reader would
+    // most want to ask about. The additive guarantee is unchanged and is what
+    // this test now pins: every field except the marker is untouched.
     const leads = await seedSyntheticLeads();
     const beforeDnc = await reload(leads.alreadyRejectedDnc.id);
     const beforeSold = await reload(leads.alreadySold.id);
 
-    await status.migrateStatusVocabulary(db);
+    const { leads: leadReport } = await status.migrateStatusVocabulary(db);
 
     const afterDnc = await reload(leads.alreadyRejectedDnc.id);
     const afterSold = await reload(leads.alreadySold.id);
 
-    // No new fields, no migrated_at stamp, nothing rewritten. A lead the live
-    // path already wrote correctly is not a migration candidate.
-    expect(afterDnc).toEqual(beforeDnc);
-    expect(afterSold).toEqual(beforeSold);
-    expect(afterDnc.migrated_at).toBeUndefined();
+    // Reported as examined-and-consistent, not as newly migrated.
+    expect(leadReport.counts.verified_consistent).toBe(2);
+
+    const ignoringBookkeeping = (row) => {
+      const { migrated_at: marker, updated_date: touched, ...rest } = row;
+      return rest;
+    };
+    expect(ignoringBookkeeping(afterDnc)).toEqual(ignoringBookkeeping(beforeDnc));
+    expect(ignoringBookkeeping(afterSold)).toEqual(ignoringBookkeeping(beforeSold));
+    expect(afterDnc.migrated_at).toBeTruthy();
+    expect(afterSold.migrated_at).toBeTruthy();
     expect(afterDnc.status_reason).toBe('REJECTED_DNC');
-    // And because it carries no migrated_at, it stays re-drive eligible,
-    // which is correct: it was never migrated.
-    expect(status.isRedriveEligible(afterDnc)).toBe(true);
+    expect(afterDnc.lead_status).toBe('rejected');
+    expect(afterSold.lead_status).toBe('sold');
+  });
+
+  it('a row that fails again for real AFTER the migration is re-drivable, marker or not', async () => {
+    // Adversarial QA finding S3, proven end to end rather than on a literal.
+    // migrated_at is permanent and never cleared, so the presence test this
+    // predicate used to be would have hidden this lead from W4-REAPER for the
+    // rest of its life: no log line, no queue entry, just a stuck lead nobody
+    // was coming for.
+    const leads = await seedSyntheticLeads();
+    await status.migrateStatusVocabulary(db);
+
+    const migrated = await reload(leads.errored.id);
+    expect(migrated.migrated_at).toBeTruthy();
+    expect(status.isRedriveEligible(migrated)).toBe(false);
+
+    // Months later, a live processLead run touches this lead and it fails for
+    // real. processLead.js writes processed_at on every branch it takes, and
+    // leadStatus.js structurally cannot write it (not in STATUS_PATCH_FIELDS),
+    // so a later value there can only have come from a live path.
+    await db.entities.Lead.update(leads.errored.id, {
+      processing_state: status.PROCESSING_STATE.FAILED,
+      processed_at: '2026-11-20T09:00:00.000Z',
+    });
+
+    const failedAgain = await reload(leads.errored.id);
+    expect(failedAgain.migrated_at).toBe(migrated.migrated_at); // never rewritten
+    expect(status.isRedriveEligible(failedAgain)).toBe(true);
+
+    // And a re-run of the migration still will not touch it: "already
+    // migrated" and "not re-drivable" are now separate questions.
+    const { counts } = await status.backfillLeadStatus(db);
+    expect(counts.newly_migrated).toBe(0);
+    expect((await reload(leads.errored.id)).migrated_at).toBe(migrated.migrated_at);
+  });
+
+  // ── Adversarial QA finding S1: the verification must fail on a dirty run ──
+
+  it('reports clean false when a lead could not be mapped, or an exception was raised', async () => {
+    // `clean` used to be computed from the two scans alone and reported true on
+    // this very fixture, which contains a lead on a value the mapping does not
+    // know and a duplicate with no identifiable original. Neither scan can see
+    // either: an unmapped row has no lead_status at all, so it is invisible to
+    // findLeadsOnRetiredStatus, and findRetiredTriggerKeys is about connectors.
+    await seedSyntheticLeads();
+    const report = await status.migrateStatusVocabulary(db);
+
+    expect(report.verification.leads_on_retired_status).toEqual([]);
+    expect(report.verification.retired_trigger_keys_remaining).toEqual([]);
+    // The two scans are clean, and the run is NOT.
+    expect(report.verification.unmapped_leads).toBe(1);
+    expect(report.verification.exceptions).toBe(2); // unmappable + orphan duplicate
+    expect(report.verification.clean).toBe(false);
+  });
+
+  it('reports clean true only when there is genuinely nothing left for a human', async () => {
+    // The other half. A check that can only ever say "not clean" is as useless
+    // as one that can only ever say "clean", so prove it flips.
+    const L = status.LEGACY_STATUS;
+    await seedLead({ final_status: L.SOLD, revenue: 100 });
+    await seedLead({ final_status: L.UNSOLD });
+    await seedLead({ final_status: L.QUALIFIED });
+    await seedLead({ final_status: L.ERROR });
+
+    const report = await status.migrateStatusVocabulary(db);
+    expect(report.leads.counts.unmapped).toBe(0);
+    expect(report.leads.exceptions).toEqual([]);
+    expect(report.verification.clean).toBe(true);
+
+    // Now introduce exactly one unmappable row and watch it flip, so the
+    // verdict is demonstrably driven by the thing it claims to be driven by.
+    await seedLead({ final_status: 'Some Custom Status' });
+    const dirty = await status.migrateStatusVocabulary(db);
+    expect(dirty.verification.unmapped_leads).toBe(1);
+    expect(dirty.verification.clean).toBe(false);
   });
 
   // ── Acceptance step 5: DNC-suppressed leads (D3) ─────────────────────────
@@ -782,12 +889,427 @@ describe.skipIf(!reachable)('W2-STATUS: seven-status migration', () => {
       }, rawKey));
 
       const { counts } = await status.backfillLeadStatus(db);
+      // Nothing to change: the live path wrote every target value already.
       expect(counts.newly_migrated).toBe(0);
-      expect(counts.already_migrated).toBe(1);
+      // It IS examined and confirmed, though, and says so. Finding S2: this
+      // used to assert already_migrated 1 and migrated_at undefined, which
+      // left a row the migration had looked at and verified looking exactly
+      // like one it had never reached.
+      expect(counts.verified_consistent).toBe(1);
+      expect(counts.already_migrated).toBe(0);
 
       const [lead] = await db.entities.Lead.list('-created_date', 50, 0);
-      expect(lead.migrated_at).toBeUndefined();
+      expect(lead.migrated_at).toBeTruthy();
       expect(lead.status_reason).toBe(status.STATUS_REASON.REJECTED_DNC);
+      // And the values the live path wrote are untouched by the stamp.
+      expect(lead.lead_status).toBe(status.LEAD_STATUS.REJECTED);
+      expect(lead.final_status).toBe(status.LEGACY_STATUS.REJECTED);
+
+      // A second run is still a no-op: the marker is what makes it idempotent.
+      const again = await status.backfillLeadStatus(db);
+      expect(again.counts.newly_migrated).toBe(0);
+      expect(again.counts.verified_consistent).toBe(0);
+      expect(again.counts.already_migrated).toBe(1);
+    });
+  });
+
+  // ── Adversarial QA finding B1: the migration has an invokable entry point ──
+  //
+  // Everything above proves the migration is correct. None of it proved the
+  // migration could be RUN: nothing in the repository called
+  // migrateStatusVocabulary, backfillLeadStatus or backfillConnectorTriggers
+  // outside this file, so zero of DashFlo's real leads had any path onto the
+  // new vocabulary. server/scripts/migrate-status-vocabulary.js is that path,
+  // and these tests drive it the way an operator would.
+
+  describe('the migration entry point an operator actually runs', () => {
+    it('reports without writing anything by default, and the plan is the real one', async () => {
+      const leads = await seedSyntheticLeads();
+      await seedConnectors();
+
+      const snapshot = new Map();
+      for (const lead of await db.entities.Lead.list('-created_date', 500, 0)) {
+        snapshot.set(lead.id, JSON.stringify(lead));
+      }
+
+      const { mode, report, plan } = await migrationScript.runStatusVocabularyMigration(db);
+
+      expect(mode).toBe('report');
+      // It decided real work: every mappable lead, plus the connectors.
+      expect(report.leads.counts.total).toBe(Object.keys(leads).length);
+      expect(report.leads.counts.newly_migrated).toBeGreaterThan(0);
+      expect(plan.length).toBeGreaterThan(0);
+      expect(plan.every((w) => w.id && w.patch)).toBe(true);
+      expect([...new Set(plan.map((w) => w.entity))]).toContain('Lead');
+
+      // And wrote none of it. This is the assertion that matters: a dry run
+      // that quietly wrote would be worse than no dry run at all. Compared
+      // row by row against the snapshot rather than field by field, so a
+      // write to ANY column is caught, not only the ones this unit adds.
+      for (const lead of await db.entities.Lead.list('-created_date', 500, 0)) {
+        expect(JSON.stringify(lead), `${lead.id} was written during a report run`)
+          .toBe(snapshot.get(lead.id));
+        expect(lead.migrated_at).toBeUndefined();
+      }
+      for (const row of await db.entities.ApiConnector.list('-created_date', 500, 0)) {
+        expect(row.triggers_migrated_at).toBeUndefined();
+      }
+    });
+
+    it('writes exactly what it planned when told to apply', async () => {
+      const leads = await seedSyntheticLeads();
+      await seedConnectors();
+
+      // The same instant for both runs, so the plan and the applied write are
+      // compared on their content rather than on which millisecond they ran.
+      const at = new Date('2026-09-05T12:00:00.000Z');
+
+      const dry = await migrationScript.runStatusVocabularyMigration(db, { at });
+      const planned = new Map(dry.plan
+        .filter((w) => w.entity === 'Lead')
+        .map((w) => [w.id, w.patch]));
+
+      const applied = await migrationScript.runStatusVocabularyMigration(db, { apply: true, at });
+      expect(applied.mode).toBe('apply');
+      // In apply mode the writes go to the database, not into the plan array.
+      expect(applied.plan).toEqual([]);
+      expect(applied.report.leads.counts.newly_migrated).toBe(dry.report.leads.counts.newly_migrated);
+
+      // Every field the dry run said it would write holds that value now.
+      for (const [id, patch] of planned) {
+        const row = await reload(id);
+        for (const [field, value] of Object.entries(patch)) {
+          expect(row[field], `${id}.${field}`).toBe(value);
+        }
+      }
+      // And the unmappable lead the plan left out is still untouched.
+      expect((await reload(leads.unmappable.id)).lead_status).toBeUndefined();
+    });
+
+    it('is safe to run twice, because the underlying migration is', async () => {
+      await seedSyntheticLeads();
+      await seedConnectors();
+
+      await migrationScript.runStatusVocabularyMigration(db, { apply: true });
+      const second = await migrationScript.runStatusVocabularyMigration(db, { apply: true });
+
+      expect(second.report.leads.counts.newly_migrated).toBe(0);
+      expect(second.report.leads.counts.verified_consistent).toBe(0);
+      expect(second.report.connectors.counts.api_connectors_remapped).toBe(0);
+    });
+
+    it('refuses to create or delete a row even in a dry run', async () => {
+      // The migration is additive by construction. A future edit that started
+      // creating or deleting must not slip past a dry run looking harmless.
+      const plan = [];
+      const planning = migrationScript.planningDb(db, plan);
+      await expect(planning.entities.Lead.create({ final_status: status.LEGACY_STATUS.SOLD }))
+        .rejects.toThrow(/must never create a Lead/);
+      await expect(planning.entities.ApiConnector.delete('anything'))
+        .rejects.toThrow(/must never delete a ApiConnector/);
+      expect(plan).toEqual([]);
+    });
+
+    it('prints the counts, the exceptions and the verdict a human has to read', async () => {
+      await seedSyntheticLeads();
+      const result = await migrationScript.runStatusVocabularyMigration(db);
+      const summary = migrationScript.formatSummary(result);
+
+      expect(summary).toContain('REPORT ONLY');
+      expect(summary).toContain(`scanned                ${result.report.leads.counts.total}`);
+      expect(summary).toContain('unmapped');
+      expect(summary).toContain('need a human decision');
+      // The verdict is stated, and on this fixture it is not clean.
+      expect(summary).toContain('CLEAN                             NO');
+      // And a report run says plainly that its verification describes today.
+      expect(summary).toContain('PRE-migration state');
+      expect(summary).toContain('Re-run with --apply');
+    });
+  });
+
+  // ── Adversarial QA finding B2: the two live webhook paths dual-write ──────
+  //
+  // Both endpoints create and update Leads and wrote final_status only, so
+  // every lead arriving through either of them after this release would have
+  // carried a permanently NULL lead_status: invisible to the new vocabulary,
+  // and a hole that would only have surfaced when W3-UI-STATUS switched the
+  // client over to reading lead_status.
+  //
+  // These tests run the real handlers against the real database. Each one
+  // asserts BOTH halves: the new field is populated AND the existing
+  // behaviour of that branch is exactly what it was.
+
+  describe('webhook.js writes the new vocabulary alongside final_status', () => {
+    let rawCredential;
+
+    const makeCtx = (body, credential) => {
+      const headers = { 'x-api-key': credential };
+      return {
+        db,
+        body,
+        env: process.env,
+        user: null,
+        req: { method: 'POST', headers, query: {} },
+        json: (payload, statusCode = 200) => ({ __httpResponse: true, body: payload, status: statusCode }),
+      };
+    };
+
+    beforeEach(async () => {
+      rawCredential = mintApiKey('master');
+      await db.entities.ApiKey.create({
+        id: 'inbound-webhook-test', name: 'Test master', type: 'master',
+        key_hash: hashApiKey(rawCredential), key_prefix: rawCredential.slice(0, 16),
+        active: true, request_count: 0,
+      });
+    });
+
+    it('populates lead_status on a lead it creates, derived from the same final_status', async () => {
+      const response = await webhook(makeCtx({
+        email: 'created@example.test', first_name: 'Ada',
+        lead_status: 'sold', revenue: 250, sid: 'LGNX',
+      }, rawCredential));
+
+      expect(response.status).toBe(200);
+      expect(response.body.outcome).toBe('created');
+      // Existing behaviour, unchanged: the response still reports the legacy
+      // value, because the sender and the unmigrated client both read it.
+      expect(response.body.final_status).toBe(status.LEGACY_STATUS.SOLD);
+
+      const [lead] = await db.entities.Lead.list('-created_date', 50, 0);
+      expect(lead.final_status).toBe(status.LEGACY_STATUS.SOLD);
+      expect(lead.lead_status).toBe(status.LEAD_STATUS.SOLD);
+      expect(lead.processing_state).toBe(status.PROCESSING_STATE.SETTLED);
+      expect(lead.is_qualified).toBe(true);
+      // A live write is never a migrated write.
+      expect(lead.migrated_at).toBeUndefined();
+      // And it carries no migration provenance code, which is what the
+      // descriptor fallback would have stamped before this repair.
+      expect(status.MIGRATION_ONLY_REASONS).not.toContain(lead.status_reason);
+    });
+
+    it('still populates lead_status when the payload names no status at all', async () => {
+      // The commonest shape, and the one that would have produced most of the
+      // invisible rows: a plain lead post with no lead_status key.
+      await webhook(makeCtx({
+        email: 'nostatus@example.test', mobile: '5550001111', sid: 'LGNX',
+      }, rawCredential));
+
+      const [lead] = await db.entities.Lead.list('-created_date', 50, 0);
+      // final_status is exactly what it was before: nothing was passed, so
+      // Lead.json's schema default applies. That default is the retiring
+      // Processing value, which is precisely why the mirror is derived from
+      // it rather than from the undefined the handler passed.
+      expect(lead.final_status).toBe(status.LEGACY_STATUS.PROCESSING);
+      // Durably saved, nothing settled. D1 calls that queued.
+      expect(lead.lead_status).toBe(status.LEAD_STATUS.QUEUED);
+      expect(lead.processing_state).toBe(status.PROCESSING_STATE.RECEIVED);
+      expect(status.isLeadStatus(lead.lead_status)).toBe(true);
+      // Not a provenance code: this lead was created, not migrated from
+      // anything.
+      expect(status.MIGRATION_ONLY_REASONS).not.toContain(lead.status_reason);
+    });
+
+    it('mirrors the new fields onto a lead it updates, without touching `changed`', async () => {
+      const seeded = await seedLead({
+        final_status: status.LEGACY_STATUS.QUEUED, email: 'update@example.test', revenue: 0,
+      });
+      expect(seeded.lead_status).toBeUndefined();
+
+      const response = await webhook(makeCtx({
+        email: 'update@example.test', lead_status: 'sold', revenue: 250,
+      }, rawCredential));
+
+      expect(response.body.outcome).toBe('updated');
+      // Existing behaviour: the reported change set is the operator-facing one
+      // and must not grow. `changed` drives the response text and it drives
+      // the "nothing changed" early return below.
+      expect(response.body.changed).toEqual(['revenue', 'final_status']);
+      expect(response.body.final_status).toBe(status.LEGACY_STATUS.SOLD);
+
+      const row = await reload(seeded.id);
+      expect(row.final_status).toBe(status.LEGACY_STATUS.SOLD);
+      expect(row.lead_status).toBe(status.LEAD_STATUS.SOLD);
+      expect(row.processing_state).toBe(status.PROCESSING_STATE.SETTLED);
+      expect(row.revenue).toBe(250);
+    });
+
+    it('changes nothing at all when nothing changed, exactly as before', async () => {
+      // The early return is load-bearing: it is what stops a replayed postback
+      // bumping leadbyte_outcome_at on every retry. The dual-write must not be
+      // able to turn a no-op into a write, so it never pushes onto `changed`.
+      const seeded = await seedLead({
+        final_status: status.LEGACY_STATUS.SOLD, email: 'noop@example.test', revenue: 100,
+      });
+      const before = await reload(seeded.id);
+
+      const response = await webhook(makeCtx({
+        email: 'noop@example.test', lead_status: 'sold', revenue: 100,
+      }, rawCredential));
+
+      expect(response.body.outcome).toBe('duplicate');
+      expect(response.body.message).toContain('Nothing changed');
+      const after = await reload(seeded.id);
+      expect(after.lead_status).toBeUndefined();
+      expect(after.leadbyte_outcome_at).toBeUndefined();
+      expect(JSON.stringify(after)).toBe(JSON.stringify(before));
+    });
+
+    it('mirrors the STORED status when an outcome post carries none', async () => {
+      // A buyer_feedback style post with no lead_status still updates the
+      // lead. The mirror follows the value the row will actually hold, so the
+      // two fields cannot end up disagreeing.
+      const seeded = await seedLead({
+        final_status: status.LEGACY_STATUS.SOLD, email: 'feedback@example.test',
+      });
+
+      await webhook(makeCtx({
+        email: 'feedback@example.test', buyer_feedback: 'Spoke to the customer',
+      }, rawCredential));
+
+      const row = await reload(seeded.id);
+      expect(row.final_status).toBe(status.LEGACY_STATUS.SOLD);
+      expect(row.lead_status).toBe(status.LEAD_STATUS.SOLD);
+    });
+  });
+
+  describe('leadbyteWebhook.js writes the new vocabulary alongside final_status', () => {
+    const ROUTE_TOKEN = 'status-migration-suite-disposable-route-token';
+
+    const makeCtx = (body) => ({
+      db,
+      body,
+      env: process.env,
+      user: null,
+      req: { method: 'POST', headers: {}, query: { token: ROUTE_TOKEN }, rawBody: JSON.stringify(body) },
+      json: (payload, statusCode = 200) => ({ __httpResponse: true, body: payload, status: statusCode }),
+    });
+
+    beforeEach(async () => {
+      await db.entities.InboundWebhookRoute.create({
+        name: 'LeadByte outcomes', enabled: true, provider: 'leadbyte',
+        token_hash: sha256Hex(ROUTE_TOKEN),
+      });
+    });
+
+    it('populates lead_status on a lead it creates from an outcome payload', async () => {
+      const response = await leadbyteWebhook(makeCtx({
+        lead_status: 'sold', contact_email: 'lb-created@example.test',
+        lead_revenue: 300, leadbyte_id: 9001, supplier_sid: 'INBNDS',
+      }));
+
+      expect(response.status).toBe(200);
+      expect(response.body.created).toBe(true);
+      // Existing behaviour: the response still reports the legacy value.
+      expect(response.body.final_status).toBe(status.LEGACY_STATUS.SOLD);
+
+      const [lead] = await db.entities.Lead.list('-created_date', 50, 0);
+      expect(lead.final_status).toBe(status.LEGACY_STATUS.SOLD);
+      expect(lead.lead_status).toBe(status.LEAD_STATUS.SOLD);
+      expect(lead.processing_state).toBe(status.PROCESSING_STATE.SETTLED);
+      expect(lead.is_qualified).toBe(true);
+      expect(lead.migrated_at).toBeUndefined();
+    });
+
+    it('still populates lead_status when the payload status maps to nothing', async () => {
+      await leadbyteWebhook(makeCtx({
+        lead_status: 'a-status-this-endpoint-does-not-map',
+        contact_email: 'lb-nostatus@example.test', leadbyte_id: 9002,
+      }));
+
+      const [lead] = await db.entities.Lead.list('-created_date', 50, 0);
+      // Unchanged: an unmapped status means this endpoint writes no
+      // final_status, so Lead.json's schema default applies, and that default
+      // is the retiring Processing value.
+      expect(lead.final_status).toBe(status.LEGACY_STATUS.PROCESSING);
+      expect(lead.lead_status).toBe(status.LEAD_STATUS.QUEUED);
+      expect(lead.processing_state).toBe(status.PROCESSING_STATE.RECEIVED);
+      expect(status.MIGRATION_ONLY_REASONS).not.toContain(lead.status_reason);
+    });
+
+    it('mirrors an accepted upgrade on the update branch', async () => {
+      const seeded = await seedLead({
+        final_status: status.LEGACY_STATUS.UNSOLD,
+        email: 'lb-upgrade@example.test', email_normalized: 'lb-upgrade@example.test',
+      });
+
+      await leadbyteWebhook(makeCtx({
+        lead_status: 'sold', contact_email: 'lb-upgrade@example.test', lead_revenue: 450,
+      }));
+
+      const row = await reload(seeded.id);
+      expect(row.final_status).toBe(status.LEGACY_STATUS.SOLD);
+      expect(row.lead_status).toBe(status.LEAD_STATUS.SOLD);
+    });
+
+    it('FOLLOWS the precedence guard instead of going around it', async () => {
+      // The guard deletes patch.final_status when an outcome would downgrade a
+      // lead. Mirroring before it ran would have written the downgrade into
+      // lead_status anyway, so this endpoint would have blocked the downgrade
+      // in the field the client reads today and allowed it in the field the
+      // client is about to start reading. That is the whole reason the mirror
+      // is computed after the guard.
+      const seeded = await seedLead({
+        final_status: status.LEGACY_STATUS.SOLD, revenue: 500,
+        email: 'lb-downgrade@example.test', email_normalized: 'lb-downgrade@example.test',
+      });
+
+      const response = await leadbyteWebhook(makeCtx({
+        lead_status: 'unsold', contact_email: 'lb-downgrade@example.test',
+      }));
+
+      // Existing behaviour, unchanged: the downgrade is refused.
+      expect(response.body.final_status).toBe(status.LEGACY_STATUS.SOLD);
+      const row = await reload(seeded.id);
+      expect(row.final_status).toBe(status.LEGACY_STATUS.SOLD);
+      // And the new field agrees with it rather than with the payload.
+      expect(row.lead_status).toBe(status.LEAD_STATUS.SOLD);
+      expect(row.lead_status).not.toBe(status.LEAD_STATUS.UNSOLD);
+    });
+
+    it('gives a collapsed duplicate the rejected vocabulary and the link to its survivor', async () => {
+      const survivor = await seedLead({
+        final_status: status.LEGACY_STATUS.SOLD, revenue: 400,
+        email: 'lb-dupe@example.test', email_normalized: 'lb-dupe@example.test',
+        created_date: '2026-08-01T09:00:00.000Z',
+      });
+      const loser = await seedLead({
+        final_status: status.LEGACY_STATUS.UNSOLD,
+        email: 'lb-dupe@example.test', email_normalized: 'lb-dupe@example.test',
+        created_date: '2026-08-02T09:00:00.000Z',
+      });
+
+      await leadbyteWebhook(makeCtx({
+        lead_status: 'sold', contact_email: 'lb-dupe@example.test', lead_revenue: 400,
+      }));
+
+      const collapsed = await reload(loser.id);
+      // Existing behaviour, unchanged.
+      expect(collapsed.final_status).toBe(status.LEGACY_STATUS.DUPLICATE);
+      expect(collapsed.archived).toBe(true);
+      expect(JSON.parse(collapsed.mapped_fields).merged_into).toBe(survivor.id);
+      // New: D4 maps the retiring Duplicate value onto rejected with
+      // REJECTED_DUPLICATE, and the survivor is the link D4 asks for, known
+      // here for free. Without this these would have been the only leads
+      // reaching rejected with no lead_status at all.
+      expect(collapsed.lead_status).toBe(status.LEAD_STATUS.REJECTED);
+      expect(collapsed.status_reason).toBe(status.STATUS_REASON.REJECTED_DUPLICATE);
+      expect(collapsed.duplicate_of_lead_id).toBe(survivor.id);
+    });
+
+    it('leaves nothing for the migration to do, which is the point of the dual-write', async () => {
+      // The end-to-end statement of finding B2: a lead born on a live webhook
+      // path is already on the new vocabulary, so the migration finds it
+      // consistent rather than finding it invisible.
+      await leadbyteWebhook(makeCtx({
+        lead_status: 'sold', contact_email: 'lb-nomigration@example.test',
+        lead_revenue: 200, leadbyte_id: 9003,
+      }));
+
+      const report = await status.migrateStatusVocabulary(db);
+      expect(report.leads.counts.newly_migrated).toBe(0);
+      expect(report.leads.counts.verified_consistent).toBe(1);
+      expect(report.leads.counts.unmapped).toBe(0);
+      expect(report.verification.clean).toBe(true);
     });
   });
 });

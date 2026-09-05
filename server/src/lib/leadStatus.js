@@ -41,9 +41,19 @@
 //
 // This matters for reviewing the diff: final_status still being written is not
 // an oversight, it is the dual-write half of the contract above. The client
-// (client/src/**, owned by W3-UI-STATUS), server/src/functions/webhook.js and
-// server/src/functions/leadbyteWebhook.js all still read and write
-// final_status and are outside this unit's file ownership.
+// (client/src/**, owned by W3-UI-STATUS) still reads and writes final_status
+// and is outside this unit's file ownership.
+//
+// server/src/functions/webhook.js and server/src/functions/leadbyteWebhook.js
+// also still write final_status, and they now write the new fields ALONGSIDE
+// it, via newVocabularyFields() below. Adversarial QA finding B2: they did not
+// before, so every lead arriving through either live path after this release
+// would have carried a permanently NULL lead_status while final_status was
+// populated, and the hole would only have surfaced when W3-UI-STATUS switched
+// the client over to reading lead_status. Those two files are ordinarily
+// outside this unit's ownership and were touched for that additive write and
+// nothing else; their unguarded final_status precedence remains the known gap
+// documented below.
 //
 //
 // Money is never read from a status. Not before, not after.
@@ -437,19 +447,54 @@ export const INTAKE_TRIGGER = TRIGGER.ON_QUALIFIED;
 // against this file until it is deleted.
 //
 // It cannot be deleted yet. Stored trigger arrays are remapped by
-// backfillConnectorTriggers below, but client/src/components/settings/
-// SettingsApiConnectors.jsx and client/src/components/settings/
-// WebhookDeliverySettings.jsx still CREATE connectors with the retired keys
-// (they hardcode a legacy default triggers array), and
-// server/src/functions/testCapiConnector.js still resolves event names by
-// them. All three are outside W2-STATUS's file ownership. Without this shim, a
-// connector created through the settings UI after this release would match no
-// trigger and silently never fire, which is exactly the failure D4's first
-// risk describes, just caused from the other direction.
+// backfillConnectorTriggers below, but four files still WRITE or RESOLVE the
+// retired keys directly, so without this shim a connector created through the
+// settings UI after this release would match no trigger and silently never
+// fire, which is exactly the failure D4's first risk describes, just caused
+// from the other direction.
 //
-// DELETE THIS BLOCK when, and only when: W3-UI-STATUS has migrated the client
-// writers, testCapiConnector.js has been migrated by whoever owns it, and a
-// re-run of backfillConnectorTriggers reports zero remaining legacy keys.
+// THE FILES THAT MUST CHANGE BEFORE THIS BLOCK CAN BE DELETED, and who owns
+// them. Corrected after adversarial QA finding S4: an earlier version of this
+// comment said the shim could go "once W3-UI-STATUS has migrated the client
+// writers", which is not true, because W3-UI-STATUS does not own the client
+// writers. Checked against forge-pack/03-plan/WORK-UNITS.yaml, W3-UI-STATUS's
+// files_owned is client/src/components/leads/**,
+// client/src/components/overview/**, client/src/lib/leadStatus.js,
+// tagColors.js, overviewFinance.js, distributionMetrics.js, importFinalize.js,
+// pages/Leads.jsx, pages/LeadsRejections.jsx and utils/leadError.js, and its
+// files_forbidden is server/**. So:
+//
+//   client/src/components/settings/SettingsApiConnectors.jsx
+//     Hardcodes LEGACY_TRIGGER.RECEIVED as the default triggers array on a
+//     new connector, as the test trigger, and as its "qualified" filter.
+//     OWNED BY NO WORK UNIT.
+//   client/src/components/settings/WebhookDeliverySettings.jsx
+//     Hardcodes a LEGACY_TRIGGER.RECEIVED array on both its edit and create
+//     paths. OWNED BY NO WORK UNIT.
+//   client/src/components/settings/TriggerDataOverrides.jsx
+//     Keys its per-trigger override defaults on LEGACY_TRIGGER.RECEIVED and
+//     LEGACY_TRIGGER.DQ. OWNED BY NO WORK UNIT.
+//   server/src/functions/testCapiConnector.js
+//     Resolves connector event names by the retired keys, and falls back to
+//     LEGACY_TRIGGER.RECEIVED when no trigger is supplied. OWNED BY NO WORK
+//     UNIT, and W3-UI-STATUS is explicitly forbidden from touching server/**
+//     anyway.
+//
+// (Those four are named by constant rather than by literal on purpose: this
+// file is already the largest residual in check-status-vocabulary.mjs's
+// report, and a comment that spells the retired keys out would add four more
+// hits to a report whose whole job is to count real leftover usage.)
+//
+// client/src/lib/leadStatus.js and client/src/lib/tagColors.js DO belong to
+// W3-UI-STATUS and will be migrated by it, but they are the client's
+// label/colour maps, not the writers. Migrating them alone does not make this
+// shim removable.
+//
+// DELETE THIS BLOCK when, and only when: all four files above have been
+// migrated by whoever ends up owning them (which today is nobody, so that
+// ownership has to be assigned first), and a re-run of
+// backfillConnectorTriggers plus findRetiredTriggerKeys reports zero remaining
+// legacy keys in stored data.
 export const LEGACY_TRIGGER = Object.freeze({
   RECEIVED: 'on_received',
   DQ: 'on_dq',
@@ -530,11 +575,29 @@ export const MONEY_FIELDS_NEVER_WRITTEN = Object.freeze([
 const STATUS_PATCH_FIELD_SET = new Set(STATUS_PATCH_FIELDS);
 const MONEY_FIELD_SET = new Set(MONEY_FIELDS_NEVER_WRITTEN);
 
+// The three provenance codes that exist only because a HISTORICAL row records
+// no machine reason of its own. A live path always knows more than the mapping
+// table does, so it must never stamp one of these: a lead created a
+// microsecond ago has not been "migrated from" anything, and a later reader
+// (W4-REAPER, an operator, a report) would take the code at face value.
+export const MIGRATION_ONLY_REASONS = Object.freeze([
+  STATUS_REASON.MIGRATED_FROM_PROCESSING,
+  STATUS_REASON.MIGRATED_FROM_QUALIFIED,
+  STATUS_REASON.MIGRATED_FROM_ERROR,
+]);
+
 // Throws rather than returning false. A patch that would touch a money field
 // is not a condition to handle gracefully, it is a bug that must not reach the
 // database, and the write-once trigger would silently pin it back anyway,
 // leaving no evidence that anything was attempted.
-function assertNoMoneyFieldWritten(patch, where) {
+//
+// EXPORTED so a test can feed a money-flag key straight through the real
+// guard. Adversarial QA finding M2: the test that carried this guard's name
+// only re-asserted the static field lists, so the throw itself was never
+// executed by anything and a future edit could have deleted the body without
+// a single test noticing. Every patch this module emits passes through this
+// exact function, so calling it directly IS exercising the production path.
+export function assertNoMoneyFieldWritten(patch, where) {
   for (const key of Object.keys(patch || {})) {
     if (MONEY_FIELD_SET.has(key)) {
       throw new Error(`${where}: refused to write money flag "${key}"; revenue must never depend on a status migration (forge-pack/CONTRACT.md D2 and D4 risk 2)`);
@@ -693,18 +756,57 @@ export function statusPatch(legacyStatus, {
     lead_status: descriptor.lead_status,
     processing_state: processingState || descriptor.processing_state,
   };
+  // A migration provenance code is not something a live path may claim. This
+  // is a caller bug rather than a value to sanitise, so it throws.
+  if (reason && MIGRATION_ONLY_REASONS.includes(reason)) {
+    throw new Error(`statusPatch: "${reason}" is a migration provenance code and may only be written by backfillLeadStatus`);
+  }
   // A reason D4 names for this value specifically cannot be overridden by a
   // caller. Everything else takes the caller's code when it has one, since the
   // live path always knows more than the mapping table does.
   const resolvedReason = descriptor.reason_is_mandatory
     ? descriptor.status_reason
     : (reason || descriptor.status_reason);
-  if (resolvedReason) patch.status_reason = resolvedReason;
+  // The descriptor's own fallback for Processing, Qualified and Error IS a
+  // provenance code, and it is right for the backfill and wrong here. A live
+  // path that knows no machine reason records none, rather than claiming the
+  // lead came out of a migration it was never part of.
+  if (resolvedReason && !MIGRATION_ONLY_REASONS.includes(resolvedReason)) {
+    patch.status_reason = resolvedReason;
+  }
   if (reasonDetail) patch.status_reason_detail = String(reasonDetail).slice(0, 500);
   const resolvedQualified = qualified === undefined ? descriptor.is_qualified : qualified;
   if (resolvedQualified === true || resolvedQualified === false) patch.is_qualified = resolvedQualified;
   if (duplicateOfLeadId) patch.duplicate_of_lead_id = String(duplicateOfLeadId);
   return assertNoMoneyFieldWritten(patch, 'statusPatch');
+}
+
+// The NEW-VOCABULARY HALF of statusPatch, with final_status deliberately left
+// out. Adversarial QA finding B2.
+//
+// server/src/functions/webhook.js and server/src/functions/leadbyteWebhook.js
+// create and update Leads on live paths and, before this repair, wrote
+// final_status and nothing else, so every lead arriving through either of them
+// after this release would have carried a permanently NULL lead_status:
+// invisible to the new vocabulary, and a silent hole the moment W3-UI-STATUS
+// makes the client read lead_status instead. They now call this.
+//
+// Why a separate export rather than letting them call statusPatch: those two
+// files have their own, delicate rules about WHETHER final_status may be
+// written at all (leadbyteWebhook.js's update branch deletes it again when an
+// outcome would downgrade a lead; webhook.js only writes it when it differs
+// from the stored value, and that decision feeds its `changed` array and its
+// "nothing changed" response). Handing them a patch that carries final_status
+// would make it far too easy to write it on a path that had decided not to.
+// This helper cannot do that, so the dual-write can only ever be additive.
+//
+// The correct call site is AFTER the caller has settled what final_status the
+// row will hold, passing that value, so the new fields mirror the legacy one
+// rather than racing it.
+export function newVocabularyFields(legacyStatus, options = {}) {
+  const patch = statusPatch(legacyStatus, options);
+  delete patch.final_status;
+  return patch;
 }
 
 // ── Re-drive exclusion (D4 risk 3) ────────────────────────────────────────
@@ -715,16 +817,87 @@ export function statusPatch(legacyStatus, {
 //
 // This is the single predicate that answers it, so W4-REAPER and anything else
 // that later picks work off the queued/failed pile has one thing to call
-// rather than each re-deriving the rule. Any lead carrying migrated_at was put
-// into its current state by the backfill and not by a live processing run, so
-// it is never eligible for automated re-drive. The backfill stamps migrated_at
-// on EVERY row it touches, not only the ex-Error ones: D4 only requires it for
+// rather than each re-deriving the rule. The backfill stamps migrated_at on
+// EVERY row it examines, not only the ex-Error ones: D4 only requires it for
 // Error, but a historical Processing row becomes queued + routing, which looks
 // exactly like a lead mid-flight right now, and a historical Queued row looks
 // exactly like one waiting for an operator. Excluding all of them is the
 // superset that cannot produce the flood, and it costs nothing.
-export function isExcludedFromRedrive(lead) {
+//
+//
+// WHY THIS IS A TIME COMPARISON AND NOT `Boolean(lead.migrated_at)`
+// -----------------------------------------------------------------
+// Adversarial QA finding S3. migrated_at is permanent and is never cleared, so
+// the simple presence test that used to live here said "this row was migrated,
+// therefore it may never be re-driven" FOREVER. That is right for the failure
+// the migration itself created and wrong for the next one: a lead that
+// migrated cleanly in September and then genuinely failed, live, in November
+// would carry a September migrated_at and be silently invisible to W4-REAPER
+// for the rest of its life. The reaper would never see it, nothing would log
+// that it had been skipped, and the lead would simply sit at queued + failed
+// with nobody coming for it. That is a worse outcome than the flood the marker
+// exists to prevent, because the flood is loud and this is not.
+//
+// The distinction that actually matters is not "was this row ever migrated"
+// but "is the failed state this row is in RIGHT NOW the one the migration put
+// it in, or a newer one". So the marker is compared against the row's own
+// activity, and it excludes only while nothing has happened to the lead since.
+//
+// The signal is the LEAD-ACTIVITY timestamps below, not `updated_date`.
+// updated_date is row bookkeeping, set by the repository on every write
+// including the migration's own, so it is always a hair LATER than the
+// migrated_at the same write set: comparing against it would mark every
+// migrated row eligible the instant the backfill finished, which is precisely
+// the flood D4 risk 3 names. processed_at and leadbyte_outcome_at are written
+// only by the live paths (processLead.js writes processed_at on every branch;
+// webhook.js and leadbyteWebhook.js write leadbyte_outcome_at on every outcome
+// they record) and are NOT in STATUS_PATCH_FIELDS, so this module is
+// structurally incapable of writing them. A value later than migrated_at on
+// either therefore proves a live path touched this lead after the migration,
+// which is exactly the "it failed again, for real" case.
+//
+// FOR W4-REAPER, WHICH DOES NOT EXIST YET: this predicate is deliberately
+// conservative in both directions it can be. A row with an unparseable marker
+// stays excluded, and a row with no activity timestamp at all stays excluded,
+// because in both cases the honest answer is "cannot tell", and the cost of a
+// wrong exclusion is one lead an operator can still find by hand, whereas the
+// cost of a wrong inclusion is redelivering historical leads to real buyers.
+// If the reaper later needs a stronger signal than "the lead was touched
+// again" (for instance, "processing_state moved back to failed after the
+// stamp"), the right change is to add an explicit failure timestamp on the
+// live path and read it here, NOT to relax this comparison.
+const ACTIVITY_TIMESTAMP_FIELDS = Object.freeze(['processed_at', 'leadbyte_outcome_at']);
+
+// The most recent live-path activity on a lead, in ms, or null when the row
+// records none.
+export function lastLiveActivityMs(lead) {
+  let latest = null;
+  for (const field of ACTIVITY_TIMESTAMP_FIELDS) {
+    const parsed = Date.parse(lead?.[field] || '');
+    if (Number.isNaN(parsed)) continue;
+    if (latest === null || parsed > latest) latest = parsed;
+  }
+  return latest;
+}
+
+// True when a row carries the migration marker at all, regardless of whether
+// the marker is still the newest thing that happened to it. This is the
+// "already migrated, do not patch again" question, which is a different
+// question from re-drive eligibility and must not be answered by the same
+// predicate: once isExcludedFromRedrive stopped being a presence test, using
+// it for idempotency would have made the backfill re-stamp any migrated row
+// that had since been touched.
+export function hasMigrationMarker(lead) {
   return Boolean(lead && lead.migrated_at);
+}
+
+export function isExcludedFromRedrive(lead) {
+  if (!hasMigrationMarker(lead)) return false;
+  const migratedMs = Date.parse(lead.migrated_at);
+  if (Number.isNaN(migratedMs)) return true;
+  const activityMs = lastLiveActivityMs(lead);
+  if (activityMs === null) return true;
+  return activityMs <= migratedMs;
 }
 
 export function isRedriveEligible(lead) {
@@ -864,8 +1037,35 @@ function findDuplicateOriginal(lead, index) {
 // (see the module comment) and it is also what makes the rollback trivial:
 // dropping the seven new keys restores the pre-migration row exactly, with no
 // need to reconstruct anything from a backup.
+//
+//
+// WHAT migrated_at ACTUALLY MEANS, and why the stamp is no longer conditional
+// ---------------------------------------------------------------------------
+// Adversarial QA finding S2. This function used to return null the moment the
+// computed field patch came out empty, which skipped the stamp entirely. That
+// looked like an optimisation and was a hole: a row whose new fields already
+// held the right values for some OTHER reason (the commonest being a live
+// write that got there first, which is now the normal case for every lead
+// created through webhook.js or leadbyteWebhook.js since finding B2 was fixed)
+// was examined by the migration, confirmed correct by the migration, and then
+// left carrying no evidence that either had happened. W2-STATUS's fourth claim
+// is that every migrated row gets migrated_at, and that claim was quietly
+// false for exactly the rows a reader would most want to ask about.
+//
+// So the marker's meaning is stated here once, and the code matches it:
+// migrated_at means "this row has been examined by the status migration and
+// verified consistent with the new vocabulary", NOT "this row's bytes
+// changed". A row the migration looked at and found already correct is a
+// migrated row. It is not an unexamined row, and it must not read as one.
+//
+// The permanence objection this used to raise is answered separately, by
+// isExcludedFromRedrive above: the marker no longer means "never re-drivable
+// again", it means "not re-drivable while nothing has happened since". So
+// stamping a row that a live path had already written correctly costs it
+// nothing the next time it genuinely fails.
 export function leadStatusPatch(lead, { at = new Date(), duplicateOriginal = null } = {}) {
-  if (isExcludedFromRedrive(lead)) return null;
+  // Presence, not re-drive eligibility. See hasMigrationMarker.
+  if (hasMigrationMarker(lead)) return null;
 
   const legacy = cleanString(lead?.final_status);
   if (legacy === null) return null;
@@ -887,7 +1087,8 @@ export function leadStatusPatch(lead, { at = new Date(), duplicateOriginal = nul
     patch.duplicate_of_lead_id = String(duplicateOriginal);
   }
 
-  if (Object.keys(patch).length === 0) return null;
+  // The stamp goes on unconditionally now. An empty patch here means "already
+  // consistent", which is a verified row, not a skipped one.
   patch.migrated_at = stamp;
   return assertNoMoneyFieldWritten(patch, 'leadStatusPatch');
 }
@@ -907,9 +1108,15 @@ export async function backfillLeadStatus(db, { at = new Date() } = {}) {
 
   const counts = {
     total: leads.length,
+    // Fields actually changed, plus the marker.
     newly_migrated: 0,
-    // Already carried migrated_at, or already held every target value. True
-    // repeat-run idempotency.
+    // Examined, found already holding every target value, and stamped with
+    // the marker and nothing else. Usually a lead a live path wrote correctly
+    // before the migration reached it. Split out from already_migrated so the
+    // report distinguishes "the migration confirmed this row" from "the
+    // migration had already been here", which are different facts.
+    verified_consistent: 0,
+    // Already carried migrated_at. True repeat-run idempotency.
     already_migrated: 0,
     // Could not be mapped at all and was deliberately left untouched.
     unmapped: 0,
@@ -964,12 +1171,18 @@ export async function backfillLeadStatus(db, { at = new Date() } = {}) {
     }
 
     const patch = leadStatusPatch(lead, { at, duplicateOriginal });
-    if (patch) {
-      counts.newly_migrated += 1;
-      await db.entities.Lead.update(lead.id, patch);
-    } else {
+    if (!patch) {
+      // The only way to get null past the mapping checks above is the marker
+      // already being on the row.
       counts.already_migrated += 1;
+      continue;
     }
+    // migrated_at is always present on a patch now (S2), so "did anything
+    // other than the marker change" is what separates the two buckets.
+    const changedFields = Object.keys(patch).filter((key) => key !== 'migrated_at');
+    if (changedFields.length > 0) counts.newly_migrated += 1;
+    else counts.verified_consistent += 1;
+    await db.entities.Lead.update(lead.id, patch);
   }
 
   return { counts, exceptions };
@@ -1123,13 +1336,35 @@ export async function migrateStatusVocabulary(db, { at = new Date() } = {}) {
   const connectors = await backfillConnectorTriggers(db, { at });
   const retiredTriggers = await findRetiredTriggerKeys(db);
   const leadsOnRetiredStatus = await findLeadsOnRetiredStatus(db);
+
+  // Adversarial QA finding S1: `clean` used to be computed from the two scans
+  // alone, so a run that left rows unmigrated because their final_status was a
+  // value the mapping table does not know, or that could not link a duplicate
+  // to its original, still reported clean true. That is the one thing this
+  // check exists to catch. An unmapped row has no lead_status at all, so it is
+  // invisible to findLeadsOnRetiredStatus (which can only see rows that DO
+  // carry a lead_status), and it is invisible to findRetiredTriggerKeys, which
+  // is about connectors. The two scans genuinely cannot see it. So the counts
+  // and the exception list are part of the verdict, not decoration next to it.
+  //
+  // clean means: every lead this migration examined ended up on one of D1's
+  // seven values, nothing needed a human decision, and no retired connector
+  // trigger or pinned route status survives anywhere in stored data. Anything
+  // less is not clean, and an operator has something to look at.
+  const unmappedLeads = leads.counts.unmapped;
+  const exceptionCount = leads.exceptions.length;
   return {
     leads,
     connectors,
     verification: {
       retired_trigger_keys_remaining: retiredTriggers,
       leads_on_retired_status: leadsOnRetiredStatus,
-      clean: retiredTriggers.length === 0 && leadsOnRetiredStatus.length === 0,
+      unmapped_leads: unmappedLeads,
+      exceptions: exceptionCount,
+      clean: retiredTriggers.length === 0
+        && leadsOnRetiredStatus.length === 0
+        && unmappedLeads === 0
+        && exceptionCount === 0,
     },
   };
 }
@@ -1153,6 +1388,8 @@ export default {
   RETIRED_TRIGGER_KEYS,
   STATUS_PATCH_FIELDS,
   MONEY_FIELDS_NEVER_WRITTEN,
+  MIGRATION_ONLY_REASONS,
+  assertNoMoneyFieldWritten,
   isLeadStatus,
   isProcessingState,
   statusRank,
@@ -1167,6 +1404,9 @@ export default {
   triggerKeyForInboundStatus,
   remapTriggerArray,
   statusPatch,
+  newVocabularyFields,
+  lastLiveActivityMs,
+  hasMigrationMarker,
   isExcludedFromRedrive,
   isRedriveEligible,
   leadStatusPatch,

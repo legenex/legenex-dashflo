@@ -19,6 +19,19 @@ const truthy = (v) => {
 };
 
 import { resolveApiKey } from '../lib/apiKeys.js';
+// W2-STATUS, adversarial QA finding B2. This endpoint creates and updates
+// Leads on a live path and wrote final_status only, so every lead it touched
+// after the seven-status release would have carried a NULL lead_status. The
+// mapping is NOT reimplemented here: newVocabularyFields is the same
+// statusPatch the migration and processLead.js use, with final_status removed
+// so this file's own rules about when final_status may be written stay the
+// only thing that decides it. See server/src/lib/leadStatus.js.
+import {
+  LEGACY_STATUS,
+  PROCESSING_STATE,
+  mapLegacyStatus,
+  newVocabularyFields,
+} from '../lib/leadStatus.js';
 
 // Payload key aliases -> canonical field. First present key wins.
 const FIELD_ALIASES = {
@@ -504,6 +517,28 @@ export default async function webhook(ctx) {
 
       if (status && status !== existing.final_status) { patch.final_status = status; changed.push('final_status'); }
 
+      // W2-STATUS B2: write the seven-status vocabulary alongside whatever
+      // final_status this row ends up holding. Strictly additive.
+      //
+      // Three deliberate properties, because this file's update branch is
+      // load-bearing and none of its existing behaviour may move:
+      //   - the mirror is derived from the status this row WILL hold (the
+      //     incoming one when the line above accepted it, otherwise the stored
+      //     one), so the two fields can never disagree;
+      //   - it never touches patch.final_status, which is decided above and
+      //     only above;
+      //   - it never pushes onto `changed`, so the "nothing changed" early
+      //     return, the response body and the receipt telemetry are all
+      //     exactly what they were. A post that changes nothing else still
+      //     writes nothing at all, which is why this is a dual-write and not a
+      //     backfill; leads that predate the release are the migration's job.
+      const mirroredStatus = status || clean(existing.final_status);
+      if (mirroredStatus && mapLegacyStatus(mirroredStatus)) {
+        for (const [key, value] of Object.entries(newVocabularyFields(mirroredStatus))) {
+          if (existing[key] !== value) patch[key] = value;
+        }
+      }
+
       // Sticky return flag. A lead resold after a return must still count as a
       // return, so this only ever goes false -> true, never back.
       const nowReturned = status === 'Returned' || truthy(c.returned);
@@ -587,8 +622,31 @@ export default async function webhook(ctx) {
     const sidUpper = String(c.sid || '').trim().toUpperCase();
     const leadType = (sidUpper === 'LEADFLOW' || sidUpper === 'LGNX') ? 'Quiz' : 'Affiliate';
 
+    // W2-STATUS B2: the same additive mirror on the create path.
+    //
+    // A payload that names no status at all still gets the new fields, and it
+    // is that shape (a plain lead post with no lead_status key) that would
+    // have produced most of the invisible rows. The value mirrored in that
+    // case is the retiring Processing value, because that is what the row will
+    // actually hold: Lead.final_status carries it as a schema default, so
+    // passing status straight through here would have derived the new fields
+    // from `undefined` while the stored legacy field said something else.
+    // Under D4 it maps to lead_status queued either way.
+    //
+    // processing_state is overridden to received rather than D4's routing, for
+    // the same reason processLead.js's own intake create does it: routing
+    // describes a HISTORICAL row that never got past Processing, not a lead
+    // created a microsecond ago.
+    //
+    // final_status is untouched by any of this and is still written exactly
+    // where and as it was, on the line below.
+    const createdStatusFields = status
+      ? newVocabularyFields(status)
+      : newVocabularyFields(LEGACY_STATUS.PROCESSING, { processingState: PROCESSING_STATE.RECEIVED });
+
     const created = await db.entities.Lead.create({
       archived: false,
+      ...createdStatusFields,
       first_name: c.first_name || undefined,
       last_name: c.last_name || undefined,
       email: email || undefined,
