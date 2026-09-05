@@ -115,3 +115,64 @@ BLOCKERS.md): the distribution-engine safety defects, the webhook.js precedence 
 Buyer Draft-to-Active delivery-test gate.
 Next unit: Wave 2 - W3-UI-STATUS, W4-REAPER, W7-INVARIANTS, all now unblocked, disjoint file
 trees, dispatched in parallel.
+
+## 2026-09-05  Wave 2 (W3-UI-STATUS, W4-REAPER, W7-INVARIANTS)
+Attempted: dispatched all three in parallel worktrees (disjoint file ownership); independently
+reviewed/verified before each merge; two of three needed a repair round after adversarial QA.
+Changed:
+- `client/src/lib/leadStatus.js` (new client module), `LeadsTable.jsx`, `LeadsFilterBar.jsx`,
+  `DistributionDashboard.jsx`, `Overview.jsx`, `distributionMetrics.js` (`7b15563`, W3-UI-STATUS):
+  the seven-status vocabulary now drives the client - per-tab filters (`matchesLeadView`), a
+  Status filter shown only on the "All Leads" tab (`showStatusFilter={view === 'all'}`), split
+  Rejected/Unsold reason cards, a "Top Unsold Reasons" panel. Deleted 4 confirmed-dead files
+  (`Leads.jsx`, `LeadsRejections.jsx`, `ExportColumnsDialog.jsx`, and `TopRejectionReasons.jsx` -
+  a stale unwired duplicate the unit found independently, not in GAP-MAP). Direct personal
+  verification (not a separate QA agent): reviewed the diff, re-ran gate.
+- `server/src/functions/reapStuckLeads.js`, `client/src/components/distribution/
+  StuckLeadsCard.jsx` (new) (`96c00cb` + repair `53d2842` + `cbb8c76`, W4-REAPER): a scheduled
+  reaper that classifies stuck leads (RESUME_DELIVERY/AMBIGUOUS_HOLD/EXCLUDED_MIGRATED/
+  NO_SAFE_REENTRY/ALREADY_SOLD) and an operator-facing Stuck Leads card. **Adversarial QA
+  required and found two real gaps before repair**: B1, the reaper bypassed
+  `NATIVE_RETRY_WORKER_ENABLED`, the existing kill switch for the exact send path it reuses; B2,
+  classification didn't actually control what got sent - `runNativeRetryPass`'s batch nature
+  meant ambiguous/excluded leads got resent anyway despite the UI correctly labeling them "never
+  resumed automatically." Repaired: `nativeRetryRunner.js` gained an optional `onlyLeadIds`
+  ALLOWLIST parameter (not an exclude-list - an allowlist fails closed if a lead is missed or
+  misclassified) applied at the `listDue` query layer plus a second defense-in-depth throw inside
+  `deliverFn`, backward-compatible (omitted/null returns the original behavior and return shape).
+  `startStuckLeadReaper` was written but not scheduled anywhere; wired into `server/src/index.js`
+  directly (mirroring the existing `startNativeRetryScheduler` pattern) since `index.js` isn't
+  owned by any unit. Resolved one real git merge conflict in `DistributionDashboard.jsx` against
+  W3-UI-STATUS's already-merged "Top Unsold Reasons" panel (kept both additions).
+- `docs/INVARIANTS.md` (new), `server/src/db/invariantConstraints.js` (new),
+  `server/test/{capRace,idempotency}.test.js` (new) (`aa17634` + boot-wiring `5a7b03c`,
+  W7-INVARIANTS): a full invariant-to-constraint audit, 15 commercial invariants from
+  CONTRACT.md Section 7 scored against actual DB constraints vs. app-only enforcement, each with
+  a file:line citation or an honest "gap" verdict. Closed one real, verified gap:
+  `CapReservation.json`'s own comment claimed "(idempotency_key, route_member_id) uniqueness
+  guarantees no double-consume" but no such DB constraint existed anywhere - only
+  `reservation.js`'s atomic claim (itself resting on `CapCounter`'s real index) kept it honest,
+  one call site away from bypassable. Added a real unique index, guarded by a pre-check that
+  refuses to create it over any existing violation rather than risk a boot crash. Proven under
+  genuine concurrency (`Promise.all`, not sequential) against a real disposable Postgres, not
+  doubles: 12 concurrent cap-1 claimants leave exactly one winner (`capRace.test.js`); the real
+  `processLead()` entry point replayed sequentially, with an explicit idempotency key, and
+  concurrently always yields exactly one Lead/receipt (`idempotency.test.js`). Three more real,
+  currently unowned gaps found and honestly recorded, not fixed (out of this unit's reach or file
+  ownership) - see BLOCKERS.md: cross-buyer/cross-supplier authorization has no DB-tier
+  equivalent (needs an architecture decision, not an additive constraint), DeliveryAttempt/
+  RouteDecisionTrace have no DB-level append-only guarantee, and two small stale-schema findings
+  (ApiKey.json's legacy raw_key purge, CapReservation.json's state enum missing 'failed'). I
+  independently verified the new index physically exists on a live disposable database (not just
+  read the source) and re-ran both new test files plus the full gate myself before merging.
+  `ensureInvariantConstraints()` was written but not called at boot (disclosed, `index.js` not
+  owned by this unit); wired in directly, same pattern as W4-REAPER's scheduler.
+Verified: `npm run gate` green under `LC_ALL=en_US.UTF-8` at every merge, including after the
+`DistributionDashboard.jsx` manual conflict resolution and after wiring both boot-time follow-ups.
+Production reconfirmed healthy after each deploy.
+Remains: W13-OFFSITE still blocked. Six unowned findings now recorded in BLOCKERS.md needing
+their own bounded units before Gate C: three from before this wave (distribution-engine
+duplicate-send defects, webhook.js/leadbyteWebhook.js precedence guard + ~14-file trigger-key
+cleanup, Buyer Draft-to-Active delivery-test gate), plus three new from W7-INVARIANTS' audit
+(cross-tenant RLS, audit-trail append-only trigger, two stale schema fields).
+Next unit: Wave 3 - W8-CONGRUENCE (depends on W0-AUDIT + W3-UI-STATUS, both done).

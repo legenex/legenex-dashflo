@@ -101,3 +101,49 @@ canonical ones now that W2-STATUS's dual-spelling shim exists as a bridge. Needs
 (`leadStatus.js`'s `TRIGGER_ALIASES`) can ever be removed, and before Gate C - `testCapiConnector.js` being
 live means this isn't cleanup, it's a real user-facing surface still speaking the old vocabulary.
 Raised: 2026-09-05
+
+## NEW-UNIT-NEEDED  cross-buyer / cross-supplier data leakage has no DB-tier boundary
+Blocked by: no work unit owns this; it is an architecture change, not an additive constraint.
+Evidence: W7-INVARIANTS' full invariant audit (`docs/INVARIANTS.md` item 12) found the entire enforcement
+surface is `server/src/lib/entityPolicy.js` (role resolution, per-entity read/write authorization, field
+projection) called from `server/src/routes/entities.js`. Every entity lives in a generic `e_<name>` JSONB
+table queried through one shared, service-role Postgres connection (`server/src/db/pool.js`), with no
+Postgres row-level security policy scoping rows to a buyer or supplier session. A bug in `entityPolicy.js`,
+a new route that forgets to call it, or a raw query would see every buyer's and every supplier's rows with
+no database-level boundary at all. This is real and reasonably careful application-layer authorization
+today, not a live exploit, but it is the only layer.
+Smallest unblock: not closeable by an additive index/trigger the way items 1-7 in `docs/INVARIANTS.md` were.
+Needs its own work unit with its own risk review to design either Postgres RLS policies keyed to a session
+variable set per request, or splitting cross-tenant tables. Should be scoped and risk-reviewed before Gate C
+commits to the current single-connection-role architecture at scale, though it does not block the units
+already in flight.
+Raised: 2026-09-05
+
+## NEW-UNIT-NEEDED  DeliveryAttempt/RouteDecisionTrace have no DB-level append-only guarantee
+Blocked by: no work unit owns this.
+Evidence: W7-INVARIANTS' audit (`docs/INVARIANTS.md` item 13) found the commercial audit trail
+(`DeliveryAttempt`, `RouteDecisionTrace`) is written at the right points, but nothing at the database level
+stops a later `UPDATE`/`DELETE` against either table - `Repo.update()`/`Repo.delete()` work identically on
+these as on any other entity. No code path currently rewrites or deletes either table after the fact (the
+audit searched `server/src` for such a call and found none), so there is no live exploit today, but nothing
+would prevent one being introduced later.
+Smallest unblock: a focused unit adding a trigger that refuses `UPDATE`/`DELETE` once a row reaches a
+terminal state, mirroring the pattern `lead_flags_write_once_trg` (W1-FLAGS) already establishes. Needs its
+own review of which terminal states should lock each table; not folded into W7-INVARIANTS since this wasn't
+one of that unit's named acceptance steps (cap-race and replay were).
+Raised: 2026-09-05
+
+## NEW-UNIT-NEEDED  ApiKey.json legacy raw_key field still purgeable; CapReservation.json state enum is stale
+Blocked by: both are schema edits, and `server/src/schemas/**` was forbidden to W7-INVARIANTS.
+Evidence: `docs/INVARIANTS.md` items 5 and 11. (a) `ApiKey.json`'s own comment calls `raw_key` "LEGACY
+cleartext key. Retained only until the hash path is proven against real supplier traffic, then purged" -
+`key_hash` (SHA-256) is already the credential of record (`server/src/lib/apiKeys.js:123`); this is a
+still-open cleanup, not a new finding, but no unit currently owns closing it. (b) `CapReservation.json`'s
+`state` enum lists only `reserved`/`finalized`/`released`, but `client/src/lib/distribution/reservation.js:
+45-49` writes `state: 'failed'` on a cap-exceeded attempt - functionally harmless (the JSONB column has no
+CHECK enforcing the enum either way) but the schema's own documentation disagrees with the code that writes
+it.
+Smallest unblock: a small bounded unit touching only these two schema files - purge `raw_key` (once the hash
+path's production track record supports it) and add `'failed'` to `CapReservation.json`'s `state` enum.
+Low risk, not blocking Gate C, but should not be forgotten.
+Raised: 2026-09-05
