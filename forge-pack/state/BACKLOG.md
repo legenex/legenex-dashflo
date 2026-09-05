@@ -9,11 +9,11 @@ Mirrors `03-plan/WORK-UNITS.yaml` in execution order. Status: `ready`, `in-progr
 | W5-EMPTY-STATES | 0 | done | Dexter | none | Merged `16f6835`, deployed. Fixed a real bug: AI card rendered red "ANTHROPIC_API_KEY is not set" next to a fake 100% confidence score, exactly the CONTRACT.md section 3 example |
 | W6-FIXTURES | 0 | done | Dexter | none | Merged `cf4dad5`+`53a86bf`, deployed. Found 3 real safety defects in client/src/lib/distribution/** (ambiguous outcomes don't stop cascade, unmatched-2xx false-accept, connection-drop misclassified) - recorded as a new unowned blocker, see BLOCKERS.md |
 | W13-OFFSITE | 0 | blocked | Dexter | owner: provider choice | Raise in first digest |
-| W2-STATUS | 1 | ready | Dexter | W1-FLAGS (done) | **Bottleneck.** Strongest agent, full repair budget. Should also account for the webhook.js/leadbyteWebhook.js precedence-guard gap W1-FLAGS's QA found |
-| W9-ONBOARDING | 1 | ready | Dexter | W0-AUDIT (done) | Completion, not build. GAP-57/GAP-59 in docs/GAP-MAP.md are the two blocking findings: vertical never captured (dead component wired in instead of the live one), and Xero/Stripe steps throw unconditionally and block the whole pipeline despite being out of scope until after cutover |
-| W3-UI-STATUS | 2 | ready | Dexter | W2-STATUS | |
-| W4-REAPER | 2 | ready | Dexter | W2-STATUS | Adversarial review required |
-| W7-INVARIANTS | 2 | ready | Dexter | W2-STATUS | Audit first, code only where missing |
+| W2-STATUS | 1 | done | Dexter | W1-FLAGS (done) | Merged `f19dd0e` (`321b3d9`+repair `bcfe017`), deployed. Two rounds: round 1 passed code review but failed unit-completion QA (no invokable migration, webhooks never wrote new fields); round 2 fixed both plus 3 smaller issues. Migration script exists (`npm --prefix server run migrate:status-vocabulary`) but has not run against real production data |
+| W9-ONBOARDING | 1 | done | Dexter | W0-AUDIT (done) | Merged `13c8dea`, deployed. Fixed GAP-57 and GAP-59. Found a new gap (Buyer Draft-to-Active has no delivery-test gate) - see BLOCKERS.md |
+| W3-UI-STATUS | 2 | ready | Dexter | W2-STATUS (done) | Its own goal predicate (check-status-vocabulary.mjs) currently fails with 80 residual hits - most are legitimately this unit's job, a few are unowned files flagged in BLOCKERS.md |
+| W4-REAPER | 2 | ready | Dexter | W2-STATUS (done) | Adversarial review required. Use `isExcludedFromRedrive()` and the processed_at/leadbyte_outcome_at guidance already left in server/src/lib/leadStatus.js's comments - do not re-derive redrive-eligibility logic from scratch |
+| W7-INVARIANTS | 2 | ready | Dexter | W2-STATUS (done) | Audit first, code only where missing |
 | W8-CONGRUENCE | 3 | ready | Dexter | W0-AUDIT, W3-UI-STATUS | Driven by GAP-MAP |
 | W10-GATEC | 4 | ready | Bossman | six units | Evidence assembly, no code |
 | W11-SHADOW | 5 | ready | Digit | W10-GATEC | Freeze in effect |

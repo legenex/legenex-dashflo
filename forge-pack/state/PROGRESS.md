@@ -72,3 +72,46 @@ Remains: W13-OFFSITE still blocked on Nick (backup provider choice). The webhook
 gap and the three distribution-engine safety defects are new, currently unowned findings that
 should get their own bounded units before Gate C - see `BLOCKERS.md`.
 Next unit: Wave 1 - W2-STATUS and W9-ONBOARDING, both now unblocked.
+
+## 2026-09-05  Wave 1 (W2-STATUS, W9-ONBOARDING)
+Attempted: dispatched both in parallel worktrees; independently reviewed before merge.
+Changed:
+- `server/src/functions/{submitBuyerOnboarding,getOnboardingContext,sendOnboardingLink,
+  onboardBuyer}.js`, `client/src/pages/Apply.jsx`, `CoverageStep.jsx`, `BuyerOnboarding.json`
+  (`13c8dea`, W9-ONBOARDING): fixed GAP-59 (Xero/Stripe steps now skip gracefully instead of
+  throwing and blocking the whole pipeline when uncredentialed - matches the existing
+  crm_contact/dispo_scope pattern) and GAP-57 (the wired onboarding form now actually captures
+  and stores a buyer's vertical; a per-buyer invite link's known vertical is no longer dropped).
+  Also added: link expiry (30-day TTL, was completely unimplemented despite the UI promising it),
+  immutable versioned submissions (was silently overwriting), rate limiting on
+  getOnboardingContext (was present on submit, missing on read). Found and recorded a new gap:
+  Buyer Draft to Active has no delivery-test gate at all, contra D9's own acceptance line.
+- `server/src/schemas/entities/{Lead,ApiConnector,LeadByteConnector,InboundWebhookRoute}.json`,
+  `server/src/functions/{processLead,webhook,leadbyteWebhook}.js`, `server/src/lib/leadStatus.js`
+  (new), `server/scripts/migrate-status-vocabulary.js` (new) (`f19dd0e` = `321b3d9` + `bcfe017`,
+  W2-STATUS, D1/D3/D4): the seven-value status vocabulary, `processing_state`, machine reason
+  codes, and connector-trigger remapping. **Two full rounds required** - round 1 (`321b3d9`)
+  built sound mapping/safety logic (proven: naive trigger remapping would have been actively
+  dangerous, not just wrong; revenue-from-flags provably unaffected; three D4 risks addressed)
+  but adversarial QA found the unit didn't do its actual job: no invokable migration existed (0 of
+  1,984 leads had any path to the new vocabulary) and `webhook.js`/`leadbyteWebhook.js` never
+  wrote the new fields, so every lead created after release would get a permanently NULL
+  `lead_status` - a ticking regression for W3-UI-STATUS. Round 2 (`bcfe017`) added a real
+  report/`--apply` migration script, made both webhook handlers dual-write the new fields
+  additively (proven not to change either file's existing behavior via 11 new tests against real
+  handlers/real DB), and fixed three smaller issues: a verification that reported "clean" on a
+  dirty run, a missed `migrated_at` stamp on rows already consistent, and `migrated_at`
+  permanently blocking future reaping of a lead that later fails for real (fixed using
+  `processed_at`/`leadbyte_outcome_at` as the live-activity signal, since this module structurally
+  cannot write those fields). QA also corrected an earlier finding: it's two contradictory
+  precedence orders in live code, not three, and the unowned-file list is ~14 files, not 2 -
+  `testCapiConnector.js` is live production code. Still not run against a restored production
+  copy (same disclosed limitation as W1-FLAGS) - the drill is now possible, not yet done.
+Verified: `npm run gate` green at every merge under `LC_ALL=en_US.UTF-8`. One transient GitHub
+Actions failure (VPS SSH host-key unreachable after 3 attempts - a network blip, not a code
+issue), resolved by `gh run rerun`; production reconfirmed healthy.
+Remains: W13-OFFSITE still blocked. Three unowned findings need bounded units before Gate C (see
+BLOCKERS.md): the distribution-engine safety defects, the webhook.js precedence guard, and the
+Buyer Draft-to-Active delivery-test gate.
+Next unit: Wave 2 - W3-UI-STATUS, W4-REAPER, W7-INVARIANTS, all now unblocked, disjoint file
+trees, dispatched in parallel.
