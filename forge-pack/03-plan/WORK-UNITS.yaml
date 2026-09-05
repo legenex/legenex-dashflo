@@ -1,0 +1,375 @@
+# DashFlo remaining work. Machine-readable execution source of truth.
+# Every unit cites CONTRACT.md decisions. No unit may be closed on prose.
+# files_owned is exclusive: two units in the same wave never share a writable path.
+
+meta:
+  contract: forge-pack/CONTRACT.md
+  repo: legenex/legenex-dashflo
+  base_branch: main
+  gate_command: npm run gate
+  freeze_date: 2026-09-12
+  target: Gate C first supplier live 2026-09-16
+
+units:
+
+  - id: W0-AUDIT
+    title: Size the real remaining gap in Lead Distribution and Operations
+    objective: >
+      Replace v1's description of unfinished surfaces with measured findings.
+      Read-only. Produce docs/GAP-MAP.md listing every concrete inconsistency in
+      list pages, filters, tables, row actions and column controls, plus the
+      exact remaining gap in buyer onboarding, each with file paths and an hours
+      estimate.
+    contract_refs: [Section 5 F, Section 5 G, D9]
+    depends_on: []
+    read_context: [AGENTS.md, docs/STATE.md, docs/GROUND-TRUTH.md, docs/REQUIREMENTS.md, client/src/components, client/src/pages]
+    files_owned: [docs/GAP-MAP.md]
+    files_forbidden: ["server/**", "client/src/**"]
+    risk: low
+    human_input: none
+    acceptance_steps:
+      - Every claim cites a file path and line range
+      - Each item carries an hours estimate and a P0 or post-cutover flag
+      - Items already closed by the seven Lead Distribution rebuild stages in docs/STATE.md are marked closed, not restated as gaps
+    goal_predicate: "test -f docs/GAP-MAP.md && node forge-pack/scripts/check-gap-map.mjs"
+    evaluator: evaluator
+    rollback_or_recovery: Document only.
+    completion_artifacts: [docs/GAP-MAP.md]
+
+  - id: W1-FLAGS
+    title: Derived money flags and backfill
+    objective: >
+      Add is_sold, sold_at, sale_price_effective, is_returned, returned_at,
+      is_converted, converted_at, conversion_type as immutable derived flags.
+      Backfill all 1984 production leads. Repoint every revenue, GP, CPL and
+      ROAS calculation off lead_status and onto the flags.
+    contract_refs: [D2]
+    depends_on: []
+    read_context: [server/src/schemas/entities/Lead.json, server/src/db/schema.js, server/src/functions/generateBillingRun.js]
+    files_owned:
+      - server/src/schemas/entities/Lead.json
+      - server/src/db/schema.js
+      - server/src/lib/leadFlags.js
+      - server/test/leadFlags.test.js
+    files_forbidden: ["client/src/lib/distribution/**"]
+    risk: high
+    human_input: none
+    acceptance_steps:
+      - On a restored copy of production, revenue from flags equals revenue from the current status query, to the cent
+      - Flags are write-once; a test proves is_sold cannot be cleared by any status transition
+      - A converted lead still reports is_sold true and its original sale_price_effective
+    goal_predicate: "npx vitest run server/test/leadFlags.test.js && npm run gate"
+    evaluator: evaluator-data
+    rollback_or_recovery: Additive columns only. Revert the migration.
+    completion_artifacts: [migration file, before and after revenue reconciliation]
+
+  - id: W2-STATUS
+    title: Seven-status model, processing_state, reason codes, connector remap
+    objective: >
+      Reduce final_status from twelve values to the seven in D1. Add
+      processing_state and machine reason codes. Migrate all 1984 leads per D4.
+      Remap every ApiConnector, LeadByteConnector and InboundWebhookRoute
+      trigger array in the same migration. DNC-suppressed leads take rejected
+      with REJECTED_DNC per D3.
+    contract_refs: [D1, D3, D4]
+    depends_on: [W1-FLAGS]
+    read_context: [server/src/schemas/entities/Lead.json, server/src/schemas/entities/ApiConnector.json, server/src/schemas/entities/LeadByteConnector.json, server/src/schemas/entities/InboundWebhookRoute.json, server/src/functions/processLead.js, server/src/lib/intake.js, server/src/lib/dncEnforcement.js, server/src/functions/leadbyteWebhook.js, client/src/lib/distribution/distribute.js]
+    files_owned:
+      - server/src/schemas/entities/Lead.json
+      - server/src/schemas/entities/ApiConnector.json
+      - server/src/schemas/entities/LeadByteConnector.json
+      - server/src/schemas/entities/InboundWebhookRoute.json
+      - server/src/functions/processLead.js
+      - server/src/lib/intake.js
+      - server/src/lib/leadStatus.js
+      - server/test/leadStatus.test.js
+      - server/test/statusMigration.test.js
+    files_forbidden: ["client/src/**"]
+    risk: high
+    human_input: none
+    acceptance_steps:
+      - All 1984 leads migrate with zero rows on a retired value
+      - Revenue, sold count and GP identical before and after, to the cent
+      - A test asserts no connector trigger key references a retired status
+      - Historical Error leads carry migrated_at and the reaper excludes them
+      - A DNC-suppressed lead is stored, reaches rejected with REJECTED_DNC, reaches no buyer
+      - Existing DNC all-path tests pass unchanged
+    goal_predicate: "npx vitest run server/test/leadStatus.test.js server/test/statusMigration.test.js && npm run gate"
+    evaluator: evaluator-data
+    rollback_or_recovery: >
+      Expand and contract. New columns alongside old, dual-write, verify, then
+      contract in a separate release. Never a single destructive ALTER. Restore
+      drill passes on the pre-migration dump first.
+    completion_artifacts: [migration file, reconciliation output, connector remap report]
+
+  - id: W3-UI-STATUS
+    title: Status vocabulary through the client, per-tab filters, reports
+    objective: >
+      Replace the twelve-value vocabulary in the client. Only All Leads carries
+      a Status filter; Sold, Unsold, Disqualified and Rejected tabs must not
+      offer it. Split the Overview Top Rejection Reasons card into Top Rejection
+      Reasons (post-time) and Top Unsold Reasons (buyer and routing).
+    contract_refs: [D1]
+    depends_on: [W2-STATUS]
+    read_context: [client/src/pages, client/src/components/leads, docs/GAP-MAP.md]
+    files_owned:
+      - "client/src/components/leads/**"
+      - client/src/lib/leadStatus.js          # already exists, is the vocabulary module
+      - client/src/lib/tagColors.js
+      - client/src/lib/overviewFinance.js
+      - client/src/lib/distributionMetrics.js
+      - client/src/lib/importFinalize.js
+      - client/src/pages/Leads.jsx
+      - client/src/pages/LeadsRejections.jsx  # currently REJECTED_STATUSES = Unsold, Duplicate, Error
+      - "client/src/components/overview/**"   # handed over by W5, which finished in wave 0
+      - client/src/utils/leadError.js
+    files_forbidden: ["server/**", "client/src/lib/distribution/**"]
+    risk: medium
+    human_input: none
+    acceptance_steps:
+      - No client file references a retired status value
+      - Sold, Unsold, Disqualified and Rejected tabs render no Status filter
+      - Unsold reason breakdown is a dimension on the Distribution report
+    goal_predicate: "npm run gate && node forge-pack/scripts/check-status-vocabulary.mjs"
+    evaluator: evaluator
+    rollback_or_recovery: Client-only.
+    completion_artifacts: [screenshots of each lead tab, dark and light]
+
+  - id: W4-REAPER
+    title: Stuck lead reaper and Stuck Leads queue
+    objective: >
+      Scheduled job finds leads at queued whose processing_state has not
+      advanced within 15 minutes, resumes safely from the last durable
+      checkpoint, never resends where prior receipt is possible, and surfaces
+      the unresolvable in a Stuck Leads card with the stage it stalled at.
+    contract_refs: [D1, Section 7]
+    depends_on: [W2-STATUS]
+    read_context: [server/src/lib/receipts.js, server/src/lib/nativeRetryRunner.js, server/src/functions/processLead.js]
+    files_owned:
+      - server/src/functions/reapStuckLeads.js
+      - server/test/reapStuckLeads.test.js
+      - client/src/components/distribution/StuckLeadsCard.jsx
+    files_forbidden: ["server/src/functions/processLead.js"]
+    risk: high
+    human_input: none
+    acceptance_steps:
+      - Kill the process between durable write and routing, restart, lead is present at queued and recovered
+      - An ambiguous delivery outcome is never resumed automatically; it surfaces for reconciliation
+      - Leads carrying migrated_at are excluded
+      - Exactly one routing run and at most one sale result after recovery
+    goal_predicate: "npx vitest run server/test/reapStuckLeads.test.js && npm run gate"
+    evaluator: evaluator-security
+    rollback_or_recovery: Disabled by an environment flag, default off until its test passes in staging.
+    completion_artifacts: [crash and recover test output]
+
+  - id: W5-EMPTY-STATES
+    title: Honest empty and unavailable states across every card
+    objective: >
+      No metric renders a number it cannot support. No data renders no-data.
+      Unavailable source renders unavailable with a link to its Data Source. A
+      missing optional integration degrades quietly. A score and its caption may
+      not contradict each other.
+    contract_refs: [Section 3]
+    depends_on: []
+    read_context: [client/src/pages/Overview.jsx, client/src/components]
+    files_owned: ["client/src/components/overview/**", "client/src/pages/Overview.jsx", "client/src/components/shared/LeadCountsStrip.jsx"]
+    files_forbidden: ["server/**"]
+    risk: low
+    human_input: none
+    acceptance_steps:
+      - With an empty lead table, Revenue, CPL, Profit and Data Quality render no-data states, not zeros or scores
+      - With ANTHROPIC_API_KEY unset, the analyst card renders a quiet not-configured state and no red error appears on Overview
+      - Data Quality never renders a score while its feeds are stale
+    goal_predicate: "npm run gate && npx vitest run client/src/components/overview"
+    evaluator: evaluator-ux
+    rollback_or_recovery: Client-only.
+    completion_artifacts: [screenshots at empty, stale and healthy states]
+
+  - id: W6-FIXTURES
+    title: Thirteen named fixtures and the adversarial delivery modes
+    objective: >
+      Commit thirteen concrete synthetic leads with documented expected outcome
+      and reason code. Verify the existing mock delivery covers the adversarial
+      modes and add only what is missing, in particular 200-with-unmatched-body
+      and accept-then-drop-connection.
+    contract_refs: [D1]
+    depends_on: []
+    read_context: [server/test/deliveryDryRunAndMockSend.test.js, server/src/functions/deliveryMockSend.js, server/src/functions/campaignDeliveryTest.js]
+    files_owned: ["server/test/fixtures/**", "server/test/fixtureOutcomes.test.js"]
+    files_forbidden: ["server/src/functions/processLead.js"]
+    risk: low
+    human_input: >
+      Only if MVA or WC qualification rules cannot be extracted from the repo,
+      LeadByte config or live forms. One batched question, never per field.
+    acceptance_steps:
+      - Thirteen fixtures covering clean accept, cascade, tiered price, geo excluded, all capped, schedule closed, all buyers rejected, criteria DQ, duplicate, missing required, DNC suppressed, WC accept, WC state inactive, ambiguous timeout
+      - Each asserts the exact lead_status and reason code
+      - The ambiguous timeout fixture proves routing stops and no cascade occurs
+    goal_predicate: "npx vitest run server/test/fixtureOutcomes.test.js"
+    evaluator: evaluator
+    rollback_or_recovery: Test-only.
+    completion_artifacts: [fixture files, passing output]
+
+  - id: W7-INVARIANTS
+    title: Invariant to constraint audit
+    objective: >
+      For each commercial invariant, record which database constraint or
+      single-statement claim enforces it. Where an invariant is enforced only in
+      application code, add the constraint.
+    contract_refs: [Section 7]
+    depends_on: [W2-STATUS]
+    read_context: [server/src/db/receiptSchema.js, server/src/db/schema.js, server/src/lib/receipts.js, server/src/lib/nativeRetryRunner.js]
+    files_owned: [docs/INVARIANTS.md, server/src/db/invariantConstraints.js, server/test/capRace.test.js, server/test/idempotency.test.js]
+    files_forbidden: ["server/src/schemas/**"]
+    risk: medium
+    human_input: none
+    acceptance_steps:
+      - Each invariant names its enforcing constraint with file and line
+      - A concurrency test proves only one lead takes the final cap slot
+      - A replay test proves a repeated inbound request creates no second lead, sale, cost or routing run
+    goal_predicate: "npx vitest run server/test/capRace.test.js server/test/idempotency.test.js && npm run gate"
+    evaluator: evaluator-security
+    rollback_or_recovery: New constraints are additive; each ships with its DROP.
+    completion_artifacts: [docs/INVARIANTS.md, race and replay output]
+
+  - id: W8-CONGRUENCE
+    title: List page congruence
+    objective: >
+      Close the inconsistencies measured in W0-AUDIT. Same search, filter bar,
+      column controls, sort, pagination, saved views, status pills, row actions,
+      bulk selection, empty and error states and export across every list page.
+      Context-specific filters stay context-specific.
+    contract_refs: [Section 5 F]
+    depends_on: [W0-AUDIT, W3-UI-STATUS]
+    read_context: [docs/GAP-MAP.md, client/src/components]
+    files_owned: ["client/src/components/tables/**", "client/src/components/operations/**"]
+    files_forbidden: ["client/src/components/leads/**", "server/**"]
+    risk: medium
+    human_input: none
+    acceptance_steps:
+      - Every P0 item in GAP-MAP.md is closed or explicitly deferred with a reason
+      - Column settings persist per user and per page
+      - Buyers and Suppliers lists support multi-select with Edit, Duplicate, Pause, Delete
+    goal_predicate: "npm run gate && node forge-pack/scripts/check-gap-map.mjs --closed"
+    evaluator: evaluator-ux
+    rollback_or_recovery: Client-only.
+    completion_artifacts: [before and after screenshots per page]
+
+  - id: W9-ONBOARDING
+    title: Complete buyer onboarding
+    objective: >
+      Finish the existing flow to D9 scope. Secure expiring revocable link,
+      per-vertical form from configuration, immutable versioned submissions,
+      missing-information detection, internal alert, visible on Buyer Detail,
+      Draft to Active gated on a passing delivery test.
+    contract_refs: [D9]
+    depends_on: [W0-AUDIT]
+    read_context: [server/src/functions/onboardBuyer.js, server/src/functions/sendOnboardingLink.js, server/src/functions/submitBuyerOnboarding.js, server/src/functions/getOnboardingContext.js, server/src/schemas/entities/BuyerOnboarding.json, docs/GAP-MAP.md]
+    files_owned:
+      - server/src/functions/submitBuyerOnboarding.js
+      - server/src/functions/getOnboardingContext.js
+      - server/src/functions/sendOnboardingLink.js
+      - server/test/buyerOnboarding.test.js
+      - "client/src/pages/onboarding/**"
+    files_forbidden: ["server/src/functions/processLead.js", "client/src/components/tables/**"]
+    risk: medium
+    human_input: none
+    acceptance_steps:
+      - A clean unauthenticated session completes the form via the link and the submission stores against the correct buyer with a version record
+      - An incomplete submission flags the exact missing fields and blocks Active
+      - A revoked token is dead; an invalid token returns a neutral page that does not confirm whether the buyer exists
+      - No internal identifier, price, routing detail or margin renders on the form
+      - The endpoint is rate limited and passes the existing IDOR and tenant-leakage checks
+    goal_predicate: "npx vitest run server/test/buyerOnboarding.test.js && npm run gate"
+    evaluator: evaluator-security
+    rollback_or_recovery: Link issuance behind a flag; revoke all tokens to disable.
+    completion_artifacts: [test output, screenshots, security check output]
+
+  - id: W10-GATEC
+    title: Assemble the Gate C decision packet
+    objective: >
+      Produce the complete Gate C evidence packet per docs/HUMAN-GATES.md, plus
+      D7 live pricing decision items, first-supplier manifest, success
+      thresholds, kill switch and rollback.
+    contract_refs: [D7, Section 6]
+    depends_on: [W2-STATUS, W4-REAPER, W6-FIXTURES, W7-INVARIANTS, W8-CONGRUENCE, W9-ONBOARDING]
+    read_context: [docs/HUMAN-GATES.md, docs/PRODUCTION-CUTOVER-RUNBOOK.md, docs/BACKUP-RESTORE.md]
+    files_owned: [docs/GATE-C-PACKET.md]
+    files_forbidden: ["server/**", "client/**"]
+    risk: low
+    human_input: "Owner decision required. This unit produces the packet, not the approval."
+    acceptance_steps:
+      - Every line of the Gate C evidence list is present with evidence, including DNC all-path evidence, which stands unchanged per D3
+      - Live pricing decisions listed individually with a recommended option and a consequence
+      - Kill switch demonstrated, not described
+      - Rollback to LeadByte rehearsed, not described
+      - No question in the packet is answerable by code, tests, exports or history
+    goal_predicate: "node forge-pack/scripts/check-gate-c-packet.mjs"
+    evaluator: evaluator-security
+    rollback_or_recovery: Document only.
+    completion_artifacts: [docs/GATE-C-PACKET.md, kill switch and rollback drill output]
+
+  - id: W11-SHADOW
+    title: Shadow run and discrepancy report
+    objective: >
+      Run distributionShadowReport against real traffic with commercial sending
+      disabled. Reconcile every routing decision against the expected LeadByte
+      outcome. Explain or fix every difference.
+    contract_refs: [Section 6]
+    depends_on: [W10-GATEC]
+    read_context: [server/src/functions/distributionShadowReport.js, server/src/functions/distributionSetMode.js]
+    files_owned: [docs/SHADOW-REPORT.md]
+    files_forbidden: ["server/src/functions/**"]
+    risk: high
+    human_input: none
+    acceptance_steps:
+      - Zero commercial sends during the shadow window, proven from DeliveryAttempt records
+      - Every discrepancy explained with a reason or fixed
+      - Caps, prices and schedules reconcile to source records
+    goal_predicate: "node forge-pack/scripts/check-shadow-clean.mjs"
+    evaluator: evaluator-data
+    rollback_or_recovery: Verify shadow mode has no commercial side effects before running, do not assume it.
+    completion_artifacts: [docs/SHADOW-REPORT.md]
+
+  - id: W12-CANARY
+    title: First supplier live
+    objective: >
+      After owner approval of the Gate C packet, activate one low-volume
+      supplier path with a small cap. Monitor every lead, delivery, response,
+      sale and cost event in real time. LeadByte stays available for rollback.
+    contract_refs: [D7, Section 6]
+    depends_on: [W11-SHADOW]
+    read_context: [docs/GATE-C-PACKET.md, docs/PRODUCTION-CUTOVER-RUNBOOK.md]
+    files_owned: [docs/CUTOVER-LOG.md]
+    files_forbidden: ["server/**", "client/**"]
+    risk: critical
+    human_input: "REQUIRED. Owner approval of Gate C. No agent may activate live commercial routing."
+    acceptance_steps:
+      - Zero lost leads and zero duplicate commercial sends across the observation window
+      - Accepted, rejected and technical outcomes reconcile against buyer records
+      - Revenue, supplier cost and GP reconcile to source
+      - Rollback by supplier URL change proven available throughout
+    goal_predicate: "human: owner sign-off recorded in docs/CUTOVER-LOG.md with evidence links"
+    evaluator: human
+    rollback_or_recovery: Repoint the supplier URL to LeadByte. Kill switch stops outbound delivery while continuing to store leads.
+    completion_artifacts: [docs/CUTOVER-LOG.md]
+
+  - id: W13-OFFSITE
+    title: Off-site backup replication
+    objective: >
+      deploy/backup/offsite.env does not exist, so off-site replication is a
+      no-op. Implement once a provider is chosen.
+    contract_refs: [Section 2]
+    depends_on: []
+    read_context: [deploy/backup, docs/BACKUP-RESTORE.md]
+    files_owned: ["deploy/backup/**"]
+    files_forbidden: ["server/**", "client/**"]
+    risk: medium
+    human_input: "REQUIRED. Provider choice and credential, placed in the production secret mechanism by the owner."
+    acceptance_steps:
+      - A dump is replicated off-site and restored from the off-site copy, not the local one
+      - No credential appears in the repo, logs or CI output
+    goal_predicate: "restore from the off-site copy boots the app image successfully"
+    evaluator: evaluator-security
+    rollback_or_recovery: Additive. Removing offsite.env returns to the current no-op.
+    completion_artifacts: [restore from off-site drill output]
