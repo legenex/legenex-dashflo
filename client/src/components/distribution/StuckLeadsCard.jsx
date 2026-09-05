@@ -97,6 +97,12 @@ function Row({ row }) {
           <Clock className="w-3.5 h-3.5" />
           {dwellLabel(row.stalled_minutes)}
         </div>
+        {/* The retry worker has its own rollback control. A lead that could be
+            resumed but was not, because that control is off, must say so rather
+            than sitting under a "Resuming" label that never happened. */}
+        {row.held_by_native_retry_gate === true && (
+          <span className="text-[10px] text-muted-foreground whitespace-nowrap">retry worker off</span>
+        )}
         {row.actionable === false && (
           <span className="text-[10px] text-muted-foreground">held</span>
         )}
@@ -212,6 +218,17 @@ export default function StuckLeadsCard({ fetcher, autoLoad = true }) {
             {state.data?.resumed?.routing_runs > 0 && (
               <span>
                 Routing runs started: <span className="text-foreground font-semibold">{state.data.resumed.routing_runs}</span>
+              </span>
+            )}
+            {state.data?.native_retry_enabled === false && (
+              <span className="status-unsold">Retry worker off, nothing is being re-sent</span>
+            )}
+            {/* A truncated scan is never silent. Stuck leads are old leads, so
+                the scan runs oldest first and the cap drops the newest rows,
+                but an operator still needs to know the cap was reached. */}
+            {state.data?.scan?.truncated && (
+              <span className="status-unsold">
+                Scan capped at <span className="text-foreground font-semibold">{state.data.scan.limit}</span> queued rows
               </span>
             )}
             {state.data?.dry_run && <span className="italic">read only</span>}

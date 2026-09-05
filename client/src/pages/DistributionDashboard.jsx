@@ -8,6 +8,7 @@ import { toast } from 'sonner';
 import { integrationStatus } from '@/functions/integrationStatus';
 import { distributionInsights } from '@/functions/distributionInsights';
 import SectionHeader from '@/components/shared/SectionHeader';
+import StuckLeadsCard from '@/components/distribution/StuckLeadsCard';
 import RefreshButton from '@/components/shared/RefreshButton';
 import PeriodTabs from '@/components/shared/PeriodTabs';
 import { resolvePeriod, priorWindow, PERIOD_LABELS } from '@/lib/periodRange';
@@ -287,6 +288,12 @@ export default function DistributionDashboard() {
             })}
           </div>
         </Panel>
+
+        {/* Stuck Leads queue, CONTRACT.md D1: "a lead at queued + failed is a
+            stuck lead, surfaced in the Stuck Leads queue". This is where it is
+            surfaced. The card loads with dry_run, which classifies and writes
+            nothing, so opening this page can never resume a lead. */}
+        <StuckLeadsCard />
 
         {/* Chart + AI */}
         <div className="grid grid-cols-1 xl:grid-cols-[1.6fr_1fr] gap-4">
