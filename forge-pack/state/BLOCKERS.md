@@ -69,3 +69,35 @@ canonical status-change action lives) plus a delivery-test call (the existing `c
 blocks Draft to Active until a delivery test against that buyer's configured destination has passed.
 Should land before Gate C, since D9 names this as a completion requirement, not an enhancement.
 Raised: 2026-09-05
+
+## NEW-UNIT-NEEDED  webhook.js/leadbyteWebhook.js precedence guard, and a wider unowned-file list than first thought
+Blocked by: no work unit owns `server/src/functions/webhook.js` or `server/src/functions/leadbyteWebhook.js`.
+Evidence: independent adversarial QA on W2-STATUS confirmed, by direct quote, that these two live write paths
+set `final_status`/`lead_status` with no precedence guard at all (`webhook.js:505` unconditional
+`if (status && status !== existing.final_status) { patch.final_status = status; }`; `webhook.js:604` create
+branch same; `leadbyteWebhook.js`'s create branch likewise, plus a `buyer_returned` bypass at `:370-377`).
+Correction to the original framing: this is **two** distinct, mutually contradictory precedence orders in
+live code, not three - `leadbyteWebhook.js:19-28`'s `STATUS_PRECEDENCE` and `client/src/lib/leadIdentity.js:
+112-124` are byte-identical once one array is reversed, both ranking Sold and Converted **above** Returned,
+the opposite of forge-pack/CONTRACT.md D1's `returned > converted > sold` rule. W2-STATUS's own test suite
+now pins this disagreement deliberately (`leadStatus.test.js`, the "DISAGREES...on purpose" test) so a
+future contributor cannot silently "fix" it to match the wrong order without the test making noise - but
+note that specific test only asserts `outranksStatus(RETURNED, SOLD/CONVERTED)`, it does not itself read
+either contradictory array, so don't rely on it alone as proof the gap is being watched.
+Separately, the QA found the "orphaned files with no owner in WORK-UNITS.yaml" problem is roughly 7x larger
+than first recorded: at least 14 files reference a retired status literal with no unit owning them, not 2.
+Most importantly, **`server/src/functions/testCapiConnector.js` is live, authenticated, reachable production
+code** (registered as `POST /api/functions/testCapiConnector`, called from `SettingsApiConnectors.jsx:343`)
+- not dead tooling as the word "orphaned" might suggest. The fuller list includes `webhook.js`,
+`leadbyteWebhook.js`, `SettingsApiConnectors.jsx`, `WebhookDeliverySettings.jsx` (which also *writes* a
+fallback trigger config hardcoding the old key), `client/src/lib/distribution/distribute.js` (inside a
+directory W3-UI-STATUS's own `files_forbidden` explicitly excludes it from touching), `PayloadTester.jsx`,
+`CsvImporter.jsx`, `postingSpec.js`, `TriggerDataOverrides.jsx`, and `spec.js`.
+Smallest unblock: a bounded unit (or two - the precedence guard and the trigger-literal cleanup are
+separable) owning `webhook.js` and `leadbyteWebhook.js` to add an actual precedence check on every
+final_status write (matching D1's order, reconciling which of the two existing wrong orders it replaces),
+and a pass across the ~14-file list above to migrate every hardcoded old-style trigger key to the new
+canonical ones now that W2-STATUS's dual-spelling shim exists as a bridge. Needs to land before the shim
+(`leadStatus.js`'s `TRIGGER_ALIASES`) can ever be removed, and before Gate C - `testCapiConnector.js` being
+live means this isn't cleanup, it's a real user-facing surface still speaking the old vocabulary.
+Raised: 2026-09-05
