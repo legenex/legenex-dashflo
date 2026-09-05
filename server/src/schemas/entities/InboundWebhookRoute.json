@@ -20,7 +20,16 @@
       "type": "number"
     },
     "event_type": {
-      "description": "Optional pinned lifecycle status for this webhook. Leave blank for dynamic: the status is then read from lead_status on the payload. Accepts Sold, Unsold, Returned, Rejected, Duplicate, Disqualified, Converted.",
+      "description": "Optional pinned lifecycle status for this webhook. Leave blank for dynamic: the status is then read from lead_status on the payload. W2-STATUS, forge-pack/CONTRACT.md D1 and D4 first risk: this is the status-derived key on this entity and is remapped onto the seven-value vocabulary in the same migration as the connector trigger arrays. Accepts sold, unsold, returned, rejected, disqualified, converted, queued. The retiring Duplicate value becomes rejected, since a duplicate is not accepted as a valid new routable lead. server/src/functions/webhook.js resolves this through a lowercased STATUS_MAP, so every new value already resolves there unchanged.",
+      "type": "string"
+    },
+    "event_type_legacy": {
+      "description": "W2-STATUS. The pre-migration event_type, written once by the remap. Kept so the remap is reversible from the row itself with no backup restore, per the expand-and-contract rollback plan. Never read at runtime.",
+      "type": "string"
+    },
+    "event_type_migrated_at": {
+      "description": "W2-STATUS. Set when this route's pinned event_type was remapped onto the seven-value vocabulary. Its presence is what makes the remap idempotent.",
+      "format": "date-time",
       "type": "string"
     },
     "last_error": {

@@ -80,7 +80,7 @@
     },
     "received_event_name": {
       "type": "string",
-      "description": "Event name fired on the Qualified trigger (key on_received). Falls back to 'Lead' if blank."
+      "description": "Event name fired on the intake trigger, key on_qualified. Falls back to 'Lead' if blank. W2-STATUS: the field name is unchanged so the settings UI keeps working; only the trigger key it answers to was renamed."
     },
     "sold_event_name": {
       "type": "string",
@@ -97,7 +97,7 @@
     },
     "dq_event_name": {
       "type": "string",
-      "description": "Event name fired on the Disqualified trigger. No fallback \u2014 if blank, the DQ event does not fire."
+      "description": "Event name fired on the disqualified trigger, key on_disqualified. No fallback: if blank, the disqualified event does not fire."
     },
     "rejected_event_name": {
       "type": "string",
@@ -105,7 +105,7 @@
     },
     "duplicates_event_name": {
       "type": "string",
-      "description": "Event name fired on the Duplicates trigger. Falls back to 'Lead' if blank."
+      "description": "Event name fired on the duplicate-rejection trigger, key on_rejected_duplicate. Falls back to 'Lead' if blank. W2-STATUS: the Duplicate status retires into rejected with reason REJECTED_DUPLICATE, and this trigger stays scoped to that reason so a duplicates-only connector does not start firing on every rejection."
     },
     "action_source": {
       "type": "string",
@@ -145,11 +145,20 @@
     },
     "trigger_data_overrides": {
       "type": "string",
-      "description": "JSON map of trigger_key -> { custom_data field: value } overrides applied on top of the template's custom_data for that trigger. Values support {{token}} placeholders. e.g. {\"on_dq\":{\"qualification_status\":\"Disqualified Lead\"}}"
+      "description": "JSON map of trigger_key -> { custom_data field: value } overrides applied on top of the template's custom_data for that trigger. Values support {{token}} placeholders. e.g. {\"on_disqualified\":{\"qualification_status\":\"Disqualified Lead\"}}"
     },
     "triggers": {
       "type": "string",
-      "description": "JSON array of trigger keys derived from the lead_status system field (on_received=Qualified, on_sold, on_unsold, on_dq=Disqualified, on_queued, on_rejected, on_duplicates, plus any custom lead_status values such as on_24m_lead). Empty array = fire on every lead (intake), gated only by filters."
+      "description": "JSON array of trigger keys. W2-STATUS, forge-pack/CONTRACT.md D1 and D4 first risk. The canonical keys are on_qualified (intake), on_queued, on_rejected, on_rejected_duplicate, on_disqualified, on_unsold, on_sold, on_returned, on_converted, on_processing_failed, plus any custom inbound lead_status value such as on_24m_lead. Empty array = fire on every lead (intake), gated only by filters. Trigger matching in server/src/functions/processLead.js folds the retired keys onto their canonical names before comparing, so an array written before this migration, or written by a settings screen that has not migrated yet, still fires. A trigger matching nothing throws no error, which is why that dual read exists and why server/src/lib/leadStatus.js findRetiredTriggerKeys is run as a loud check."
+    },
+    "triggers_legacy": {
+      "type": "string",
+      "description": "W2-STATUS. The pre-migration triggers array, JSON, written once by the connector trigger remap. Kept so the remap is reversible from the row itself with no backup restore, per the expand-and-contract rollback plan. Never read at runtime."
+    },
+    "triggers_migrated_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "W2-STATUS. Set when this connector's triggers array was remapped onto the canonical keys. Its presence is what makes the remap idempotent and safely resumable after an interruption."
     }
   },
   "required": [

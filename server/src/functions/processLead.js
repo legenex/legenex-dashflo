@@ -8,6 +8,28 @@ import { pool as receiptPool } from '../db/pool.js';
 import { ensureReceiptSchema } from '../db/receiptSchema.js';
 import { makeTargetValidator } from '../lib/ssrfGuard.js';
 import { resolveSubDeliveryCredential } from '../lib/subDeliveryCredential.js';
+// W2-STATUS, forge-pack/CONTRACT.md D1, D3 and D4. The seven-value vocabulary,
+// processing_state, machine reason codes and the canonical connector trigger
+// keys all live in one module. This file dual-writes final_status alongside
+// the new fields for the whole expand phase; see lib/leadStatus.js for why,
+// and for the precedence gap in the two webhook write paths that this unit
+// does not own and could not close.
+import {
+  LEAD_STATUS,
+  LEGACY_STATUS,
+  LEGACY_INBOUND_STATUSES,
+  PROCESSING_STATE,
+  STATUS_REASON,
+  TRIGGER,
+  INTAKE_TRIGGER,
+  isIntakeTrigger,
+  canonicalTriggerKey,
+  triggerMatches,
+  triggerKeyForInboundStatus,
+  mapLegacyStatus,
+  resolveLegacyStatus,
+  statusPatch,
+} from '../lib/leadStatus.js';
 
 // SSRF guard for the real native send path: an operator-configured
 // SubDelivery.target_url must resolve only to a public address, checked
@@ -628,15 +650,17 @@ async function sendDestinationAwait(dest, leadData, leadId, trigger) {
   }
 }
 
-// Built-in lead statuses that fire via lifecycle triggers. Any other lead_status
-// value (e.g. "24m Lead") fires via the custom-status trigger point after enrichment.
-const BUILTIN_LEAD_STATUSES = ['Qualified', 'Disqualified', 'Sold', 'Unsold', 'Rejected', 'Duplicates', 'Queued', 'Error'];
-function triggerKeyForStatus(statusLabel) {
-  const map = { Qualified: 'on_received', Sold: 'on_sold', Unsold: 'on_unsold', Disqualified: 'on_dq', Queued: 'on_queued', Rejected: 'on_rejected', Duplicates: 'on_duplicates', Error: 'on_error' };
-  if (map[statusLabel]) return map[statusLabel];
-  const slug = String(statusLabel || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
-  return `on_${slug || 'status'}`;
-}
+// Built-in INBOUND lead_status values that fire via lifecycle triggers. Any
+// other inbound value (e.g. "24m Lead") fires via the custom-status trigger
+// point after enrichment.
+//
+// W2-STATUS: this list and the status-to-trigger map moved to
+// lib/leadStatus.js so there is one copy. It is deliberately NOT retired by
+// D4: it is the vocabulary suppliers POST to us over HTTP, so changing it is a
+// supplier-facing contract change and needs the suppliers, not a migration.
+// What did change is the key it resolves to, which is now canonical.
+const BUILTIN_LEAD_STATUSES = LEGACY_INBOUND_STATUSES;
+const triggerKeyForStatus = triggerKeyForInboundStatus;
 
 // Check if a connector's filters match the current lead.
 function connectorMatchesFilters(conn, leadData, supplierAttribution, supplierRecord) {
@@ -756,22 +780,35 @@ function supplierMatchesFilter(settings, supplierAttribution, supplierRecord) {
 }
 
 // Resolve the event name for a given trigger from the connector's per-trigger fields.
-// on_received: received_event_name || lead_event_name || 'Lead'
+// The connector FIELD names are unchanged (the settings UI writes them and is
+// W3-UI-STATUS's file ownership); only the trigger keys they answer to were
+// renamed. The switch canonicalizes first, so a legacy key resolves to the
+// same field it always did.
+// on_qualified: received_event_name || lead_event_name || 'Lead'
 // on_unsold: unsold_event_name || 'Lead'
 // on_queued: queued_event_name || 'Lead'
 // on_sold: sold_event_name (no fallback - blank means skip)
-// on_dq: dq_event_name (no fallback - blank means skip)
+// on_disqualified: dq_event_name (no fallback - blank means skip)
 function getTriggerEventName(conn, trigger) {
-  switch (trigger) {
-    case 'on_received': return conn.received_event_name || conn.lead_event_name || 'Lead';
-    case 'on_unsold': return conn.unsold_event_name || 'Lead';
-    case 'on_queued': return conn.queued_event_name || 'Lead';
-    case 'on_sold': return conn.sold_event_name || '';
-    case 'on_dq': return conn.dq_event_name || '';
-    case 'on_rejected': return conn.rejected_event_name || 'Lead';
-    case 'on_duplicates': return conn.duplicates_event_name || 'Lead';
+  switch (canonicalTriggerKey(trigger)) {
+    case TRIGGER.ON_QUALIFIED: return conn.received_event_name || conn.lead_event_name || 'Lead';
+    case TRIGGER.ON_UNSOLD: return conn.unsold_event_name || 'Lead';
+    case TRIGGER.ON_QUEUED: return conn.queued_event_name || 'Lead';
+    case TRIGGER.ON_SOLD: return conn.sold_event_name || '';
+    case TRIGGER.ON_DISQUALIFIED: return conn.dq_event_name || '';
+    case TRIGGER.ON_REJECTED: return conn.rejected_event_name || 'Lead';
+    case TRIGGER.ON_REJECTED_DUPLICATE: return conn.duplicates_event_name || 'Lead';
     default: return '';
   }
+}
+
+// A connector with no event name never fires for these two triggers: the
+// existing rule is that Sold and Disqualified have no fallback event name, so
+// a blank one means the operator has not configured that event and it must not
+// be invented. Canonicalized so a legacy key behaves identically.
+function triggerRequiresEventName(trigger) {
+  const key = canonicalTriggerKey(trigger);
+  return key === TRIGGER.ON_SOLD || key === TRIGGER.ON_DISQUALIFIED;
 }
 
 // Fire all matching connectors for a given trigger. Fire-and-forget: returns
@@ -780,15 +817,19 @@ function dispatchConnectors(db, connectors, trigger, leadData, leadId, supplierA
   for (const conn of connectors) {
     if (!conn.enabled) continue;
     const triggers = parseJsonArray(conn.triggers);
-    // No triggers selected = fire on every lead (gated only by filters). Only fire once - at intake (on_received).
-    if (triggers.length > 0 && !triggers.includes(trigger)) continue;
-    if (triggers.length === 0 && trigger !== 'on_received') continue;
+    // No triggers selected = fire on every lead (gated only by filters). Only fire once, at intake.
+    // triggerMatches compares canonically, so a stored array still holding a
+    // retired key matches the canonical key fired here. That dual read is what
+    // stops D4's first risk (a trigger matching nothing, silently) from being
+    // caused by this change rather than fixed by it.
+    if (triggers.length > 0 && !triggerMatches(triggers, trigger)) continue;
+    if (triggers.length === 0 && !isIntakeTrigger(trigger)) continue;
     if (!connectorMatchesFilters(conn, leadData, supplierAttribution, supplierRecord)) continue;
     if (!connectorMatchesConditions(conn, leadData)) continue;
 
     const eventName = getTriggerEventName(conn, trigger);
-    // Sold and DQ have no fallback - skip if blank
-    if (!eventName && (trigger === 'on_sold' || trigger === 'on_dq')) continue;
+    // Sold and disqualified have no fallback event name - skip if blank
+    if (!eventName && triggerRequiresEventName(trigger)) continue;
 
     if (conn.kind === 'facebook_capi') {
       sendCapiEvent(conn, leadData, leadId, eventName, trigger)
@@ -866,9 +907,10 @@ function dispatchDeliveries(db, destinations, trigger, leadData, leadId, supplie
     if (!dest.enabled) continue;
     if (dest.is_default) continue;
     const triggers = parseJsonArray(dest.triggers);
-    // No triggers selected = fire on every lead (gated only by filters). Only fire once - at intake (on_received).
-    if (triggers.length > 0 && !triggers.includes(trigger)) continue;
-    if (triggers.length === 0 && trigger !== 'on_received') continue;
+    // No triggers selected = fire on every lead (gated only by filters). Only fire once, at intake.
+    // Canonical comparison, same reason as dispatchConnectors above.
+    if (triggers.length > 0 && !triggerMatches(triggers, trigger)) continue;
+    if (triggers.length === 0 && !isIntakeTrigger(trigger)) continue;
     if (!connectorMatchesFilters(dest, leadData, supplierAttribution, supplierRecord)) continue;
     if (!connectorMatchesConditions(dest, leadData)) continue;
 
@@ -1241,7 +1283,8 @@ function isQueueableRejection(reasonText) {
 }
 
 // Patterns that indicate a LeadByte rejection is a content/value mismatch, which
-// should classify as Disqualified (fires on_dq) rather than a catch-all Error.
+// should classify as Disqualified (fires on_disqualified) rather than a
+// catch-all processing failure.
 const CONTENT_REJECTION_PATTERNS = ['not an expected value', 'not accepted', 'not allowed', 'out of range', 'does not match'];
 
 function isContentRejection(reasonText) {
@@ -1275,9 +1318,13 @@ function buildEnvelope(traceId, {
 }
 
 // Map an inbound-status-bypass final_status to the envelope lead_status.
+//
+// W2-STATUS: this used to carry its own three-entry copy of the legacy to
+// lowercase mapping. A second copy of a mapping table is exactly how D4's
+// first risk happens, so it now asks the one table. Behaviour is unchanged for
+// the only three values this can receive.
 function bypassLeadStatus(finalForBypass) {
-  const map = { Disqualified: 'disqualified', Returned: 'returned', Sold: 'sold' };
-  return map[finalForBypass] || 'sold';
+  return mapLegacyStatus(finalForBypass)?.lead_status || LEAD_STATUS.SOLD;
 }
 
 // ── Main handler ──────────────────────────────────────────────────────────
@@ -1500,6 +1547,62 @@ export default async function processLead(ctx) {
       if (capture.outcome === INTAKE_OUTCOME.SUPPRESSED) {
         // On the do-not-contact list. Retained and auditable, contacted by
         // nobody. The reason is stable and carries no raw contact value.
+        //
+        // W2-STATUS, forge-pack/CONTRACT.md D3, verbatim: "A DNC-suppressed
+        // lead is durably stored and takes lead_status = rejected with reason
+        // REJECTED_DNC, since under D1 it was not accepted as a routable
+        // lead." Before this change the receipt was durable but NO Lead row
+        // was ever created, because this branch returns before the
+        // Lead.create further down. A suppressed lead was therefore invisible
+        // in the leads table, which is not what invariant 5's "suppressed
+        // leads remain auditable" asks for.
+        //
+        // Nothing is delivered and no connector fires: this returns
+        // immediately, so no fireConnectors or fireDeliveries call is reached.
+        // No enrichment, no HLR, no email validation, no LeadByte post.
+        //
+        // Replay-safe. captureAndScreen already concluded the receipt with
+        // terminal_outcome 'suppressed' and effects_applied false, so a
+        // resend of the same payload returns through the DUPLICATE branch
+        // below with a priorOutcome and never reaches this create again.
+        //
+        // The audit detail is the reason code, which field matched and which
+        // DncEntry did it. suppressionAudit in lib/dncEnforcement.js exists
+        // precisely because that set is safe to persist and to export; the
+        // raw contact value is not part of it.
+        const dncAudit = capture.audit || {};
+        try {
+          const suppressedLead = await db.entities.Lead.create({
+            supplier_name: supplierAttribution,
+            supplier_key_id: apiKeyRecord.id,
+            raw_payload: JSON.stringify(leadPayload),
+            archived: false,
+            ...statusPatch(LEGACY_STATUS.REJECTED, {
+              processingState: PROCESSING_STATE.SETTLED,
+              reason: STATUS_REASON.REJECTED_DNC,
+              reasonDetail: `Global do-not-contact suppression. matched_field=${dncAudit.matched_field || 'unknown'} dnc_entry_id=${dncAudit.dnc_entry_id || 'unknown'} enforcement_code=${capture.dnc.reason}`,
+              qualified: false,
+            }),
+            processed_at: new Date().toISOString(),
+            process_time_ms: Date.now() - startTime,
+          });
+          leadId = suppressedLead?.id || null;
+          if (leadId) {
+            const suppressedLeadNumber = await nextLeadId(db);
+            await db.entities.Lead.update(leadId, { lead_id: suppressedLeadNumber });
+          }
+        } catch (storeErr) {
+          // The suppression itself already succeeded and is durable on the
+          // receipt. Failing to also file the auditable Lead row must not turn
+          // a correct refusal into a 500 that a supplier will retry.
+          await db.entities.ErrorLog.create({
+            stage: 'system', severity: 'error',
+            message: 'DNC-suppressed lead was not stored',
+            detail: JSON.stringify({ reason: storeErr?.message || 'unknown', receipt_id: capture.receipt?.id || null }),
+            supplier_name: supplierAttribution,
+          }).catch(() => {});
+        }
+
         return ctx.json(buildEnvelope(traceId, {
           ok: false, acceptance: 'rejected', lead_status: 'rejected',
           code: capture.dnc.reason, reason: capture.dnc.message,
@@ -1630,7 +1733,13 @@ export default async function processLead(ctx) {
       supplier_name: supplierAttribution,
       supplier_key_id: apiKeyRecord.id,
       raw_payload: JSON.stringify(leadPayload),
-      final_status: 'Processing',
+      // W2-STATUS: the row exists and nothing has settled yet, which is
+      // exactly lead_status queued with processing_state received. The legacy
+      // value is dual-written for the expand phase. processing_state is
+      // overridden rather than taking D4's `routing`, which describes a
+      // HISTORICAL row that never got past Processing, not a lead that was
+      // created a microsecond ago.
+      ...statusPatch(LEGACY_STATUS.PROCESSING, { processingState: PROCESSING_STATE.RECEIVED }),
     });
     leadId = lead.id;
 
@@ -1815,7 +1924,7 @@ export default async function processLead(ctx) {
         message: 'Test route - lead saved for testing only', Response: 'Queued',
       });
       await db.entities.Lead.update(leadId, {
-        final_status: 'Queued',
+        ...statusPatch(LEGACY_STATUS.QUEUED, { reason: 'TEST_ROUTE' }),
         queue_reason: 'Test route - no downstream processing',
         processed_at: new Date().toISOString(),
         process_time_ms: Date.now() - startTime,
@@ -1830,14 +1939,21 @@ export default async function processLead(ctx) {
     if (routeIs.internal) {
       const internalInbound = String(leadPayload.lead_status || '').trim();
       const internalFinalStatus = (internalInbound && BUILTIN_LEAD_STATUSES.includes(internalInbound))
-        ? internalInbound : 'Qualified';
+        ? internalInbound : LEGACY_STATUS.QUALIFIED;
       const internalResponse = buildEnvelope(traceId, {
         ok: true, acceptance: 'accepted', lead_id: systemLeadId, lead_status: 'accepted',
         code: 'INTERNAL_ROUTE', reason: 'Internal route - lead saved to system only',
         message: 'Internal route - lead saved to system only', Response: internalFinalStatus,
       });
       await db.entities.Lead.update(leadId, {
-        final_status: internalFinalStatus,
+        // resolveLegacyStatus folds the inbound plural "Duplicates" onto the
+        // singular the final_status enum actually has; every other builtin
+        // inbound value is already a stored legacy value. It cannot return
+        // null here, because internalFinalStatus is either a member of
+        // BUILTIN_LEAD_STATUSES or the Qualified default.
+        ...statusPatch(resolveLegacyStatus(internalFinalStatus) || LEGACY_STATUS.QUALIFIED, {
+          reason: 'INTERNAL_ROUTE',
+        }),
         queue_reason: '',
         processed_at: new Date().toISOString(),
         process_time_ms: Date.now() - startTime,
@@ -1848,8 +1964,8 @@ export default async function processLead(ctx) {
 
     // QUEUE route: hold for manual processing - fire on_queued, skip LeadByte
     if (routeIs.queue) {
-      fireConnectors(db, apiConnectors, 'on_queued', leadPayload, leadId, supplierAttribution, supplierRecord);
-      if (!routeIs.event) fireDeliveries(db, allDestinations, 'on_queued', leadPayload, leadId, supplierAttribution, supplierRecord);
+      fireConnectors(db, apiConnectors, TRIGGER.ON_QUEUED, leadPayload, leadId, supplierAttribution, supplierRecord);
+      if (!routeIs.event) fireDeliveries(db, allDestinations, TRIGGER.ON_QUEUED, leadPayload, leadId, supplierAttribution, supplierRecord);
       await evaluateNotifications(db, ['lead_queued'], { id: leadId, queue_reason: 'Queue route - held for manual processing' }, supplierAttribution, { queue_reason: 'Queue route' });
       const queueResponse = buildEnvelope(traceId, {
         ok: true, acceptance: 'queued', lead_id: systemLeadId, lead_status: 'queued',
@@ -1857,7 +1973,7 @@ export default async function processLead(ctx) {
         message: 'Queue route - held for manual processing', Response: 'Queued',
       });
       await db.entities.Lead.update(leadId, {
-        final_status: 'Queued',
+        ...statusPatch(LEGACY_STATUS.QUEUED, { reason: 'QUEUE_ROUTE' }),
         queue_reason: 'Queue route - held for manual processing',
         processed_at: new Date().toISOString(),
         process_time_ms: Date.now() - startTime,
@@ -1871,25 +1987,28 @@ export default async function processLead(ctx) {
     // that didn't sell). Disqualified leads and custom (non-builtin) lead
     // statuses (e.g. "24m Lead") are pre-classified - they skip HLR/phone
     // verification, email validation, TrustedForm, the payload delay, and
-    // LeadByte. They fire their matching trigger (on_dq / on_<custom>),
+    // LeadByte. They fire their matching trigger (on_disqualified or a
+    // custom on_<slug>),
     // AWAIT every send so CAPI + delivery logs populate, and return the
     // actual response from the destination endpoint. The inbound
     // lead_status is preserved as-is.
     const inboundLeadStatus = String(leadPayload.lead_status || '').trim();
     const isBuiltinStatus = BUILTIN_LEAD_STATUSES.includes(inboundLeadStatus);
-    if (inboundLeadStatus && inboundLeadStatus !== 'Qualified' && (inboundLeadStatus === 'Disqualified' || !isBuiltinStatus)) {
+    if (inboundLeadStatus
+      && inboundLeadStatus !== LEGACY_STATUS.QUALIFIED
+      && (inboundLeadStatus === LEGACY_STATUS.DISQUALIFIED || !isBuiltinStatus)) {
       const bypassTrigger = triggerKeyForStatus(inboundLeadStatus);
 
       // CAPI / webhook connectors - awaited so logs populate before return.
       for (const conn of apiConnectors) {
         if (!conn.enabled) continue;
         const trig = parseJsonArray(conn.triggers);
-        if (trig.length > 0 && !trig.includes(bypassTrigger)) continue;
-        if (trig.length === 0 && bypassTrigger !== 'on_received') continue;
+        if (trig.length > 0 && !triggerMatches(trig, bypassTrigger)) continue;
+        if (trig.length === 0 && !isIntakeTrigger(bypassTrigger)) continue;
         if (!connectorMatchesFilters(conn, leadPayload, supplierAttribution, supplierRecord)) continue;
         if (!connectorMatchesConditions(conn, leadPayload)) continue;
         const eventName = getTriggerEventName(conn, bypassTrigger);
-        if (!eventName && (bypassTrigger === 'on_sold' || bypassTrigger === 'on_dq')) continue;
+        if (!eventName && triggerRequiresEventName(bypassTrigger)) continue;
         if (conn.kind === 'facebook_capi') {
           try {
             const result = await sendCapiEvent(conn, leadPayload, leadId, eventName, bypassTrigger);
@@ -1922,8 +2041,8 @@ export default async function processLead(ctx) {
           if (!dest.enabled) continue;
           if (dest.is_default) continue;
           const trig = parseJsonArray(dest.triggers);
-          if (trig.length > 0 && !trig.includes(bypassTrigger)) continue;
-          if (trig.length === 0 && bypassTrigger !== 'on_received') continue;
+          if (trig.length > 0 && !triggerMatches(trig, bypassTrigger)) continue;
+          if (trig.length === 0 && !isIntakeTrigger(bypassTrigger)) continue;
           if (!connectorMatchesFilters(dest, leadPayload, supplierAttribution, supplierRecord)) continue;
           if (!connectorMatchesConditions(dest, leadPayload)) continue;
           try {
@@ -1962,14 +2081,16 @@ export default async function processLead(ctx) {
         responseLabel = 'Sent';
         bypassReason = `${inboundLeadStatus} lead - no matching delivery destination`;
       }
-      const finalForBypass = inboundLeadStatus === 'Disqualified' ? 'Disqualified' : (inboundLeadStatus === 'Returned' ? 'Returned' : 'Sold');
+      const finalForBypass = inboundLeadStatus === LEGACY_STATUS.DISQUALIFIED
+        ? LEGACY_STATUS.DISQUALIFIED
+        : (inboundLeadStatus === LEGACY_STATUS.RETURNED ? LEGACY_STATUS.RETURNED : LEGACY_STATUS.SOLD);
       const bypassResponse = buildEnvelope(traceId, {
         ok: true, acceptance: 'accepted', lead_id: systemLeadId,
         lead_status: bypassLeadStatus(finalForBypass), code: 'INBOUND_STATUS_BYPASS',
         reason: bypassReason, message: bypassReason, Response: responseLabel,
       });
       await db.entities.Lead.update(leadId, {
-        final_status: finalForBypass,
+        ...statusPatch(finalForBypass, { reason: 'INBOUND_STATUS_BYPASS' }),
         processed_at: new Date().toISOString(),
         process_time_ms: Date.now() - startTime,
         response_returned: JSON.stringify(bypassResponse),
@@ -1978,10 +2099,10 @@ export default async function processLead(ctx) {
     }
 
     // ── b. FIRE ON RECEIVED (route-aware, fire-and-forget) ─────────────
-    fireConnectors(db, apiConnectors, 'on_received', leadPayload, leadId, supplierAttribution, supplierRecord);
+    fireConnectors(db, apiConnectors, INTAKE_TRIGGER, leadPayload, leadId, supplierAttribution, supplierRecord);
     // Event route: conversion events only - skip deliveries
     if (!routeIs.event) {
-      fireDeliveries(db, allDestinations, 'on_received', leadPayload, leadId, supplierAttribution, supplierRecord);
+      fireDeliveries(db, allDestinations, INTAKE_TRIGGER, leadPayload, leadId, supplierAttribution, supplierRecord);
     }
 
     // ── c. HLR LOOKUP ────────────────────────────────────────────────────
@@ -2039,7 +2160,13 @@ export default async function processLead(ctx) {
             message: 'HLR lookup failed', Response: 'Error',
           });
           await db.entities.Lead.update(leadId, {
-            final_status: 'Error', error_stage: 'hlr',
+            // W2-STATUS: the lead is not lost, it failed mid-pipeline. D1 puts
+            // it at queued with processing_state failed, which is a stuck lead
+            // and W4-REAPER's input. It carries no migrated_at, so unlike the
+            // historical Error leads this one IS eligible for recovery, which
+            // is the whole point of D1 making Error non-terminal.
+            ...statusPatch(LEGACY_STATUS.ERROR, { reason: 'HLR_FAILED' }),
+            error_stage: 'hlr',
             processed_at: new Date().toISOString(),
             process_time_ms: Date.now() - startTime,
             response_returned: JSON.stringify(hlrFailResponse),
@@ -2116,18 +2243,18 @@ export default async function processLead(ctx) {
     if (requireCert && !tfValid) {
       const queueReason = 'Missing or invalid TrustedForm cert';
 
-      fireConnectors(db, apiConnectors, 'on_queued', leadPayload, leadId, supplierAttribution, supplierRecord);
-      fireDeliveries(db, allDestinations, 'on_queued', leadPayload, leadId, supplierAttribution, supplierRecord);
+      fireConnectors(db, apiConnectors, TRIGGER.ON_QUEUED, leadPayload, leadId, supplierAttribution, supplierRecord);
+      fireDeliveries(db, allDestinations, TRIGGER.ON_QUEUED, leadPayload, leadId, supplierAttribution, supplierRecord);
       await evaluateNotifications(db, ['lead_queued'], { id: leadId, queue_reason: queueReason }, supplierAttribution, { queue_reason: queueReason });
 
-      const mapped = await resolveResponseMapping(db, {}, { Response: 'Queued', reason: queueReason }, 'Queued');
+      const mapped = await resolveResponseMapping(db, {}, { Response: 'Queued', reason: queueReason }, LEGACY_STATUS.QUEUED);
       const queueResponse = buildEnvelope(traceId, {
         ok: true, acceptance: 'queued', lead_id: systemLeadId, lead_status: 'queued',
         code: 'MISSING_CERT', reason: mapped.response?.reason || queueReason,
         message: queueReason, Response: mapped.response?.Response || 'Queued',
       });
       await db.entities.Lead.update(leadId, {
-        final_status: 'Queued',
+        ...statusPatch(LEGACY_STATUS.QUEUED, { reason: 'MISSING_CERT' }),
         queue_reason: queueReason,
         trustedform_valid: false,
         processed_at: new Date().toISOString(),
@@ -2140,18 +2267,18 @@ export default async function processLead(ctx) {
     // ── d2. GATE: Required custom fields ─────────────────────────────────
     if (missingFields.length > 0) {
       const queueReason = `Missing required fields: ${missingFields.join(', ')}`;
-      fireConnectors(db, apiConnectors, 'on_queued', leadPayload, leadId, supplierAttribution, supplierRecord);
-      fireDeliveries(db, allDestinations, 'on_queued', leadPayload, leadId, supplierAttribution, supplierRecord);
+      fireConnectors(db, apiConnectors, TRIGGER.ON_QUEUED, leadPayload, leadId, supplierAttribution, supplierRecord);
+      fireDeliveries(db, allDestinations, TRIGGER.ON_QUEUED, leadPayload, leadId, supplierAttribution, supplierRecord);
       await evaluateNotifications(db, ['lead_queued', 'missing_fields'], { id: leadId, queue_reason: queueReason }, supplierAttribution, { queue_reason: queueReason });
 
-      const mapped = await resolveResponseMapping(db, {}, { Response: 'Queued', reason: queueReason }, 'Queued');
+      const mapped = await resolveResponseMapping(db, {}, { Response: 'Queued', reason: queueReason }, LEGACY_STATUS.QUEUED);
       const queueResponse = buildEnvelope(traceId, {
         ok: true, acceptance: 'queued', lead_id: systemLeadId, lead_status: 'queued',
         code: 'MISSING_FIELDS', reason: mapped.response?.reason || queueReason,
         message: queueReason, Response: mapped.response?.Response || 'Queued',
       });
       await db.entities.Lead.update(leadId, {
-        final_status: 'Queued',
+        ...statusPatch(LEGACY_STATUS.QUEUED, { reason: 'MISSING_FIELDS' }),
         queue_reason: queueReason,
         trustedform_valid: tfValid,
         processed_at: new Date().toISOString(),
@@ -2184,14 +2311,14 @@ export default async function processLead(ctx) {
       const suppressed = [];
 
       // Same trigger/filter/condition logic as fireConnectors / fireDeliveries,
-      // evaluated at the on_received trigger since that is when they would fire.
-      const evalTrigger = 'on_received';
+      // evaluated at the intake trigger since that is when they would fire.
+      const evalTrigger = INTAKE_TRIGGER;
       const evalWouldFire = (conn, kind, triggers) => {
         if (conn.enabled === false) return { would_fire: false, reason: 'Connector disabled' };
-        if (triggers.length > 0 && !triggers.includes(evalTrigger)) {
+        if (triggers.length > 0 && !triggerMatches(triggers, evalTrigger)) {
           return { would_fire: false, reason: `Trigger mismatch: no ${evalTrigger} trigger` };
         }
-        if (triggers.length === 0 && evalTrigger !== 'on_received') {
+        if (triggers.length === 0 && !isIntakeTrigger(evalTrigger)) {
           return { would_fire: false, reason: 'Trigger mismatch: empty triggers fire at intake only' };
         }
         if (!connectorMatchesFilters(conn, enrichedData, supplierAttribution, supplierRecord)) {
@@ -2214,7 +2341,7 @@ export default async function processLead(ctx) {
       }
       if (leadByteConnector) {
         const lbTriggers = parseJsonArray(leadByteConnector.triggers);
-        const lbAllowedByTrigger = lbTriggers.length === 0 || lbTriggers.includes(evalTrigger);
+        const lbAllowedByTrigger = lbTriggers.length === 0 || triggerMatches(lbTriggers, evalTrigger);
         let lbWouldFire;
         let lbReason;
         if (!lbAllowedByTrigger) {
@@ -2237,7 +2364,7 @@ export default async function processLead(ctx) {
         message: 'Lead captured. No downstream delivery was attempted.', Response: 'Queued',
       });
       await db.entities.Lead.update(leadId, {
-        final_status: 'Queued',
+        ...statusPatch(LEGACY_STATUS.QUEUED, { reason: 'CAPTURE_ONLY' }),
         queue_reason_code: 'CAPTURE_ONLY',
         queue_reason: captureReason,
         suppressed_deliveries: suppressedJson,
@@ -2256,9 +2383,9 @@ export default async function processLead(ctx) {
     // standard (native distribution) and gateway (LeadByte) are the two selling
     // routes, and both continue past this point to be sold.
     if (!routeIs.standard && !routeIs.gateway) {
-      fireConnectors(db, apiConnectors, 'on_sold', leadPayload, leadId, supplierAttribution, supplierRecord);
+      fireConnectors(db, apiConnectors, TRIGGER.ON_SOLD, leadPayload, leadId, supplierAttribution, supplierRecord);
       if (!routeIs.event) {
-        fireDeliveries(db, allDestinations, 'on_sold', leadPayload, leadId, supplierAttribution, supplierRecord);
+        fireDeliveries(db, allDestinations, TRIGGER.ON_SOLD, leadPayload, leadId, supplierAttribution, supplierRecord);
       }
       const qualifiedResponse = buildEnvelope(traceId, {
         ok: true, acceptance: 'accepted', lead_id: systemLeadId, lead_status: 'qualified',
@@ -2266,7 +2393,10 @@ export default async function processLead(ctx) {
         message: 'Lead qualified', Response: 'Qualified',
       });
       await db.entities.Lead.update(leadId, {
-        final_status: 'Qualified',
+        // W2-STATUS: Qualified retires into queued plus the derived
+        // is_qualified flag (D4), which is what keeps the qualification rate
+        // computable once the four legacy states collapse into one.
+        ...statusPatch(LEGACY_STATUS.QUALIFIED, { reason: 'QUALIFIED' }),
         revenue_source: 'direct_route',
         processed_at: new Date().toISOString(),
         process_time_ms: Date.now() - startTime,
@@ -2284,12 +2414,17 @@ export default async function processLead(ctx) {
       });
       const noConnStatus = String(enrichedData.lead_status || leadPayload.lead_status || '').trim();
       const noConnFinalStatus = {
-        Qualified: 'Sold', Disqualified: 'Disqualified', Sold: 'Sold',
-        Unsold: 'Unsold', Rejected: 'Unsold', Duplicate: 'Duplicate',
-        Duplicates: 'Duplicate', Queued: 'Queued',
-      }[noConnStatus] || 'Queued';
+        [LEGACY_STATUS.QUALIFIED]: LEGACY_STATUS.SOLD,
+        [LEGACY_STATUS.DISQUALIFIED]: LEGACY_STATUS.DISQUALIFIED,
+        [LEGACY_STATUS.SOLD]: LEGACY_STATUS.SOLD,
+        [LEGACY_STATUS.UNSOLD]: LEGACY_STATUS.UNSOLD,
+        [LEGACY_STATUS.REJECTED]: LEGACY_STATUS.UNSOLD,
+        [LEGACY_STATUS.DUPLICATE]: LEGACY_STATUS.DUPLICATE,
+        Duplicates: LEGACY_STATUS.DUPLICATE,
+        [LEGACY_STATUS.QUEUED]: LEGACY_STATUS.QUEUED,
+      }[noConnStatus] || LEGACY_STATUS.QUEUED;
       await db.entities.Lead.update(leadId, {
-        final_status: noConnFinalStatus,
+        ...statusPatch(noConnFinalStatus, { reason: 'LB_ERROR' }),
         delivery_error: 'No active LeadByte connector configured',
         error_stage: 'leadbyte',
         processed_at: new Date().toISOString(),
@@ -2312,8 +2447,8 @@ export default async function processLead(ctx) {
     {
       const lbTriggers = parseJsonArray(leadByteConnector.triggers);
       const effStatus = String(enrichedData.lead_status || leadPayload.lead_status || '').trim();
-      const effTrigger = effStatus ? triggerKeyForStatus(effStatus) : 'on_received';
-      const allowLeadByte = lbTriggers.length === 0 || lbTriggers.includes(effTrigger);
+      const effTrigger = effStatus ? triggerKeyForStatus(effStatus) : INTAKE_TRIGGER;
+      const allowLeadByte = lbTriggers.length === 0 || triggerMatches(lbTriggers, effTrigger);
       if (!allowLeadByte) {
         const notEligibleReason = `Lead status "${effStatus}" not eligible for LeadByte`;
         const skipResponse = buildEnvelope(traceId, {
@@ -2321,17 +2456,21 @@ export default async function processLead(ctx) {
           code: 'NOT_ELIGIBLE', reason: notEligibleReason,
           message: notEligibleReason, Response: 'Unsold',
         });
-        if (effTrigger !== 'on_received') {
+        if (!isIntakeTrigger(effTrigger)) {
           fireConnectors(db, apiConnectors, effTrigger, enrichedData, leadId, supplierAttribution, supplierRecord);
           if (!routeIs.event) fireDeliveries(db, allDestinations, effTrigger, enrichedData, leadId, supplierAttribution, supplierRecord);
         }
         const finalForStatus = {
-          Disqualified: 'Disqualified', Sold: 'Sold', Unsold: 'Unsold',
-          Rejected: 'Unsold', Duplicates: 'Duplicate', Queued: 'Queued',
-        }[effStatus] || 'Unsold';
+          [LEGACY_STATUS.DISQUALIFIED]: LEGACY_STATUS.DISQUALIFIED,
+          [LEGACY_STATUS.SOLD]: LEGACY_STATUS.SOLD,
+          [LEGACY_STATUS.UNSOLD]: LEGACY_STATUS.UNSOLD,
+          [LEGACY_STATUS.REJECTED]: LEGACY_STATUS.UNSOLD,
+          Duplicates: LEGACY_STATUS.DUPLICATE,
+          [LEGACY_STATUS.QUEUED]: LEGACY_STATUS.QUEUED,
+        }[effStatus] || LEGACY_STATUS.UNSOLD;
         await db.entities.Lead.update(leadId, {
-          final_status: finalForStatus,
-          queue_reason: finalForStatus === 'Queued' ? notEligibleReason : '',
+          ...statusPatch(finalForStatus, { reason: 'NOT_ELIGIBLE' }),
+          queue_reason: finalForStatus === LEGACY_STATUS.QUEUED ? notEligibleReason : '',
           processed_at: new Date().toISOString(),
           process_time_ms: Date.now() - startTime,
           response_returned: JSON.stringify(skipResponse),
@@ -2350,12 +2489,12 @@ export default async function processLead(ctx) {
         message: filterDqReason, Response: 'Unsold',
       });
       // Fire Disqualified then Unsold triggers so these leads still reach their destinations
-      fireConnectors(db, apiConnectors, 'on_dq', enrichedData, leadId, supplierAttribution, supplierRecord);
-      fireDeliveries(db, allDestinations, 'on_dq', enrichedData, leadId, supplierAttribution, supplierRecord);
-      fireConnectors(db, apiConnectors, 'on_unsold', enrichedData, leadId, supplierAttribution, supplierRecord);
-      fireDeliveries(db, allDestinations, 'on_unsold', enrichedData, leadId, supplierAttribution, supplierRecord);
+      fireConnectors(db, apiConnectors, TRIGGER.ON_DISQUALIFIED, enrichedData, leadId, supplierAttribution, supplierRecord);
+      fireDeliveries(db, allDestinations, TRIGGER.ON_DISQUALIFIED, enrichedData, leadId, supplierAttribution, supplierRecord);
+      fireConnectors(db, apiConnectors, TRIGGER.ON_UNSOLD, enrichedData, leadId, supplierAttribution, supplierRecord);
+      fireDeliveries(db, allDestinations, TRIGGER.ON_UNSOLD, enrichedData, leadId, supplierAttribution, supplierRecord);
       await db.entities.Lead.update(leadId, {
-        final_status: 'Disqualified',
+        ...statusPatch(LEGACY_STATUS.DISQUALIFIED, { reason: 'FILTER_DQ' }),
         queue_reason: 'Did not match LeadByte filters - routed to DQ destinations',
         processed_at: new Date().toISOString(),
         process_time_ms: Date.now() - startTime,
@@ -2431,9 +2570,12 @@ export default async function processLead(ctx) {
       if (nativeRun && nativeRun.ran) {
         const nativeStatus = nativeRun.status;
         const legacyOff = distributionMode !== 'new_primary_with_legacy_fallback';
-        const finishNative = async (finalStatusStr, envelope, extra = {}) => {
+        // W2-STATUS: one place for every native settlement, so the new
+        // vocabulary and the legacy dual-write can never diverge between the
+        // four native outcomes below.
+        const finishNative = async (finalStatusStr, envelope, extra = {}, statusOptions = {}) => {
           await db.entities.Lead.update(leadId, {
-            final_status: finalStatusStr,
+            ...statusPatch(finalStatusStr, statusOptions),
             processed_at: new Date().toISOString(),
             process_time_ms: Date.now() - startTime,
             response_returned: JSON.stringify(envelope),
@@ -2453,12 +2595,12 @@ export default async function processLead(ctx) {
             soldEnvelope.revenue_exposed = capturedRevenue.toFixed(2);
           }
           const soldData = { ...enrichedData, revenue: capturedRevenue };
-          fireConnectors(db, apiConnectors, 'on_sold', soldData, leadId, supplierAttribution, supplierRecord);
-          fireDeliveries(db, allDestinations, 'on_sold', soldData, leadId, supplierAttribution, supplierRecord);
-          return await finishNative('Sold', soldEnvelope, {
+          fireConnectors(db, apiConnectors, TRIGGER.ON_SOLD, soldData, leadId, supplierAttribution, supplierRecord);
+          fireDeliveries(db, allDestinations, TRIGGER.ON_SOLD, soldData, leadId, supplierAttribution, supplierRecord);
+          return await finishNative(LEGACY_STATUS.SOLD, soldEnvelope, {
             revenue: capturedRevenue, revenue_source: 'direct_route',
             buyer_id: nativeRun.buyerId || '',
-          });
+          }, { reason: 'SOLD' });
         }
 
         if (nativeStatus === 'duplicate') {
@@ -2467,9 +2609,11 @@ export default async function processLead(ctx) {
             code: 'DUPLICATE', reason: 'Buyer reported duplicate',
             message: 'Duplicate', Response: 'Duplicate',
           });
-          fireConnectors(db, apiConnectors, 'on_duplicates', enrichedData, leadId, supplierAttribution, supplierRecord);
-          fireDeliveries(db, allDestinations, 'on_duplicates', enrichedData, leadId, supplierAttribution, supplierRecord);
-          return await finishNative('Duplicate', dupEnvelope, {
+          fireConnectors(db, apiConnectors, TRIGGER.ON_REJECTED_DUPLICATE, enrichedData, leadId, supplierAttribution, supplierRecord);
+          fireDeliveries(db, allDestinations, TRIGGER.ON_REJECTED_DUPLICATE, enrichedData, leadId, supplierAttribution, supplierRecord);
+          // W2-STATUS: Duplicate retires into rejected with REJECTED_DUPLICATE
+          // (D4). statusPatch supplies that reason from the mapping table.
+          return await finishNative(LEGACY_STATUS.DUPLICATE, dupEnvelope, {
             queue_reason: 'Duplicate reported by buyer during native distribution',
           });
         }
@@ -2483,13 +2627,17 @@ export default async function processLead(ctx) {
             code: 'DELIVERY_AMBIGUOUS', reason: 'Delivery outcome unconfirmed',
             message: 'Queued for review', Response: 'Unsold',
           });
-          fireConnectors(db, apiConnectors, 'on_queued', enrichedData, leadId, supplierAttribution, supplierRecord);
-          fireDeliveries(db, allDestinations, 'on_queued', enrichedData, leadId, supplierAttribution, supplierRecord);
+          fireConnectors(db, apiConnectors, TRIGGER.ON_QUEUED, enrichedData, leadId, supplierAttribution, supplierRecord);
+          fireDeliveries(db, allDestinations, TRIGGER.ON_QUEUED, enrichedData, leadId, supplierAttribution, supplierRecord);
           await evaluateNotifications(db, ['lead_queued'], { id: leadId, queue_reason: 'Ambiguous native delivery' },
             supplierAttribution, { queue_reason: 'Ambiguous native delivery' }).catch(() => {});
-          return await finishNative('Queued', ambigEnvelope, {
+          // W2-STATUS: this is the one outcome D1's processing_state
+          // `ambiguous` exists for. The lead stays queued, and the machine
+          // state records that a send MIGHT have landed, which is what stops
+          // any recovery job resending it and selling the same lead twice.
+          return await finishNative(LEGACY_STATUS.QUEUED, ambigEnvelope, {
             queue_reason: 'Native delivery outcome unconfirmed (timeout); not re-sent to avoid a double sale',
-          });
+          }, { processingState: PROCESSING_STATE.AMBIGUOUS, reason: 'DELIVERY_AMBIGUOUS' });
         }
 
         if (legacyOff) {
@@ -2499,9 +2647,9 @@ export default async function processLead(ctx) {
             code: 'UNSOLD', reason: 'No buyer accepted the lead',
             message: 'Unsold', Response: 'Unsold',
           });
-          fireConnectors(db, apiConnectors, 'on_unsold', enrichedData, leadId, supplierAttribution, supplierRecord);
-          fireDeliveries(db, allDestinations, 'on_unsold', enrichedData, leadId, supplierAttribution, supplierRecord);
-          return await finishNative('Unsold', unsoldEnvelope);
+          fireConnectors(db, apiConnectors, TRIGGER.ON_UNSOLD, enrichedData, leadId, supplierAttribution, supplierRecord);
+          fireDeliveries(db, allDestinations, TRIGGER.ON_UNSOLD, enrichedData, leadId, supplierAttribution, supplierRecord);
+          return await finishNative(LEGACY_STATUS.UNSOLD, unsoldEnvelope, {}, { reason: 'UNSOLD' });
         }
         // else: new_primary_with_legacy_fallback and a clean miss -> fall through.
       } else if (nativeRun && !nativeRun.ran && distributionMode === 'new_only') {
@@ -2511,10 +2659,10 @@ export default async function processLead(ctx) {
           code: 'NO_ROUTE_CONFIG', reason: 'No active routing configuration',
           message: 'Unsold', Response: 'Unsold',
         });
-        fireConnectors(db, apiConnectors, 'on_unsold', enrichedData, leadId, supplierAttribution, supplierRecord);
-        fireDeliveries(db, allDestinations, 'on_unsold', enrichedData, leadId, supplierAttribution, supplierRecord);
+        fireConnectors(db, apiConnectors, TRIGGER.ON_UNSOLD, enrichedData, leadId, supplierAttribution, supplierRecord);
+        fireDeliveries(db, allDestinations, TRIGGER.ON_UNSOLD, enrichedData, leadId, supplierAttribution, supplierRecord);
         await db.entities.Lead.update(leadId, {
-          final_status: 'Unsold',
+          ...statusPatch(LEGACY_STATUS.UNSOLD, { reason: 'NO_ROUTE_CONFIG' }),
           queue_reason: 'No active routing configuration for this campaign',
           processed_at: new Date().toISOString(),
           process_time_ms: Date.now() - startTime,
@@ -2554,8 +2702,12 @@ export default async function processLead(ctx) {
     await db.entities.Lead.update(leadId, { leadbyte_response: JSON.stringify(lbResult) });
 
     // ── f. PARSE LEADBYTE RESPONSE ──────────────────────────────────────
-    let finalStatus = 'Error';
+    let finalStatus = LEGACY_STATUS.ERROR;
     let supplierResponse = { Response: 'Error', reason: 'Unexpected LeadByte response' };
+    // W2-STATUS: the machine reason behind whatever finalStatus ends up as.
+    // Set alongside every assignment below so the stored status_reason is the
+    // same code the supplier envelope reports, never a second vocabulary.
+    let statusReasonCode = 'LB_ERROR';
     // Envelope metadata tracked alongside the legacy supplierResponse.
     let envAcceptance = 'error';
     let envLeadStatus = 'error';
@@ -2576,7 +2728,8 @@ export default async function processLead(ctx) {
 
       if (recordStatus === 'Approved') {
         // ── f. Approved => Sold + FIRE ON SOLD ──────────────────────────
-        finalStatus = 'Sold';
+        finalStatus = LEGACY_STATUS.SOLD;
+        statusReasonCode = 'SOLD';
         supplierResponse = { Response: 'Sold' };
         envAcceptance = 'accepted'; envLeadStatus = 'sold'; envCode = 'SOLD'; envSold = true;
 
@@ -2610,36 +2763,42 @@ export default async function processLead(ctx) {
         // Fire on_sold connectors (fire-and-forget). Inject captured revenue so
         // {{revenue}} resolves in CAPI custom_data for the Sold event.
         const soldData = { ...leadPayload, revenue: capturedRevenue != null ? capturedRevenue : 0 };
-        fireConnectors(db, apiConnectors, 'on_sold', soldData, leadId, supplierAttribution, supplierRecord);
-        fireDeliveries(db, allDestinations, 'on_sold', soldData, leadId, supplierAttribution, supplierRecord);
+        fireConnectors(db, apiConnectors, TRIGGER.ON_SOLD, soldData, leadId, supplierAttribution, supplierRecord);
+        fireDeliveries(db, allDestinations, TRIGGER.ON_SOLD, soldData, leadId, supplierAttribution, supplierRecord);
       } else if (recordStatus === 'Rejected') {
         // ── f. Rejected => check for queueable patterns ─────────────────
         const rejectionReason = recordResponse.message || recordResponse.reason || recordResponse.error || record.error || record.response_message || '';
         if (isQueueableRejection(rejectionReason)) {
-          finalStatus = 'Queued';
+          finalStatus = LEGACY_STATUS.QUEUED;
+          statusReasonCode = 'MISSING_FIELDS';
           const queueReason = `LeadByte rejection (possible missing/invalid field): ${rejectionReason}`;
           await db.entities.Lead.update(leadId, { queue_reason: queueReason });
           supplierResponse = { Response: 'Unsold', reason: rejectionReason };
           envAcceptance = 'queued'; envLeadStatus = 'queued'; envCode = 'MISSING_FIELDS';
           // Fire on_queued connectors + evaluate rules
-          fireConnectors(db, apiConnectors, 'on_queued', leadPayload, leadId, supplierAttribution, supplierRecord);
-          fireDeliveries(db, allDestinations, 'on_queued', leadPayload, leadId, supplierAttribution, supplierRecord);
+          fireConnectors(db, apiConnectors, TRIGGER.ON_QUEUED, leadPayload, leadId, supplierAttribution, supplierRecord);
+          fireDeliveries(db, allDestinations, TRIGGER.ON_QUEUED, leadPayload, leadId, supplierAttribution, supplierRecord);
           await evaluateNotifications(db, ['lead_queued', 'missing_fields'], { id: leadId, queue_reason: queueReason }, supplierAttribution, { queue_reason: queueReason });
         } else {
-          finalStatus = 'Unsold';
+          finalStatus = LEGACY_STATUS.UNSOLD;
+          statusReasonCode = 'UNSOLD';
           supplierResponse = { Response: 'Unsold', reason: rejectionReason };
           envAcceptance = 'accepted'; envLeadStatus = 'unsold'; envCode = 'UNSOLD';
-          // Fire on_unsold + on_dq connectors
-          fireConnectors(db, apiConnectors, 'on_unsold', leadPayload, leadId, supplierAttribution, supplierRecord);
-          fireDeliveries(db, allDestinations, 'on_unsold', leadPayload, leadId, supplierAttribution, supplierRecord);
-          fireConnectors(db, apiConnectors, 'on_dq', enrichedData, leadId, supplierAttribution, supplierRecord);
-          fireDeliveries(db, allDestinations, 'on_dq', enrichedData, leadId, supplierAttribution, supplierRecord);
-          fireConnectors(db, apiConnectors, 'on_rejected', leadPayload, leadId, supplierAttribution, supplierRecord);
-          fireDeliveries(db, allDestinations, 'on_rejected', leadPayload, leadId, supplierAttribution, supplierRecord);
+          // Fire the unsold, disqualified and rejected connectors
+          fireConnectors(db, apiConnectors, TRIGGER.ON_UNSOLD, leadPayload, leadId, supplierAttribution, supplierRecord);
+          fireDeliveries(db, allDestinations, TRIGGER.ON_UNSOLD, leadPayload, leadId, supplierAttribution, supplierRecord);
+          fireConnectors(db, apiConnectors, TRIGGER.ON_DISQUALIFIED, enrichedData, leadId, supplierAttribution, supplierRecord);
+          fireDeliveries(db, allDestinations, TRIGGER.ON_DISQUALIFIED, enrichedData, leadId, supplierAttribution, supplierRecord);
+          fireConnectors(db, apiConnectors, TRIGGER.ON_REJECTED, leadPayload, leadId, supplierAttribution, supplierRecord);
+          fireDeliveries(db, allDestinations, TRIGGER.ON_REJECTED, leadPayload, leadId, supplierAttribution, supplierRecord);
         }
       } else {
-        finalStatus = 'Error';
-        supplierResponse = { Response: 'Error', reason: `LeadByte record status: ${recordStatus}` };
+        finalStatus = LEGACY_STATUS.ERROR;
+        statusReasonCode = 'LB_ERROR';
+        supplierResponse = {
+          Response: 'Error',
+          reason: `LeadByte record status: ${recordStatus}`,
+        };
         envAcceptance = 'error'; envLeadStatus = 'error'; envCode = 'LB_ERROR';
         await db.entities.ErrorLog.create({
           lead_id: leadId, stage: 'leadbyte', severity: 'error',
@@ -2648,8 +2807,8 @@ export default async function processLead(ctx) {
         });
         await evaluateNotifications(db, ['api_error'], { id: leadId }, supplierAttribution,
           { message: `Unexpected LeadByte status: ${recordStatus}` }).catch(() => {});
-        fireConnectors(db, apiConnectors, 'on_error', enrichedData, leadId, supplierAttribution, supplierRecord);
-        fireDeliveries(db, allDestinations, 'on_error', enrichedData, leadId, supplierAttribution, supplierRecord);
+        fireConnectors(db, apiConnectors, TRIGGER.ON_PROCESSING_FAILED, enrichedData, leadId, supplierAttribution, supplierRecord);
+        fireDeliveries(db, allDestinations, TRIGGER.ON_PROCESSING_FAILED, enrichedData, leadId, supplierAttribution, supplierRecord);
       }
     } else {
       // ── f. Top-level non-success: handle errors[] shape ──────────────
@@ -2659,30 +2818,36 @@ export default async function processLead(ctx) {
       const lowerErr = firstError.toLowerCase();
 
       if (/duplicate/i.test(firstError)) {
-        finalStatus = 'Duplicate';
+        finalStatus = LEGACY_STATUS.DUPLICATE;
+        // D4 fixes this reason code for a duplicate. statusPatch enforces it
+        // regardless, and setting it here keeps the local variable honest.
+        statusReasonCode = STATUS_REASON.REJECTED_DUPLICATE;
         supplierResponse = { Response: 'Duplicate', reason: firstError };
         envAcceptance = 'duplicate'; envLeadStatus = 'duplicate'; envCode = 'DUPLICATE';
         await db.entities.Lead.update(leadId, { queue_reason: `Duplicate: ${firstError}` });
-        fireConnectors(db, apiConnectors, 'on_duplicates', leadPayload, leadId, supplierAttribution, supplierRecord);
-        fireDeliveries(db, allDestinations, 'on_duplicates', leadPayload, leadId, supplierAttribution, supplierRecord);
+        fireConnectors(db, apiConnectors, TRIGGER.ON_REJECTED_DUPLICATE, leadPayload, leadId, supplierAttribution, supplierRecord);
+        fireDeliveries(db, allDestinations, TRIGGER.ON_REJECTED_DUPLICATE, leadPayload, leadId, supplierAttribution, supplierRecord);
       } else if (isQueueableRejection(firstError)) {
-        finalStatus = 'Queued';
+        finalStatus = LEGACY_STATUS.QUEUED;
+        statusReasonCode = 'MISSING_FIELDS';
         const queueReason = `LeadByte error (missing/invalid field): ${firstError || topStatus}`;
         await db.entities.Lead.update(leadId, { queue_reason: queueReason });
         supplierResponse = { Response: 'Unsold', reason: firstError || topStatus };
         envAcceptance = 'queued'; envLeadStatus = 'queued'; envCode = 'MISSING_FIELDS';
-        fireConnectors(db, apiConnectors, 'on_queued', leadPayload, leadId, supplierAttribution, supplierRecord);
-        fireDeliveries(db, allDestinations, 'on_queued', leadPayload, leadId, supplierAttribution, supplierRecord);
+        fireConnectors(db, apiConnectors, TRIGGER.ON_QUEUED, leadPayload, leadId, supplierAttribution, supplierRecord);
+        fireDeliveries(db, allDestinations, TRIGGER.ON_QUEUED, leadPayload, leadId, supplierAttribution, supplierRecord);
         await evaluateNotifications(db, ['lead_queued', 'missing_fields'], { id: leadId, queue_reason: queueReason }, supplierAttribution, { queue_reason: queueReason });
       } else if (isContentRejection(firstError)) {
-        finalStatus = 'Disqualified';
+        finalStatus = LEGACY_STATUS.DISQUALIFIED;
+        statusReasonCode = 'CONTENT_REJECTED';
         supplierResponse = { Response: 'Disqualified', reason: firstError };
         envAcceptance = 'accepted'; envLeadStatus = 'disqualified'; envCode = 'CONTENT_REJECTED';
         await db.entities.Lead.update(leadId, { queue_reason: `LeadByte content rejection: ${firstError}` });
-        fireConnectors(db, apiConnectors, 'on_dq', enrichedData, leadId, supplierAttribution, supplierRecord);
-        fireDeliveries(db, allDestinations, 'on_dq', enrichedData, leadId, supplierAttribution, supplierRecord);
+        fireConnectors(db, apiConnectors, TRIGGER.ON_DISQUALIFIED, enrichedData, leadId, supplierAttribution, supplierRecord);
+        fireDeliveries(db, allDestinations, TRIGGER.ON_DISQUALIFIED, enrichedData, leadId, supplierAttribution, supplierRecord);
       } else {
-        finalStatus = 'Error';
+        finalStatus = LEGACY_STATUS.ERROR;
+        statusReasonCode = 'LB_ERROR';
         supplierResponse = { Response: 'Error', reason: firstError || lbResult.message || 'LeadByte returned non-success' };
         envAcceptance = 'error'; envLeadStatus = 'error'; envCode = 'LB_ERROR';
         await db.entities.ErrorLog.create({
@@ -2692,17 +2857,22 @@ export default async function processLead(ctx) {
         });
         await evaluateNotifications(db, ['api_error'], { id: leadId }, supplierAttribution,
           { message: firstError || lbResult.message || 'LeadByte returned non-success' }).catch(() => {});
-        fireConnectors(db, apiConnectors, 'on_error', enrichedData, leadId, supplierAttribution, supplierRecord);
-        fireDeliveries(db, allDestinations, 'on_error', enrichedData, leadId, supplierAttribution, supplierRecord);
+        fireConnectors(db, apiConnectors, TRIGGER.ON_PROCESSING_FAILED, enrichedData, leadId, supplierAttribution, supplierRecord);
+        fireDeliveries(db, allDestinations, TRIGGER.ON_PROCESSING_FAILED, enrichedData, leadId, supplierAttribution, supplierRecord);
       }
     }
 
     // ── g. RESOLVE SUPPLIER RESPONSE VIA RESPONSEMAPPING ─────────────────
-    if (finalStatus !== 'Queued' && finalStatus !== 'Duplicate') {
+    if (finalStatus !== LEGACY_STATUS.QUEUED && finalStatus !== LEGACY_STATUS.DUPLICATE) {
       const mapped = await resolveResponseMapping(db, lbResult, supplierResponse, finalStatus);
       supplierResponse = mapped.response;
-      if (mapped.status && mapped.status !== finalStatus && finalStatus === 'Error') {
+      if (mapped.status && mapped.status !== finalStatus && finalStatus === LEGACY_STATUS.ERROR) {
+        // An operator ResponseMapping rule reclassified the failure. It is a
+        // free-text configured value, so it may not be one of the twelve; the
+        // dual-write below falls back to the machine state rather than
+        // throwing on a value the vocabulary does not know.
         finalStatus = mapped.status;
+        statusReasonCode = 'RESPONSE_MAPPED';
       }
     }
 
@@ -2718,11 +2888,11 @@ export default async function processLead(ctx) {
     // ── Build the layered envelope from the resolved legacy response ──────
     // resolveResponseMapping may have changed the Response label and, for an
     // Error, the finalStatus. Keep envelope lead_status/acceptance in sync.
-    if (finalStatus === 'Sold') { envLeadStatus = 'sold'; envAcceptance = 'accepted'; envSold = true; envCode = 'SOLD'; }
-    else if (finalStatus === 'Unsold') { envLeadStatus = 'unsold'; envAcceptance = 'accepted'; if (envCode === 'LB_ERROR') envCode = 'UNSOLD'; }
-    else if (finalStatus === 'Duplicate') { envLeadStatus = 'duplicate'; envAcceptance = 'duplicate'; envCode = 'DUPLICATE'; }
-    else if (finalStatus === 'Queued') { envLeadStatus = 'queued'; envAcceptance = 'queued'; }
-    else if (finalStatus === 'Error') { envLeadStatus = 'error'; envAcceptance = 'error'; envCode = 'LB_ERROR'; }
+    if (finalStatus === LEGACY_STATUS.SOLD) { envLeadStatus = 'sold'; envAcceptance = 'accepted'; envSold = true; envCode = 'SOLD'; }
+    else if (finalStatus === LEGACY_STATUS.UNSOLD) { envLeadStatus = 'unsold'; envAcceptance = 'accepted'; if (envCode === 'LB_ERROR') envCode = 'UNSOLD'; }
+    else if (finalStatus === LEGACY_STATUS.DUPLICATE) { envLeadStatus = 'duplicate'; envAcceptance = 'duplicate'; envCode = 'DUPLICATE'; }
+    else if (finalStatus === LEGACY_STATUS.QUEUED) { envLeadStatus = 'queued'; envAcceptance = 'queued'; }
+    else if (finalStatus === LEGACY_STATUS.ERROR) { envLeadStatus = 'error'; envAcceptance = 'error'; envCode = 'LB_ERROR'; }
 
     const finalEnvelope = buildEnvelope(traceId, {
       ok: envAcceptance === 'accepted' || envAcceptance === 'queued' || envAcceptance === 'duplicate',
@@ -2740,8 +2910,22 @@ export default async function processLead(ctx) {
     if (supplierResponse.revenue != null) finalEnvelope.revenue_exposed = supplierResponse.revenue;
 
     // ── FINALIZE ─────────────────────────────────────────────────────────
+    // W2-STATUS dual-write. resolveLegacyStatus guards the one value here
+    // that is not guaranteed to be a member of the vocabulary: an operator
+    // ResponseMapping rule can put any configured string into finalStatus.
+    // An unrecognised value keeps its legacy write and lands at queued with
+    // processing_state failed, which is a stuck lead somebody has to look at,
+    // rather than silently taking a plausible-looking status it never earned.
+    const finalLegacyStatus = resolveLegacyStatus(finalStatus);
     await db.entities.Lead.update(leadId, {
-      final_status: finalStatus,
+      ...(finalLegacyStatus
+        ? statusPatch(finalLegacyStatus, { reason: statusReasonCode })
+        : {
+          ...statusPatch(LEGACY_STATUS.ERROR, { reason: 'RESPONSE_MAPPED_UNKNOWN_STATUS' }),
+          // Legacy value written last so the operator's configured string is
+          // preserved verbatim in final_status, exactly as before this unit.
+          final_status: finalStatus,
+        }),
       processed_at: new Date().toISOString(),
       process_time_ms: Date.now() - startTime,
       response_returned: JSON.stringify(finalEnvelope),
@@ -2781,7 +2965,12 @@ export default async function processLead(ctx) {
     if (leadId) {
       try {
         await db.entities.Lead.update(leadId, {
-          final_status: 'Error', error_stage: 'system',
+          // W2-STATUS: a crash never changes the business status on its own.
+          // D1 puts this at queued with processing_state failed: the lead is
+          // durably saved and recoverable, and processing_state carries the
+          // failure. It gets no migrated_at, so W4-REAPER can pick it up.
+          ...statusPatch(LEGACY_STATUS.ERROR, { reason: 'INTERNAL_ERROR' }),
+          error_stage: 'system',
           processed_at: new Date().toISOString(),
           process_time_ms: Date.now() - startTime,
           response_returned: JSON.stringify(errorEnvelope),
