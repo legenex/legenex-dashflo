@@ -2,7 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 /* W1-FLAGS: derived money flags and backfill (forge-pack/CONTRACT.md D2).
  *
- * This proves four things against a real, disposable Postgres database (the
+ * This proves five things against a real, disposable Postgres database (the
  * same pattern server/test/migrationBuyerIdentity.test.js uses), not mocks,
  * because the load-bearing guarantee here - write-once - is partly enforced
  * by a database trigger (server/src/db/schema.js) and cannot be proven
@@ -20,11 +20,28 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
  *      simulated later status change, a re-run of the backfill, a simulated
  *      outcome webhook, and a raw SQL UPDATE that never goes through this
  *      module or Repo at all.
- *   4. Reconciliation: summing sale_price_effective where is_sold and not
- *      is_returned reproduces, to the cent, the revenue this system already
- *      reports for its currently-Sold leads - and, separately, PROVES the
- *      exact D2 drift (a converted lead silently dropping out of a
- *      status-filtered revenue query) that this unit exists to close.
+ *   4. Reconciliation, against the REAL figures this actually matters for:
+ *      summing sale_price_effective where is_sold and not is_returned
+ *      reproduces, to the cent, the revenue partnerMetrics.js's buyerMetrics
+ *      and reportMetrics.js's booked_revenue already report for currently-
+ *      Sold leads (both use a plain final_status === 'Sold' filter) - and,
+ *      separately, PROVES the exact D2 drift (a converted lead silently
+ *      dropping out of that Sold-only filter) for those two figures
+ *      specifically. It does NOT claim to protect the primary Overview/
+ *      Reports headline revenue (overviewFinance.js ~line 45,
+ *      reportMetrics.js's primary `revenue` accumulator ~line 294): both sum
+ *      every lead's revenue in the filtered set with no final_status check
+ *      at all, so they already include Converted/Returned leads' revenue and
+ *      were never actually vulnerable to this drift. A separate test only
+ *      confirms flags-based revenue stays a consistent, superset-safe figure
+ *      alongside that always-inclusive calculation, not that the
+ *      calculation needed protecting.
+ *   5. precedence_unverified: backfillLeadFlags surfaces (without changing
+ *      is_sold for) every Converted/Returned lead this backfill cannot
+ *      independently verify was ever actually Sold, because two live write
+ *      paths - webhook.js's create/update branches and leadbyteWebhook.js's
+ *      create branch - can set final_status straight to Converted/Returned
+ *      with no precedence guard at all.
  *
  * What this does NOT prove: the acceptance step in
  * forge-pack/03-plan/WORK-UNITS.yaml calls for this reconciliation "on a
@@ -269,6 +286,80 @@ describe.skipIf(!reachable)('W1-FLAGS: derived money flags', () => {
     expect(patch).toBeNull();
   });
 
+  // ── precedence_unverified: the QA-found gap in the Sold-before-Converted/
+  // Returned assumption ───────────────────────────────────────────────────
+  //
+  // computeLeadFlags/backfillLeadFlags treat final_status Converted/Returned
+  // as proof a lead was ever Sold (forge-pack/CONTRACT.md D1: both states are
+  // defined as reachable only from a prior Sold). But webhook.js's create
+  // (~line 604) and update (~line 505) branches, and leadbyteWebhook.js's
+  // create branch, set final_status directly with no precedence guard at
+  // all - only leadbyteWebhook.js's existing-lead update branch guards it.
+  // So a lead can reach Converted/Returned today without ever having been
+  // Sold, and because is_sold is permanently immutable, a backfill would
+  // otherwise lock in a wrong is_sold=true forever with no way to notice.
+  // These tests prove the new precedence_unverified exception surfaces
+  // exactly the leads this backfill cannot independently verify, and only
+  // those leads.
+  describe('precedence_unverified: surfaces Converted/Returned leads with no corroborating sale evidence', () => {
+    it('fires for a Converted lead with no corroborating positive revenue value', async () => {
+      const uncorroborated = await seedLead({ final_status: 'Converted' });
+
+      const { counts, exceptions } = await backfillLeadFlags(db);
+
+      expect(counts.precedence_unverified).toBe(1);
+      // This lead also has no revenue at all, so it separately trips
+      // sold_with_unknown_price too (a different, legitimate finding about
+      // price, not precedence) - find the specific exception by reason so
+      // that unrelated exception doesn't mask the assertion below.
+      const found = exceptions.find((e) => e.lead_id === uncorroborated.id && e.reason === 'precedence_unverified');
+      expect(found).toMatchObject({ lead_id: uncorroborated.id, reason: 'precedence_unverified' });
+
+      // is_sold is still set true (this backfill's ever-sold definition is
+      // unchanged) - the exception exists to surface the risk, not to alter
+      // the flag value, which would require redesigning the whole premise.
+      const reloaded = await db.entities.Lead.get(uncorroborated.id);
+      expect(reloaded.is_sold).toBe(true);
+    });
+
+    it('fires for a Returned lead with no corroborating positive revenue value', async () => {
+      const uncorroborated = await seedLead({ final_status: 'Returned' });
+
+      const { counts, exceptions } = await backfillLeadFlags(db);
+
+      expect(counts.precedence_unverified).toBe(1);
+      expect(exceptions.find((e) => e.lead_id === uncorroborated.id && e.reason === 'precedence_unverified')).toMatchObject({
+        lead_id: uncorroborated.id, reason: 'precedence_unverified',
+      });
+    });
+
+    it('does NOT fire for a Converted lead that DOES carry a corroborating positive revenue value', async () => {
+      const corroborated = await seedLead({ final_status: 'Converted', revenue: 300 });
+
+      const { counts, exceptions } = await backfillLeadFlags(db);
+
+      expect(counts.precedence_unverified).toBe(0);
+      expect(exceptions.find((e) => e.lead_id === corroborated.id)).toBeUndefined();
+    });
+
+    it('does NOT fire for a plain Sold lead, which has no precedence ambiguity at all', async () => {
+      const sold = await seedLead({ final_status: 'Sold' }); // no revenue on purpose
+
+      const { counts, exceptions } = await backfillLeadFlags(db);
+
+      // Sold is the direct sale signal itself, not an inference from a later
+      // status - there is nothing to verify precedence against, so it must
+      // never be swept into this exception even though it also has no
+      // revenue captured (that gap is sold_unknown_price's job, not this
+      // one, and this lead legitimately trips that other exception too -
+      // asserted on the reason, not just the lead_id, so that doesn't mask
+      // this assertion).
+      expect(counts.precedence_unverified).toBe(0);
+      expect(exceptions.find((e) => e.lead_id === sold.id && e.reason === 'precedence_unverified')).toBeUndefined();
+      expect(exceptions.find((e) => e.lead_id === sold.id && e.reason === 'sold_with_unknown_price')).toBeTruthy();
+    });
+  });
+
   // ── Write-once: every mutation path named in the acceptance criteria ────
   describe('write-once: is_sold and sale_price_effective survive every mutation path tried', () => {
     let leadId;
@@ -348,14 +439,20 @@ describe.skipIf(!reachable)('W1-FLAGS: derived money flags', () => {
   });
 
   // ── Reconciliation ───────────────────────────────────────────────────────
-  describe('reconciliation against the current status-based revenue query', () => {
+  describe('reconciliation against the real Sold-only-filtered revenue figures (partnerMetrics.js buyerMetrics / reportMetrics.js booked_revenue)', () => {
     it('for leads still Sold today, flags-based revenue equals sum(revenue) where final_status = Sold, to the cent', async () => {
       // A realistic scale slice: 40 currently-Sold leads at varied prices, plus
       // a spread of every non-revenue-bearing status, none of which has moved
       // away from Sold yet. This is the case the acceptance step's "revenue
       // from flags equals revenue from the current status query" means: right
       // after backfill, before anything returns or converts, nothing about
-      // switching to flags may have lost or invented a cent.
+      // switching to flags may have lost or invented a cent, for the figures
+      // that actually use this Sold-only filter today - partnerMetrics.js's
+      // buyerMetrics (~line 33-35) and reportMetrics.js's secondary
+      // `booked_revenue` stat (~line 296). It happens to also equal the
+      // primary Overview/Reports headline revenue in this particular
+      // scenario, but only because nothing has converted or returned yet;
+      // see the next two tests for what happens once something does.
       const prices = Array.from({ length: 40 }, (_, i) => 100 + i * 7.35);
       for (const p of prices) await seedLead({ final_status: 'Sold', revenue: Math.round(p * 100) / 100 });
       for (let i = 0; i < 25; i += 1) await seedLead({ final_status: 'Disqualified' });
@@ -376,7 +473,7 @@ describe.skipIf(!reachable)('W1-FLAGS: derived money flags', () => {
       expect(flagsRevenue).toBeGreaterThan(0);
     });
 
-    it('proves the exact D2 drift: once a sold lead converts, the OLD status-filtered query silently loses it while flags-based revenue does not', async () => {
+    it("proves the exact D2 drift in the figures that actually have it: once a sold lead converts, the Sold-only filter (partnerMetrics.js buyerMetrics / reportMetrics.js booked_revenue) silently loses it while flags-based revenue does not", async () => {
       const stillSold = await seedLead({ final_status: 'Sold', revenue: 300 });
       const willConvert = await seedLead({ final_status: 'Sold', revenue: 450 });
 
@@ -391,22 +488,61 @@ describe.skipIf(!reachable)('W1-FLAGS: derived money flags', () => {
 
       const allLeads = await db.entities.Lead.list('-created_date', 1000, 0);
 
-      // The OLD way every report in this codebase currently computes revenue:
-      // filter on final_status === 'Sold'. This is precisely what D2 says must
-      // stop being how money is computed.
-      const oldStatusFilteredRevenue = allLeads
+      // This Sold-only filter is exactly how partnerMetrics.js's buyerMetrics
+      // (~line 33-35: `leads.filter(l => l.final_status === 'Sold')`) and
+      // reportMetrics.js's secondary `booked_revenue` stat (~line 296: only
+      // accumulated `if (s === 'Sold')`) compute revenue today. It is NOT how
+      // the primary Overview/Reports headline revenue is computed - see the
+      // superset-safe test below for that one - so this test's claim is
+      // scoped to these two real figures, which is where D2's actual bug
+      // lives, not to the headline.
+      const soldOnlyFilteredRevenue = allLeads
         .filter((l) => l.final_status === 'Sold')
         .reduce((sum, l) => sum + (Number(l.revenue) || 0), 0);
 
       // The NEW way, from the immutable flags this unit adds.
       const newFlagsRevenue = revenueFromFlags(allLeads);
 
-      // The old query silently dropped the converted lead's $450 the moment it
-      // converted, exactly as forge-pack/CONTRACT.md D2 describes. The flags
-      // based figure did not.
-      expect(oldStatusFilteredRevenue).toBe(300);
+      // The Sold-only filter silently dropped the converted lead's $450 the
+      // moment it converted, exactly as forge-pack/CONTRACT.md D2 describes
+      // for buyerMetrics/booked_revenue. The flags-based figure did not.
+      expect(soldOnlyFilteredRevenue).toBe(300);
       expect(newFlagsRevenue).toBe(750);
-      expect(newFlagsRevenue - oldStatusFilteredRevenue).toBe(450);
+      expect(newFlagsRevenue - soldOnlyFilteredRevenue).toBe(450);
+      void stillSold;
+    });
+
+    it('is a superset-safe match for the primary Overview/Reports headline revenue, which was never exposed to the D2 drift because it never filters on final_status at all', async () => {
+      // overviewFinance.js's financialTruth() (~line 45: `bookedRevenue =
+      // wLeads.reduce((a, l) => a + num(l.revenue), 0)`) and reportMetrics.js's
+      // computeMetrics() primary `revenue` accumulator (~line 294: unconditional
+      // `revenue += num(l.revenue)` inside the per-lead loop, before any status
+      // branching) both sum every filtered lead's revenue with NO final_status
+      // check whatsoever. A Converted or Returned lead's revenue was always
+      // included there - there was never a status filter for a conversion to
+      // silently fall out of. This test does not claim the fix "protects" that
+      // calculation from a bug it was never exposed to; it only confirms
+      // flags-based revenue remains a consistent, superset-safe figure
+      // alongside it once a sold lead converts (and stays sold, unreturned).
+      const stillSold = await seedLead({ final_status: 'Sold', revenue: 300 });
+      const willConvert = await seedLead({ final_status: 'Sold', revenue: 450 });
+
+      await backfillLeadFlags(db);
+
+      await db.entities.Lead.update(willConvert.id, { final_status: 'Converted', buyer_conversion: 'Signed' });
+      const patched = await db.entities.Lead.get(willConvert.id);
+      await db.entities.Lead.update(willConvert.id, leadFlagsPatch(patched, computeLeadFlags(patched)));
+
+      const allLeads = await db.entities.Lead.list('-created_date', 1000, 0);
+
+      // The always-inclusive primary calculation: sum every lead's revenue,
+      // no final_status check at all - mirroring overviewFinance.js and
+      // reportMetrics.js's primary `revenue` exactly.
+      const primaryHeadlineRevenue = allLeads.reduce((sum, l) => sum + (Number(l.revenue) || 0), 0);
+      const flagsRevenue = revenueFromFlags(allLeads);
+
+      expect(flagsRevenue).toBe(primaryHeadlineRevenue);
+      expect(flagsRevenue).toBe(750);
       void stillSold;
     });
 
