@@ -90,7 +90,16 @@
     },
     "triggers": {
       "type": "string",
-      "description": "JSON array of trigger keys derived from the lead_status system field (on_received=Qualified, on_sold, on_unsold, on_dq=Disqualified, on_queued, on_rejected, on_duplicates, plus any custom lead_status values such as on_24m_lead). Empty array = fire on every lead (intake), gated only by filters."
+      "description": "JSON array of trigger keys. W2-STATUS, forge-pack/CONTRACT.md D1 and D4 first risk. The canonical keys are on_qualified (intake), on_queued, on_rejected, on_rejected_duplicate, on_disqualified, on_unsold, on_sold, on_returned, on_converted, on_processing_failed, plus any custom inbound lead_status value such as on_24m_lead. Empty array = fire on every lead (intake), gated only by filters. Trigger matching in server/src/functions/processLead.js folds the retired keys onto their canonical names before comparing, so an array written before this migration, or written by a settings screen that has not migrated yet, still fires. A trigger matching nothing throws no error, which is why that dual read exists and why server/src/lib/leadStatus.js findRetiredTriggerKeys is run as a loud check."
+    },
+    "triggers_legacy": {
+      "type": "string",
+      "description": "W2-STATUS. The pre-migration triggers array, JSON, written once by the connector trigger remap. Kept so the remap is reversible from the row itself with no backup restore, per the expand-and-contract rollback plan. Never read at runtime."
+    },
+    "triggers_migrated_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "W2-STATUS. Set when this destination's triggers array was remapped onto the canonical keys. Its presence is what makes the remap idempotent and safely resumable after an interruption."
     }
   },
   "required": [

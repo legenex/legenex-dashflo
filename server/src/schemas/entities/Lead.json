@@ -135,7 +135,54 @@
         "Fake",
         "Error"
       ],
-      "default": "Processing"
+      "default": "Processing",
+      "description": "SUPERSEDED by lead_status. W2-STATUS, forge-pack/CONTRACT.md D1 and D4. This is the retiring twelve-value enum. It is kept, unchanged, and still dual-written on every live path for the duration of the expand phase, because client/src/**, server/src/functions/webhook.js and server/src/functions/leadbyteWebhook.js still read and write it and are outside W2-STATUS's file ownership. Do not add a new read of this field: read lead_status. It is dropped in the contract release, after W3-UI-STATUS. Never compute money from either field; see is_sold and sale_price_effective."
+    },
+    "lead_status": {
+      "type": "string",
+      "enum": [
+        "queued",
+        "rejected",
+        "disqualified",
+        "unsold",
+        "sold",
+        "returned",
+        "converted"
+      ],
+      "description": "W2-STATUS, forge-pack/CONTRACT.md D1. The canonical operator-facing lead status, exactly seven values. queued: durably saved, not yet settled (covers received, processing, retry-pending, awaiting-cascade). rejected: not accepted as a valid, new, routable lead. disqualified: accepted as valid, then failed a business qualification rule; never offered to a buyer. unsold: qualified, entered distribution, no buyer bought it. sold: at least one valid buyer acceptance. returned: a previously sold lead with an approved return. converted: a previously sold lead confirmed downstream. Precedence when more than one could apply: returned, converted, sold, unsold, disqualified, rejected, queued. That precedence is expressed in server/src/lib/leadStatus.js and is NOT enforced by every live write path; see that module's KNOWN GAP note. Money is never computed from this field."
+    },
+    "processing_state": {
+      "type": "string",
+      "enum": [
+        "received",
+        "validating",
+        "routing",
+        "settled",
+        "failed",
+        "ambiguous"
+      ],
+      "description": "W2-STATUS, forge-pack/CONTRACT.md D1. The internal machine state, deliberately separate from lead_status so a crash can never change a lead's business status. A lead at lead_status queued with processing_state failed is a stuck lead and is the input to the W4-REAPER stuck-lead queue, unless it carries migrated_at."
+    },
+    "status_reason": {
+      "type": "string",
+      "description": "W2-STATUS, forge-pack/CONTRACT.md D1, D3 and D4. Stable machine reason code for the current lead_status, in the SCREAMING_SNAKE convention already used by the routing engine's REASON map and by the code field on every processLead supplier envelope. The three codes the contract names are REJECTED_DNC (D3), REJECTED_DUPLICATE and REJECTED_FAKE (D4). Live paths reuse the existing envelope codes (SOLD, UNSOLD, MISSING_FIELDS, LB_ERROR and the rest) rather than a parallel set. MIGRATED_FROM_PROCESSING, MIGRATED_FROM_QUALIFIED and MIGRATED_FROM_ERROR are written only by the backfill, where the historical row records no machine reason of its own."
+    },
+    "status_reason_detail": {
+      "type": "string",
+      "description": "W2-STATUS. Optional human-readable detail behind status_reason, capped at 500 characters. Used for the do-not-contact audit (which field matched and which entry did it, never the raw contact value) and for any other case where the code alone is not enough to act on. Never contains a raw contact value or a credential."
+    },
+    "is_qualified": {
+      "type": "boolean",
+      "description": "W2-STATUS, forge-pack/CONTRACT.md D4. Derived flag preserving the qualification rate that the retiring Qualified status used to carry, now that Qualified, Processing, Error and Queued all collapse into lead_status queued. TRI-STATE ON PURPOSE: true where the lead provably reached qualification, false where it provably did not, and ABSENT where the row genuinely does not say (a still-processing, queued or errored historical lead). A confident false on an unknowable row would understate the very rate this flag exists to preserve. The backfill reports the size of the unknown bucket."
+    },
+    "duplicate_of_lead_id": {
+      "type": "string",
+      "description": "W2-STATUS, forge-pack/CONTRACT.md D4. The Lead id this lead duplicates, set when lead_status is rejected with status_reason REJECTED_DUPLICATE. Resolved from mapped_fields.merged_into where leadbyteWebhook.js recorded a collapse, otherwise from the oldest non-duplicate lead sharing this lead's normalized email or mobile. Left unset, and reported as a backfill exception, when no original can be identified: never pointed at a guess."
+    },
+    "migrated_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "W2-STATUS, forge-pack/CONTRACT.md D4 third risk. Set by the status backfill on every row it migrates. Its purpose is exclusion: a lead carrying this marker reached its current lead_status and processing_state through a migration and not through a live processing run, so it must never be re-driven into live distribution. Thirty code sites treated the retiring Error status as terminal; under D1 those leads become queued and therefore recoverable, and without this marker the first run of any recovery job would flood live distribution with historical failures. server/src/lib/leadStatus.js isExcludedFromRedrive is the single predicate that answers it."
     },
     "lead_route": {
       "type": "string",
