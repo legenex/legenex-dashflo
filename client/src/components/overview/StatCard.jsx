@@ -1,13 +1,26 @@
 import React from 'react';
+import { Link } from 'react-router-dom';
+import { ArrowUpRight } from 'lucide-react';
 import useCountUp from '@/hooks/useCountUp';
 import AnimatedPanel from '@/components/overview/AnimatedPanel';
 
 // Small stat card. Pass either a preformatted `value` string, or a numeric
 // `count` + `render(n)` for an animated count-up. Optional status dot + note.
-export default function StatCard({ label, value, count, render, subtitle, note, dotTone = 'neutral', icon: Icon }) {
+//
+// `unavailable` is the honest-empty-state escape hatch (CONTRACT.md section
+// 3): a metric whose source can't currently be trusted (stale feeds, no data
+// this period) must say so plainly rather than render a number that looks
+// authoritative. When set, `count`/`render`/`value` are ignored, the dot goes
+// neutral regardless of `dotTone`, and an optional `link` points at the
+// relevant Data Source so the operator can go fix it.
+export default function StatCard({
+  label, value, count, render, subtitle, note, dotTone = 'neutral', icon: Icon,
+  unavailable = false, unavailableLabel = 'Unavailable', link,
+}) {
   const animated = useCountUp(count ?? 0);
-  const display = render ? render(animated) : value;
-  const dotColor = dotTone === 'good' ? '#3DD68C' : dotTone === 'warn' ? '#FACC14' : dotTone === 'bad' ? '#E5484D' : '#8B95A8';
+  const display = unavailable ? unavailableLabel : (render ? render(animated) : value);
+  const tone = unavailable ? 'neutral' : dotTone;
+  const dotColor = tone === 'good' ? '#3DD68C' : tone === 'warn' ? '#FACC14' : tone === 'bad' ? '#E5484D' : '#8B95A8';
   return (
     <AnimatedPanel duration={6.5}>
       <div className="p-3 lg:p-4 hover:border-primary/30 transition-colors duration-200 overflow-hidden">
@@ -18,8 +31,13 @@ export default function StatCard({ label, value, count, render, subtitle, note, 
         </div>
         {/* Currency values here can run to eight characters, which overflowed a
             fixed 22px on a two-column phone layout. */}
-        <div className="text-[17px] sm:text-[19px] lg:text-[22px] font-bold text-foreground mt-1.5 font-display tabular-nums truncate">{display}</div>
+        <div className={`text-[17px] sm:text-[19px] lg:text-[22px] font-bold mt-1.5 font-display tabular-nums truncate ${unavailable ? 'text-muted-foreground' : 'text-foreground'}`}>{display}</div>
         {(note || subtitle) && <div className="text-[10px] lg:text-[11px] text-muted-foreground/80 mt-1 truncate">{note || subtitle}</div>}
+        {unavailable && link && (
+          <Link to={link.to} className="inline-flex items-center gap-1 text-[10px] lg:text-[11px] text-primary hover:underline mt-1.5">
+            {link.label || 'View Data Source'} <ArrowUpRight className="w-3 h-3" />
+          </Link>
+        )}
       </div>
     </AnimatedPanel>
   );

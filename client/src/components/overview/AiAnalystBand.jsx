@@ -1,5 +1,6 @@
 import React from 'react';
-import { Brain, Sparkle, RefreshCw } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { Brain, Sparkle, RefreshCw, ArrowUpRight } from 'lucide-react';
 import { motion } from 'framer-motion';
 
 const CHIPS = [
@@ -9,11 +10,29 @@ const CHIPS = [
   { label: 'Data Quality', tone: 'red' },
 ];
 
+// The briefing call fails closed with a plain-text reason (see
+// server/src/integrations/llm.js and overviewBriefing.js). A missing provider
+// key is a normal, expected state for an app that hasn't wired up an AI
+// provider yet, not an incident, so it must not read as one: CONTRACT.md
+// section 3 is explicit that a missing optional integration degrades quietly
+// and never puts a red error on the primary dashboard. This matches on the
+// shape every provider uses for that case ("<PROVIDER>_API_KEY is not set" /
+// "not set on this app", with or without a KEY_MISSING code) rather than one
+// exact string, so it still catches whichever provider is configured.
+function isNotConfigured(message) {
+  if (!message) return false;
+  return /api[_-]?key/i.test(message) && /not set/i.test(message);
+}
+
 // AI Analyst briefing band. Parent owns the data + refresh; this is presentational.
 // Optional confidence (0-100), riskLevel word, riskNote, topRecommendation, feedCount.
+// `confidenceUnavailable` mirrors the Overview Data Quality stat card: when the
+// data quality figure this confidence is derived from can't be trusted (no
+// leads this period, or feeds stale), show "Unavailable" instead of a number
+// rather than a score that contradicts its own caveat.
 export default function AiAnalystBand({
   text, loading, error, onRefresh,
-  confidence = 0, riskLevel = 'Watch', riskNote = 'stale ingestion',
+  confidence = 0, confidenceUnavailable = false, riskLevel = 'Watch', riskNote = 'stale ingestion',
   topRecommendation = 'Verify booked revenue against cash before scaling any campaign.',
   feedCount = 10, onAskAi, onExplainVariance,
 }) {
@@ -102,7 +121,16 @@ export default function AiAnalystBand({
                 ))}
               </div>
             ) : error ? (
-              <div className="mt-2 text-[13px] status-error">{error}</div>
+              isNotConfigured(error) ? (
+                <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] text-muted-foreground">
+                  <span>AI briefings are not configured for this app yet.</span>
+                  <Link to="/settings?tab=apikeys" className="inline-flex items-center gap-1 text-primary hover:underline shrink-0">
+                    Add an API key <ArrowUpRight className="w-3 h-3" />
+                  </Link>
+                </div>
+              ) : (
+                <div className="mt-2 text-[13px] text-muted-foreground">Briefing unavailable: {error}</div>
+              )
             ) : (
               <motion.p
                 key={text}
@@ -130,18 +158,30 @@ export default function AiAnalystBand({
         {/* Right: confidence + risk + actions */}
         <div className="lg:w-72 shrink-0 flex flex-col gap-3">
           <div className="grid grid-cols-2 gap-3">
-            {/* Confidence */}
+            {/* Confidence. A metric whose source is unavailable never renders a
+                confidence score (CONTRACT.md section 3), so when the data
+                quality figure this is derived from can't be trusted, say so
+                instead of animating a bar to a number that would contradict it. */}
             <div className="rounded-lg bg-muted/40 border border-border p-3">
               <div className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">Confidence</div>
-              <div className="text-[22px] font-bold text-foreground mt-0.5 font-display tabular-nums">{Math.round(confidence)}%</div>
-              <div className="mt-2 h-1.5 rounded-full bg-border overflow-hidden">
-                <motion.div
-                  className="h-full rounded-full bg-primary"
-                  initial={{ width: 0 }}
-                  animate={{ width: `${Math.max(0, Math.min(100, confidence))}%` }}
-                  transition={{ duration: 1, ease: [0.22, 1, 0.36, 1], delay: 0.2 }}
-                />
-              </div>
+              {confidenceUnavailable ? (
+                <>
+                  <div className="text-[16px] font-bold text-muted-foreground mt-1 font-display">Unavailable</div>
+                  <div className="text-[11px] text-muted-foreground mt-0.5 truncate">no leads or feeds stale</div>
+                </>
+              ) : (
+                <>
+                  <div className="text-[22px] font-bold text-foreground mt-0.5 font-display tabular-nums">{Math.round(confidence)}%</div>
+                  <div className="mt-2 h-1.5 rounded-full bg-border overflow-hidden">
+                    <motion.div
+                      className="h-full rounded-full bg-primary"
+                      initial={{ width: 0 }}
+                      animate={{ width: `${Math.max(0, Math.min(100, confidence))}%` }}
+                      transition={{ duration: 1, ease: [0.22, 1, 0.36, 1], delay: 0.2 }}
+                    />
+                  </div>
+                </>
+              )}
             </div>
 
             {/* Risk level */}

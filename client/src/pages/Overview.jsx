@@ -363,6 +363,17 @@ export default function Overview() {
   const feedCount = confidenceSources.length;
   const verifiedFeeds = confidenceSources.filter(s => s.at && (Date.now() - new Date(s.at).getTime()) < 86400000).length;
   const analystConfidence = Math.round(stats.dataQuality || 0);
+
+  // Honest empty/unavailable states (CONTRACT.md section 3). An empty lead
+  // window has no basis for revenue, profit or CPL, and stats.dataQuality
+  // itself defaults to a meaningless 100 when there are zero leads to score,
+  // so a numeric Data Quality score would either be undefined or would be
+  // scored against feeds that are themselves too stale to trust. Both cases
+  // render "no data" / "unavailable" instead of a number that looks real.
+  const periodHasNoLeads = truth.wLeads.length === 0;
+  const feedsMostlyStale = feedCount > 0 && verifiedFeeds < feedCount / 2;
+  const dataQualityUnavailable = periodHasNoLeads || feedsMostlyStale;
+  const dataQualityUnavailableReason = periodHasNoLeads ? 'no leads this period' : 'feeds stale';
   const totalAtRisk = queue.totalAtRisk || 0;
   const riskLevel = totalAtRisk > 5000 ? 'Elevated' : totalAtRisk > 0 ? 'Watch' : verifiedFeeds < feedCount / 2 ? 'Watch' : 'Clear';
   const riskNote = totalAtRisk > 0 ? `${fmtMoney(totalAtRisk)} at risk` : 'stale ingestion';
@@ -460,6 +471,7 @@ export default function Overview() {
             error={briefing.error}
             onRefresh={briefing.refresh}
             confidence={analystConfidence}
+            confidenceUnavailable={dataQualityUnavailable}
             riskLevel={riskLevel}
             riskNote={riskNote}
             topRecommendation={topRecommendation}
@@ -473,10 +485,16 @@ export default function Overview() {
       {/* Grouped KPI cards */}
       <motion.div variants={gridVariants} initial="hidden" animate="show" className="grid grid-cols-2 xl:grid-cols-4 gap-4 mt-4">
         {[
-          { key: 'revenue', label: 'Revenue', subLabel: 'Verified', icon: DollarSign, cmp: 'Booked' },
-          { key: 'profit', label: 'Profit', subLabel: 'Cash', icon: TrendingUp, cmp: 'Reported' },
+          // Revenue, Profit and CPL are all derived from leads in the selected
+          // window, so an empty window leaves them with nothing to report.
+          // Cost is not: it is supplier lead cost plus ad spend, and ad spend
+          // keeps arriving through its connector even into a dormant lead
+          // table (CONTRACT.md section 3), so it stays a real, non-gated
+          // figure rather than a manufactured "no data".
+          { key: 'revenue', label: 'Revenue', subLabel: 'Verified', icon: DollarSign, cmp: 'Booked', noData: periodHasNoLeads },
+          { key: 'profit', label: 'Profit', subLabel: 'Cash', icon: TrendingUp, cmp: 'Reported', noData: periodHasNoLeads },
           { key: 'cost', label: 'Cost', subLabel: 'Paid', icon: Megaphone, cmp: 'Accrued' },
-          { key: 'cpl', label: 'CPL', subLabel: 'Sold', icon: Users, cmp: 'Blended', subFormat: 'number', hideGap: true },
+          { key: 'cpl', label: 'CPL', subLabel: 'Sold', icon: Users, cmp: 'Blended', subFormat: 'number', hideGap: true, noData: periodHasNoLeads },
         ].map((c) => (
           <motion.div key={c.key} variants={itemVariants}>
             <GroupedKpiCard
@@ -491,8 +509,9 @@ export default function Overview() {
               note={KPI_NOTES[c.key]}
               subFormat={c.subFormat}
               hideGap={c.hideGap}
+              noData={c.noData}
             />
-            {compare && <div className="text-[11px] text-muted-foreground mt-1 px-1">{c.cmp} {cmpChip(kpis[c.key].headline, priorTruth?.kpis[c.key].headline)}</div>}
+            {compare && !c.noData && <div className="text-[11px] text-muted-foreground mt-1 px-1">{c.cmp} {cmpChip(kpis[c.key].headline, priorTruth?.kpis[c.key].headline)}</div>}
           </motion.div>
         ))}
       </motion.div>
@@ -506,10 +525,25 @@ export default function Overview() {
           { label: 'Short-Paid', count: stats.shortPaid, render: (n) => money(n), note: 'clean', tone: stats.shortPaid > 0 ? 'bad' : 'good' },
           { label: 'True CPL', count: stats.trueCpl, render: (n) => money(n), note: 'no spend basis', tone: 'neutral' },
           { label: 'Cash Margin', count: stats.cashMargin, render: (n) => `${Math.round(n)}%`, note: 'no cash flow', tone: stats.cashMargin > 0 ? 'good' : 'neutral' },
-          { label: 'Data Quality', count: stats.dataQuality, render: (n) => `${Math.round(n)}/100`, note: 'unverified, feeds stale', tone: stats.dataQuality >= 80 ? 'good' : stats.dataQuality >= 50 ? 'warn' : 'bad' },
+          {
+            // A metric with no underlying data (no leads this period, nothing
+            // to score) or whose feeds are too stale to trust never renders a
+            // number, and its caption must not contradict that (CONTRACT.md
+            // section 3). stats.dataQuality itself defaults to 100 when there
+            // are zero leads to score, which is exactly the false-perfect-score
+            // shape the contract calls out, so that case is caught here rather
+            // than passed through to the card.
+            label: 'Data Quality',
+            count: stats.dataQuality,
+            render: (n) => `${Math.round(n)}/100`,
+            note: dataQualityUnavailable ? dataQualityUnavailableReason : 'verified against synced feeds',
+            tone: stats.dataQuality >= 80 ? 'good' : stats.dataQuality >= 50 ? 'warn' : 'bad',
+            unavailable: dataQualityUnavailable,
+            link: { to: '/settings?tab=data-sources', label: 'View Data Sources' },
+          },
         ].map((s) => (
           <motion.div key={s.label} variants={itemVariants}>
-            <StatCard label={s.label} count={s.count} render={s.render} note={s.note} dotTone={s.tone} />
+            <StatCard label={s.label} count={s.count} render={s.render} note={s.note} dotTone={s.tone} unavailable={s.unavailable} link={s.link} />
           </motion.div>
         ))}
       </motion.div>
