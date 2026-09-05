@@ -12,6 +12,7 @@ import { assertStartupConfig } from './lib/startupChecks.js';
 import { loadFunctions } from './functions/index.js';
 import { createServerClient } from './lib/serverClient.js';
 import { startNativeRetryScheduler } from './lib/nativeRetryScheduler.js';
+import { startStuckLeadReaper } from './functions/reapStuckLeads.js';
 
 import authRoutes from './routes/auth.js';
 import entityRoutes from './routes/entities.js';
@@ -130,6 +131,10 @@ async function main() {
   // No-op unless NATIVE_RETRY_WORKER_ENABLED=true, which is unset in every
   // environment today. See server/src/lib/nativeRetryScheduler.js.
   startNativeRetryScheduler(createServerClient());
+
+  // No-op unless STUCK_LEAD_REAPER_ENABLED=true, which is unset in every
+  // environment today. See server/src/functions/reapStuckLeads.js.
+  startStuckLeadReaper(createServerClient());
 }
 
 main().catch((err) => {
