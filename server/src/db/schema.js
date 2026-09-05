@@ -92,6 +92,72 @@ export async function ensureSchema() {
       );
     }
 
+    // W1-FLAGS (forge-pack/CONTRACT.md D2): is_sold, sold_at,
+    // sale_price_effective, is_returned, returned_at, is_converted,
+    // converted_at and conversion_type (server/src/schemas/entities/Lead.json,
+    // computed by server/src/lib/leadFlags.js) are immutable, write-once
+    // derived flags that money/GP/CPL/ROAS reporting reads instead of
+    // final_status/lead_status. "Write-once" has to hold against every
+    // caller, not just the ones that know about it: Repo.update() in
+    // server/src/db/repo.js does a blind top-level JSONB merge for any
+    // entity, so a status-sync webhook, a re-run of the backfill, or code
+    // that does not exist yet could all overwrite these keys the same way
+    // any other field is overwritten. A trigger is the one enforcement point
+    // that covers all of them, including a raw SQL statement that never goes
+    // through Repo at all.
+    //
+    // Semantics: once a protected key already holds a "set" value (true for
+    // the three booleans, non-null for the rest), an UPDATE that tries to
+    // change it has that one key silently pinned back to its original value;
+    // every other column in the same UPDATE still applies normally. This is
+    // a sticky latch, not a hard failure, so an ordinary Lead.update() call
+    // that happens to also touch one of these keys (a stale mirrored patch,
+    // for instance) does not lose its unrelated fields to a rolled back
+    // transaction - only the protected key itself refuses to move. Additive:
+    // CREATE OR REPLACE / DROP+CREATE TRIGGER, no data touched, safe to run
+    // on every boot per invariant 7.
+    if (entitySchemas.Lead) {
+      const leadTable = tableName('Lead');
+      await client.query(`
+        CREATE OR REPLACE FUNCTION lead_flags_write_once() RETURNS trigger AS $BODY$
+        DECLARE
+          protected_key TEXT;
+          old_val JSONB;
+          new_val JSONB;
+        BEGIN
+          FOREACH protected_key IN ARRAY ARRAY[
+            'is_sold', 'sold_at', 'sale_price_effective',
+            'is_returned', 'returned_at',
+            'is_converted', 'converted_at', 'conversion_type'
+          ]
+          LOOP
+            old_val := OLD.data -> protected_key;
+            new_val := NEW.data -> protected_key;
+
+            IF old_val IS NULL OR old_val = 'null'::jsonb THEN
+              CONTINUE; -- never set on the prior row: open for its first write
+            END IF;
+
+            IF jsonb_typeof(old_val) = 'boolean' AND old_val <> 'true'::jsonb THEN
+              CONTINUE; -- boolean flag still false: open until it first flips true
+            END IF;
+
+            IF new_val IS DISTINCT FROM old_val THEN
+              NEW.data := jsonb_set(NEW.data, ARRAY[protected_key], old_val, true);
+            END IF;
+          END LOOP;
+          RETURN NEW;
+        END;
+        $BODY$ LANGUAGE plpgsql;
+      `);
+      await client.query(`DROP TRIGGER IF EXISTS lead_flags_write_once_trg ON ${leadTable};`);
+      await client.query(`
+        CREATE TRIGGER lead_flags_write_once_trg
+          BEFORE UPDATE ON ${leadTable}
+          FOR EACH ROW EXECUTE FUNCTION lead_flags_write_once();
+      `);
+    }
+
     await client.query('COMMIT');
   } catch (err) {
     await client.query('ROLLBACK');

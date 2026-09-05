@@ -237,6 +237,44 @@
     "revenue_source": {
       "type": "string",
       "description": "How the revenue value on this lead was determined: leadbyte_buyers, leadbyte_root, direct_route, or unknown. Diagnostic only, does not affect final_status."
+    },
+    "is_sold": {
+      "type": "boolean",
+      "default": false,
+      "description": "W1-FLAGS, forge-pack/CONTRACT.md D2. Immutable, write-once derived flag: true once this lead is ever sold, and never cleared again by any later status change (Returned, Converted, a reprocessed webhook, or a re-run of the backfill in server/src/lib/leadFlags.js). Money must never be computed from final_status/lead_status directly; use this flag instead. Enforced at the database layer by the lead_flags_write_once trigger in server/src/db/schema.js, which silently rejects any UPDATE attempting to move this back to false once it is true."
+    },
+    "sold_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "W1-FLAGS, forge-pack/CONTRACT.md D2. Immutable, write-once. When is_sold first became true, best-effort from processed_at/leadbyte_outcome_at at backfill time. Never rewritten once set."
+    },
+    "sale_price_effective": {
+      "type": "number",
+      "description": "W1-FLAGS, forge-pack/CONTRACT.md D2. Immutable, write-once. The captured revenue at the moment this lead was first sold. A later conversion or return never changes this value; a later resale-style webhook that tries to overwrite Lead.revenue no longer moves the number actually used for revenue/GP/CPL/ROAS reporting. Null when the lead is sold but no usable revenue value was ever captured (see revenue_source = unknown), which is reported as a distinct backfill exception rather than silently priced at zero."
+    },
+    "is_returned": {
+      "type": "boolean",
+      "default": false,
+      "description": "W1-FLAGS, forge-pack/CONTRACT.md D2. Immutable, write-once derived flag: true once this previously sold lead has an accepted/approved return (final_status = Returned, or an approved ReturnRequest), and never cleared again. is_sold stays true; only this flag distinguishes a return for revenue exclusion (revenue = sum of sale_price_effective where is_sold and not is_returned)."
+    },
+    "returned_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "W1-FLAGS, forge-pack/CONTRACT.md D2. Immutable, write-once. When is_returned first became true. Never rewritten once set."
+    },
+    "is_converted": {
+      "type": "boolean",
+      "default": false,
+      "description": "W1-FLAGS, forge-pack/CONTRACT.md D2. Immutable, write-once derived flag: true once this previously sold lead is confirmed downstream by the buyer (final_status = Converted), and never cleared again. Does not change is_sold or sale_price_effective, which keep reporting the original sale."
+    },
+    "converted_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "W1-FLAGS, forge-pack/CONTRACT.md D2. Immutable, write-once. When is_converted first became true. Never rewritten once set."
+    },
+    "conversion_type": {
+      "type": "string",
+      "description": "W1-FLAGS, forge-pack/CONTRACT.md D2. Immutable, write-once. The buyer's conversion disposition (from buyer_conversion, e.g. signed/retained), or 'converted' when no disposition detail was captured. Never rewritten once set."
     }
   },
   "required": [
