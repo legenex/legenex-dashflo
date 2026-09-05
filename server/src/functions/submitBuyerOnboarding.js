@@ -30,6 +30,19 @@ const RATE_WINDOW_MS = 60_000;
 const RATE_MAX = 8;
 const ipHits = new Map();
 
+// An onboarding link is secure (128-bit token) and revocable (an operator sets
+// status to 'cancelled'), but was never actually time-bound. Enforce the
+// expiry the existing "Invalid or expired link" wording already promised: a
+// link older than this is treated exactly like a revoked one, using the
+// platform's own created_date timestamp so no schema change is needed.
+const ONBOARDING_LINK_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+
+function isOnboardingLinkExpired(record) {
+  const createdMs = record && record.created_date ? new Date(record.created_date).getTime() : NaN;
+  if (!Number.isFinite(createdMs)) return false; // never block on a missing/unparseable timestamp
+  return Date.now() - createdMs > ONBOARDING_LINK_TTL_MS;
+}
+
 function clientIp(req) {
   const headers = (req && req.headers) || {};
   const fwd = headers['x-forwarded-for'];
@@ -125,17 +138,44 @@ export default async function submitBuyerOnboarding(ctx) {
       if (!rec) {
         return ctx.json({ error: 'Invalid or expired onboarding link.' }, 404);
       }
-      if (rec.status === 'cancelled') {
+      if (rec.status === 'cancelled' || isOnboardingLinkExpired(rec)) {
         return ctx.json({ error: 'This onboarding link is no longer active.' }, 410);
       }
       if (rec.status === 'complete') {
         return ctx.json({ status: 'duplicate', onboarding_id: rec.id, company_name: rec.company_name }, 200);
       }
       const wasInvited = rec.status === 'invited';
+
+      // Immutable versioned submissions: a resubmission through the same link
+      // must never silently destroy the prior submission. Archive the current
+      // form_payload into submission_history before it is overwritten, and
+      // bump the version. The very first submission (nothing to archive yet)
+      // just becomes version 1.
+      const priorPayloadRaw = typeof rec.form_payload === 'string' ? rec.form_payload : '';
+      const hadPriorSubmission = priorPayloadRaw.trim().length > 0;
+      let history = [];
+      try {
+        history = typeof rec.submission_history === 'string'
+          ? JSON.parse(rec.submission_history || '[]')
+          : (Array.isArray(rec.submission_history) ? rec.submission_history : []);
+      } catch { history = []; }
+      if (!Array.isArray(history)) history = [];
+      const currentVersion = Number(rec.submission_version) || 1;
+
       const patch = {
         form_payload: JSON.stringify(body),
         submitted_at: new Date().toISOString(),
       };
+      if (hadPriorSubmission) {
+        history = [
+          ...history,
+          { version: currentVersion, form_payload: priorPayloadRaw, submitted_at: rec.submitted_at || null },
+        ];
+        patch.submission_history = JSON.stringify(history);
+        patch.submission_version = currentVersion + 1;
+      } else {
+        patch.submission_version = currentVersion;
+      }
       if (wasInvited) patch.status = 'submitted';
       await db.entities.BuyerOnboarding.update(rec.id, patch);
 
@@ -162,7 +202,12 @@ export default async function submitBuyerOnboarding(ctx) {
         }
       }
 
-      return ctx.json({ status: 'ok', onboarding_id: rec.id, company_name: rec.company_name }, 200);
+      return ctx.json({
+        status: 'ok',
+        onboarding_id: rec.id,
+        company_name: rec.company_name,
+        submission_version: patch.submission_version,
+      }, 200);
     }
 
     // ── Duplicate guard: same company_name + email within ten minutes. ────
@@ -200,10 +245,11 @@ export default async function submitBuyerOnboarding(ctx) {
       steps: '[]',
       current_step: null,
       submitted_at: now,
+      submission_version: 1,
     });
 
     return ctx.json(
-      { status: 'ok', onboarding_id: record.id, company_name: record.company_name },
+      { status: 'ok', onboarding_id: record.id, company_name: record.company_name, submission_version: 1 },
       200,
     );
   } catch (error) {

@@ -24,7 +24,16 @@
     },
     "form_payload": {
       "type": "string",
-      "description": "JSON object holding the complete raw submission, including free text answers not promoted to Buyer fields, such as prior lead generation experience, that experience described, and additional requirements."
+      "description": "JSON object holding the complete raw submission, including free text answers not promoted to Buyer fields, such as prior lead generation experience, that experience described, and additional requirements. Always the current version; every prior version is archived immutably in submission_history before being replaced."
+    },
+    "submission_version": {
+      "type": "number",
+      "default": 1,
+      "description": "Version number of the current form_payload. Starts at 1 and increments by one every time a resubmission through the same onboarding link replaces the prior payload."
+    },
+    "submission_history": {
+      "type": "string",
+      "description": "JSON array of prior submission snapshots, each {version, form_payload, submitted_at}, archived immutably before the next resubmission overwrites form_payload. A resubmission never destroys the prior submission's content. Empty or absent until a second submission occurs."
     },
     "steps": {
       "type": "string",

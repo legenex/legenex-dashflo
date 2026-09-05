@@ -14,6 +14,19 @@ const OPERATOR_PERMISSION_KEYS = ['leads', 'reports', 'overview', 'finances', 'd
 
 const ACTIVE_ONBOARDING_STATUSES = ['invited', 'submitted', 'in_progress', 'blocked'];
 
+// Matches the expiry window enforced by getOnboardingContext.js and
+// submitBuyerOnboarding.js. An expired link must not go back out in a fresh
+// email: the buyer would just hit the same "no longer active" wall those two
+// endpoints already enforce. Uses the platform's own created_date, so no
+// schema change is needed.
+const ONBOARDING_LINK_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+
+function isOnboardingLinkExpired(record) {
+  const createdMs = record && record.created_date ? new Date(record.created_date).getTime() : NaN;
+  if (!Number.isFinite(createdMs)) return false; // never block on a missing/unparseable timestamp
+  return Date.now() - createdMs > ONBOARDING_LINK_TTL_MS;
+}
+
 export default async function sendOnboardingLink(ctx) {
   try {
     const db = ctx.db;
@@ -53,7 +66,7 @@ export default async function sendOnboardingLink(ctx) {
 
     const list = await db.entities.BuyerOnboarding.filter({ buyer_id: buyerId });
     const onboarding = (Array.isArray(list) ? list : [])
-      .find((o) => ACTIVE_ONBOARDING_STATUSES.includes(o.status));
+      .find((o) => ACTIVE_ONBOARDING_STATUSES.includes(o.status) && !isOnboardingLinkExpired(o));
     if (!onboarding) {
       return ctx.json({ error: 'No onboarding link for this buyer. Generate it first.' }, 404);
     }

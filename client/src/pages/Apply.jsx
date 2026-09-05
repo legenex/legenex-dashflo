@@ -33,6 +33,7 @@ const INITIAL = {
   accounts_email: '',
   cpl: '',
   client_type: '',
+  vertical: '',
   billing_type: 'prepay',
   initial_batch_size: '',
   // Section 4: lead delivery preferences
@@ -90,7 +91,12 @@ export default function Apply() {
       .then((res) => {
         const ctx = res?.data || {};
         setInherited(ctx);
-        setForm((f) => ({ ...f, company_name: ctx.company_name || f.company_name, client_type: ctx.client_type || f.client_type }));
+        setForm((f) => ({
+          ...f,
+          company_name: ctx.company_name || f.company_name,
+          client_type: ctx.client_type || f.client_type,
+          vertical: ctx.vertical || f.vertical,
+        }));
       })
       .catch((e) => setLinkError(e?.response?.data?.error || 'This onboarding link is invalid or no longer active.'));
   }, [token]);
@@ -277,7 +283,15 @@ export default function Apply() {
             >
               {step === 0 && <CompanyStep form={form} set={set} errors={errors} locked={!!inherited} />}
               {step === 1 && <ContactsStep form={form} set={set} errors={errors} />}
-              {step === 2 && <CoverageStep form={form} set={set} errors={errors} locked={!!inherited} />}
+              {step === 2 && (
+                <CoverageStep
+                  form={form}
+                  set={set}
+                  errors={errors}
+                  locked={!!inherited}
+                  verticalLocked={!!(inherited && inherited.vertical)}
+                />
+              )}
               {step === 3 && <CommercialsStep form={form} set={set} errors={errors} />}
               {step === 4 && <DeliveryStep form={form} set={set} errors={errors} />}
               {step === 5 && <ComplianceStep form={form} set={set} errors={errors} />}

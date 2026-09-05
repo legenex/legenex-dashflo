@@ -2,10 +2,19 @@ import React from 'react';
 import { ApplyField, ApplySelect } from '../ApplyField';
 import { CLIENT_TYPES, BILLING_TYPES } from '../applyConstants';
 
-// Section 3: Billing and Accounts. Also carries the client_type and billing_type
-// selects that onboardBuyer needs (not in the original form) plus the optional
-// initial batch size, and the static taxpayer form and payment links.
-export default function CoverageStep({ form, set, errors, locked }) {
+// Section 3: Billing and Accounts. Also carries the client_type, vertical and
+// billing_type fields that onboardBuyer needs (not in the original form) plus
+// the optional initial batch size, and the static taxpayer form and payment
+// links.
+//
+// verticalLocked is distinct from locked: an invite link can carry a known
+// client_type/company_name that is always locked when present, but many
+// existing buyers have no vertical set yet, so the vertical field is only
+// locked when the invite actually already specifies one. Locking it
+// unconditionally alongside client_type would leave a buyer with no known
+// vertical staring at a disabled, permanently blank field with no way to
+// ever supply one.
+export default function CoverageStep({ form, set, errors, locked, verticalLocked }) {
   const pickClientType = (ct) => {
     set('client_type', ct);
     // Sensible default billing arrangement for the chosen client type.
@@ -72,6 +81,26 @@ export default function CoverageStep({ form, set, errors, locked }) {
         required
         disabled={locked}
       />
+
+      <div>
+        <ApplyField
+          label="Primary Vertical"
+          value={form.vertical}
+          onChange={(v) => set('vertical', v)}
+          error={errors.vertical}
+          placeholder="MVA, Mass Tort, etc."
+          disabled={verticalLocked}
+        />
+        {verticalLocked ? (
+          <div className="mt-2 text-[12px] text-muted-foreground">
+            Vertical is already set for this account.
+          </div>
+        ) : (
+          <div className="mt-2 text-[12px] text-muted-foreground">
+            The lead category this account buys, e.g. MVA, Workers Comp, Mass Tort.
+          </div>
+        )}
+      </div>
 
       <div>
         <ApplySelect

@@ -274,6 +274,36 @@ async function getStripeKey(svc) {
   return key;
 }
 
+// Pre-checks used to decide skip-vs-attempt for the two optional, post-cutover
+// integrations (Contract v3 D9). These never throw: an unreadable or absent
+// config just means "not connected" so the caller can skip gracefully instead
+// of blocking the whole onboarding run (GAP-59).
+async function xeroIsConnected(svc) {
+  try {
+    const cfgList = await svc.entities.IntegrationConfig.filter({ name: 'xero' });
+    const cfg = (Array.isArray(cfgList) ? cfgList : [])[0];
+    if (!cfg) return false;
+    let parsed = {};
+    try { parsed = JSON.parse(cfg.config || '{}'); } catch { parsed = {}; }
+    return !!parsed.access_token;
+  } catch {
+    return false;
+  }
+}
+
+async function stripeIsConnected(svc) {
+  try {
+    const cfgList = await svc.entities.IntegrationConfig.filter({ name: 'stripe' });
+    const cfg = (Array.isArray(cfgList) ? cfgList : [])[0];
+    if (!cfg) return false;
+    let parsed = {};
+    try { parsed = JSON.parse(cfg.config || '{}'); } catch { parsed = {}; }
+    return !!parsed.secret_key;
+  } catch {
+    return false;
+  }
+}
+
 // The LeadByte base URL and X_KEY come from the default LeadByte connector, the
 // same record the live pipeline forwards leads through. We never hardcode the
 // key: we read the connector's own X_KEY header value.
@@ -494,6 +524,13 @@ export default async function onboardBuyer(ctx) {
           if (!buyer) throw new Error('Buyer record not found for Xero contact.');
           if (buyer.xero_contact_id) {
             step.external_id = buyer.xero_contact_id;
+          } else if (!(await xeroIsConnected(svc))) {
+            // Xero stays out of scope until after cutover (Contract v3 D9).
+            // A missing optional integration must not block onboarding for
+            // every buyer: skip rather than throw, matching the crm_contact
+            // and dispo_scope pattern below.
+            markSkipped(step, 'Xero is not connected.');
+            skipped = true;
           } else {
             const { token, tenantId } = await getXeroCreds(svc);
             const contactName = str(payload.company_name) || buyer.company_name || 'Buyer';
@@ -530,6 +567,13 @@ export default async function onboardBuyer(ctx) {
           if (!buyer) throw new Error('Buyer record not found for Stripe customer.');
           if (buyer.stripe_customer_id) {
             step.external_id = buyer.stripe_customer_id;
+          } else if (!(await stripeIsConnected(svc))) {
+            // Stripe stays out of scope until after cutover (Contract v3 D9).
+            // A missing optional integration must not block onboarding for
+            // every buyer: skip rather than throw, matching the crm_contact
+            // and dispo_scope pattern below.
+            markSkipped(step, 'Stripe is not connected.');
+            skipped = true;
           } else {
             const key2 = await getStripeKey(svc);
             const form = new URLSearchParams();
