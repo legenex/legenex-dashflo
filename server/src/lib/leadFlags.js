@@ -54,16 +54,45 @@
 // Production leads are flat rows with a single current final_status, not an
 // event-sourced history of every status they ever passed through. There is
 // no way to ask "was this lead Sold at 3pm before becoming Returned at 5pm"
-// from the row alone. But this system's own precedence rules already encode
-// the fact we need: forge-pack/CONTRACT.md D1 defines `returned` as "a
-// PREVIOUSLY SOLD lead with an approved return" and `converted` as "a
-// PREVIOUSLY SOLD lead confirmed downstream" - Returned and Converted are, by
-// this system's own definition, states a lead only reaches by first being
-// Sold. So for a one-time backfill against the current snapshot, "was this
-// lead ever sold" is exactly: final_status is currently Sold, Returned, or
-// Converted. Anything else (Disqualified, Rejected, Unsold, Duplicate,
-// Error, Fake, Qualified, Queued, Processing - the full pre-W2-STATUS
-// twelve-value enum) never sold.
+// from the row alone. This system's own precedence rules say we shouldn't
+// need to: forge-pack/CONTRACT.md D1 defines `returned` as "a PREVIOUSLY
+// SOLD lead with an approved return" and `converted` as "a PREVIOUSLY SOLD
+// lead confirmed downstream" - Returned and Converted are, by this system's
+// own definition, states a lead only reaches by first being Sold. So for a
+// one-time backfill against the current snapshot, "was this lead ever sold"
+// is treated as: final_status is currently Sold, Returned, or Converted.
+// Anything else (Disqualified, Rejected, Unsold, Duplicate, Error, Fake,
+// Qualified, Queued, Processing - the full pre-W2-STATUS twelve-value enum)
+// never sold.
+//
+// That precedence assumption is NOT actually enforced by every live write
+// path, and a snapshot backfill has no way to tell the difference.
+// server/src/functions/webhook.js's create branch (~line 604) and update
+// branch (~line 505) set final_status directly with no precedence guard at
+// all, and server/src/functions/leadbyteWebhook.js's create branch (a lead
+// this system has never seen before) also sets final_status directly with
+// no guard - only its existing-lead update branch (~line 365-376) checks
+// precedence before accepting a new final_status. So a lead can reach
+// Converted or Returned today WITHOUT ever having been Sold, and this
+// module cannot see that from the row alone: there is no per-transition
+// history to consult, only the current final_status. Because is_sold is
+// permanently immutable once true (see "The fix" below), backfilling such a
+// lead locks in a wrong is_sold=true forever with no code-level correction
+// path afterwards.
+//
+// This module cannot close that gap - webhook.js and leadbyteWebhook.js are
+// a different work unit's file ownership, and changing whether is_sold gets
+// set for Converted/Returned leads would mean redesigning the whole
+// "Returned/Converted implies Sold" premise, which is out of scope here.
+// What it does instead is refuse to hide the risk: backfillLeadFlags emits a
+// `precedence_unverified` exception (see below, counted in
+// counts.precedence_unverified) for every Converted/Returned lead that has
+// no independent corroborating evidence - a genuine positive captured
+// revenue value - that it was ever actually sold. The absence of a reliable
+// corroborating signal IS the finding: such rows are surfaced and counted so
+// a human can review them, rather than letting anyone assume this backfill's
+// is_sold values are all independently verified when, for this specific
+// class of row, they cannot be.
 //
 // Timestamps are similarly best-effort against the fields that exist today.
 // processed_at is written once by processLead.js at first settlement and is
@@ -130,6 +159,22 @@ function firstTimestamp(lead, keys) {
 // as its own predicate so the two return signals below stay legible.
 function isApprovedReturn(returnRequest) {
   return !!returnRequest && returnRequest.status === 'approved';
+}
+
+// True when `lead` carries independent evidence that it was actually sold,
+// beyond final_status itself. See the module comment above for why this
+// matters: webhook.js and leadbyteWebhook.js's create paths can set
+// final_status to Converted/Returned with no prior Sold, so for those two
+// statuses specifically, final_status alone is not proof of a sale. A
+// genuine positive captured revenue value is the only other sale signal
+// this schema carries on the row (it is also the source of
+// sale_price_effective, see computeLeadFlags below), so it is what "was
+// this really sold" is checked against here. Zero, negative, and missing
+// revenue are all treated as "no corroboration" - a placeholder or reversed
+// value proves nothing about a real sale.
+function hasSaleCorroboration(lead) {
+  const revenue = toFiniteNumber(lead?.revenue);
+  return revenue !== null && revenue > 0;
 }
 
 // Compute the flag values a lead SHOULD have right now, from its current
@@ -275,6 +320,14 @@ export async function backfillLeadFlags(db) {
     not_applicable: 0,
     sold: 0,
     sold_unknown_price: 0,
+    // Converted/Returned leads with no independent corroborating evidence
+    // (a genuine positive revenue value) that they were ever actually Sold.
+    // See the module comment's "What 'sold' means today" section: webhook.js
+    // and leadbyteWebhook.js's create paths can set final_status straight to
+    // Converted/Returned with no prior Sold and no precedence guard, and this
+    // backfill cannot verify precedence from a snapshot alone. This count
+    // exists to surface that gap for human review, not to hide it.
+    precedence_unverified: 0,
     returned: 0,
     converted: 0,
   };
@@ -284,6 +337,7 @@ export async function backfillLeadFlags(db) {
     const returnRequest = approvedByLead.get(lead.id) || null;
     const computed = computeLeadFlags(lead, { returnRequest });
     const everMeaningful = computed.is_sold || computed.is_returned || computed.is_converted;
+    const status = String(lead?.final_status || '');
 
     if (computed.is_sold) {
       counts.sold += 1;
@@ -293,6 +347,18 @@ export async function backfillLeadFlags(db) {
           lead_id: lead.id,
           reason: 'sold_with_unknown_price',
           detail: 'final_status indicates a sale but no usable revenue value was ever captured; sale_price_effective left null rather than priced at zero.',
+        });
+      }
+      // Converted/Returned is only proof of a prior sale if this system's
+      // precedence rules were actually enforced when the row was written.
+      // They were not, on every path (see the module comment): flag it
+      // rather than silently trusting is_sold=true for this row.
+      if ((status === 'Converted' || status === 'Returned') && !hasSaleCorroboration(lead)) {
+        counts.precedence_unverified += 1;
+        exceptions.push({
+          lead_id: lead.id,
+          reason: 'precedence_unverified',
+          detail: `final_status is ${status}, which this backfill treats as proof of a prior sale per forge-pack/CONTRACT.md D1 - but webhook.js's create/update branches and leadbyteWebhook.js's create branch can write this status with no precedence guard, so it may never have actually been Sold. No corroborating positive revenue value was found on this row to independently support the sale. is_sold was still set to true (consistent with the rest of this backfill's ever-sold definition), but this row could not be verified from the snapshot alone and should be reviewed.`,
         });
       }
     }
