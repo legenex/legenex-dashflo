@@ -106,13 +106,33 @@
 // mitigation for a defect this unit cannot repair.
 //
 //
-// ROLLBACK
-// --------
+// ROLLBACK, AND THE SECOND GATE THIS FILE MUST NOT DEFEAT
+// -------------------------------------------------------
 // STUCK_LEAD_REAPER_ENABLED. Default OFF. With the variable unset or set to
 // anything other than the exact string "true", the HTTP entry point performs no
 // scan and no write and says so, and startStuckLeadReaper creates no timer.
 // This is a real checked gate on both entry points, not a comment, and it is
 // the unit's stated rollback: unset the variable and the reaper is inert.
+//
+// NATIVE_RETRY_WORKER_ENABLED is a SEPARATE rollback control that belongs to a
+// different mechanism, and this file is a caller of that mechanism, not an
+// owner of it. nativeRetryRunner.js says in its own header that the env gate is
+// the caller's responsibility, and its two other callers check it. This one did
+// not, so arming the reaper silently armed the native retry worker as well and
+// an operator who had deliberately left the retry worker off got retries
+// anyway. Both flags are now checked, independently, and the reaper hands
+// nothing to the retry worker unless the retry worker's own flag is set.
+//
+// WHAT THE CLASSIFICATION CONTROLS
+// --------------------------------
+// The dispositions below decide three things, and the third one was missing
+// until this file was repaired: what is written to the Lead row, what the Stuck
+// Leads card shows, and which leads the retry worker is permitted to send. The
+// third is enforced by passing onlyLeadIds into runNativeRetryPass, an
+// allowlist applied to its own due-attempt selection. Without it, one call into
+// that batch worker re-drove every due attempt in the system, ambiguous and
+// migration-excluded leads included, while the card rendered "never resumed
+// automatically" for the very leads being resent.
 
 import { requireUser } from './_runtime.js';
 import { runNativeRetryPass } from '../lib/nativeRetryRunner.js';
@@ -134,6 +154,26 @@ export const STUCK_LEAD_REAPER_FLAG = 'STUCK_LEAD_REAPER_ENABLED';
 // job that touches commercial state.
 export function isReaperEnabled(env = process.env) {
   return env[STUCK_LEAD_REAPER_FLAG] === 'true';
+}
+
+// The SECOND gate, and it is not this unit's own.
+//
+// nativeRetryRunner.js's top comment says outright that "the
+// NATIVE_RETRY_WORKER_ENABLED env gate and operator authorization are the
+// caller's responsibility", and both of its other callers honour that:
+// nativeRetryWorker.js refuses before calling, nativeRetryScheduler.js creates
+// no timer. This module previously did not, which meant one flag
+// (STUCK_LEAD_REAPER_ENABLED=true) silently armed a second, wider retry
+// mechanism an operator had deliberately left switched off. That is a rollback
+// control defeated by a side door, and CONTRACT.md section 7 names unsafe
+// retries as never acceptable at cutover.
+//
+// Same exact-string comparison as the flag above and as the two other callers,
+// so a half-set variable fails closed here too.
+export const NATIVE_RETRY_WORKER_FLAG = 'NATIVE_RETRY_WORKER_ENABLED';
+
+export function isNativeRetryEnabled(env = process.env) {
+  return env[NATIVE_RETRY_WORKER_FLAG] === 'true';
 }
 
 // ── Thresholds ────────────────────────────────────────────────────────────
@@ -233,6 +273,21 @@ export function lastProgressMs(lead) {
 // which is exactly why `pending` cannot be read as "nothing left the building".
 const IN_FLIGHT_ATTEMPT_STATUSES = Object.freeze(['pending', 'sent', 'queued']);
 
+// Attempt statuses that are terminal for the retry worker but say NOTHING about
+// what the destination did, when no HTTP status was ever recorded.
+//
+// `error` is the obvious one. `dead_letter` is the one that was missed: an
+// attempt reaches it either at the attempt cap (retryWorker.js's maxAttempts)
+// or on an explicit permanent signal, and when it got there by repeatedly
+// timing out, every one of those sends left this process and none of them came
+// back with a response line. The destination may have received and processed
+// any one of them. Reporting that lead as "nothing was delivered and nothing
+// was billed", which is what NO_SAFE_REENTRY's verdict says, is a claim the
+// evidence does not support. A dead letter WITH a real http_status is
+// different: the destination answered, so the outcome is known and this clause
+// does not apply.
+const UNKNOWN_WITHOUT_HTTP_STATUS = Object.freeze(['error', 'dead_letter']);
+
 // True when any durable record joined to this lead shows an outbound action
 // whose outcome cannot be proven.
 //
@@ -250,14 +305,18 @@ export function hasUnknownOutcome(lead, attempts = []) {
   for (const attempt of attempts) {
     const status = String(attempt?.status || 'pending');
     if (IN_FLIGHT_ATTEMPT_STATUSES.includes(status)) return true;
-    // 3. A failed attempt with no HTTP status. The request left this process
-    //    and no response line came back, so the buyer may or may not have it.
-    //    Checked on http_status rather than on error_class precisely because
-    //    BLOCKERS.md item 3 is that a real undici connection drop throws
-    //    "fetch failed" and matches neither of the two error_class strings the
-    //    engine's own ambiguity check looks for. A missing status code is the
-    //    property that actually holds.
-    if (status === 'error' && (attempt?.http_status === null || attempt?.http_status === undefined)) return true;
+    // 3. A failed or dead-lettered attempt with no HTTP status. The request
+    //    left this process and no response line came back, so the buyer may or
+    //    may not have it. Checked on http_status rather than on error_class
+    //    precisely because BLOCKERS.md item 3 is that a real undici connection
+    //    drop throws "fetch failed" and matches neither of the two error_class
+    //    strings the engine's own ambiguity check looks for. A missing status
+    //    code is the property that actually holds. dead_letter is included for
+    //    the reason given at UNKNOWN_WITHOUT_HTTP_STATUS: an attempt that ran
+    //    out of retries against a destination that never answered has an
+    //    unknown outcome, not a known-clean one.
+    if (UNKNOWN_WITHOUT_HTTP_STATUS.includes(status)
+      && (attempt?.http_status === null || attempt?.http_status === undefined)) return true;
   }
 
   // 4. The legacy LeadByte path, which is the path carrying real traffic while
@@ -407,18 +466,37 @@ export function classifyStuckLead({ lead, attempts = [], nowMs = Date.now(), thr
 
 // ── The pass ──────────────────────────────────────────────────────────────
 
+// Oldest first, and that ordering is the whole point.
+//
+// This scan used to run '-created_date' (newest first) under a 5000 row cap. A
+// stuck lead is, by definition, an OLD lead that never advanced, so those two
+// choices combined to hide exactly the rows this job exists to find: past 5000
+// queued rows in total, the genuinely oldest stuck leads fell off the end of
+// the scan permanently, and the result said nothing about it. Ordering
+// ascending inverts that: the cap now truncates the newest queued rows, which
+// are the ones least likely to be stuck and which the next pass will catch
+// anyway once they age.
+//
+// The cap itself stays, because an unbounded scan on a sixty second scheduler
+// tick is its own failure mode. What changes is that hitting it is reported
+// rather than silent, so an operator seeing a persistently truncated scan knows
+// the queue has outgrown one pass instead of quietly losing coverage.
 async function loadQueuedLeads(db) {
   const out = [];
   let skip = 0;
+  let truncated = false;
   for (;;) {
     // eslint-disable-next-line no-await-in-loop
-    const batch = await db.entities.Lead.filter({ lead_status: LEAD_STATUS.QUEUED }, '-created_date', PAGE_SIZE, skip);
+    const batch = await db.entities.Lead.filter({ lead_status: LEAD_STATUS.QUEUED }, 'created_date', PAGE_SIZE, skip);
     const rows = Array.isArray(batch) ? batch : [];
     out.push(...rows);
-    if (rows.length < PAGE_SIZE || out.length >= MAX_SCAN) break;
+    // A short page is the end of the table: everything queued was seen.
+    if (rows.length < PAGE_SIZE) break;
+    // A full page that reaches the cap means there may be more behind it.
+    if (out.length >= MAX_SCAN) { truncated = true; break; }
     skip += PAGE_SIZE;
   }
-  return out.slice(0, MAX_SCAN);
+  return { leads: out.slice(0, MAX_SCAN), truncated };
 }
 
 async function loadAttempts(db, leadId) {
@@ -452,16 +530,73 @@ function toCardRow(lead, verdict) {
   };
 }
 
+// In-process serialization of writing passes.
+//
+// What this fixes: the commit that introduced this file claimed "exactly one
+// routing run" as a property of the pass, and it was not one. Two genuinely
+// concurrent passes (the scheduler tick and an operator's Run reaper click,
+// which is the realistic collision) both scanned, both classified the same
+// leads as resumable, and both called into the retry worker. At most one sale
+// still resulted, but that was enforced a layer down by the attempt store's
+// CAS lease claim and the engine's per-lead winner claim, not by anything this
+// file did.
+//
+// This is deliberately the same shape lib/base44Sync.js already uses for the
+// identical problem: a colliding run is reported as SKIPPED, not queued,
+// because the run already in flight is doing the same work and queueing a
+// second one behind it only delays a pass that would find nothing.
+//
+// What it is NOT, said plainly rather than left to be assumed: this is a
+// module-level flag, so it serializes passes within one Node process only. The
+// application is a single always-running self-hosted service (the same premise
+// nativeRetryScheduler.js states for choosing an in-process scheduler), so that
+// covers every collision that exists today. It would not survive running two
+// server processes. The repository already has the right tool for that case,
+// db/base44SyncSchema.js's pg_try_advisory_lock pattern, but it needs a raw
+// pool client and the reaper is handed the db.entities abstraction, so wiring
+// it here would mean giving this module a hard dependency on a live Postgres
+// connection that its own scan does not otherwise need. If a second process
+// ever becomes real, that is the mechanism to reach for.
+//
+// A dry run takes no lock at all. It writes nothing and calls nothing, so
+// reading the Stuck Leads card while the scheduler is mid-pass returns the
+// queue rather than "already running".
+let writingPassInFlight = false;
+
 // One reaper pass.
 //
 // `retryPass` is injectable so a test can prove the exactly-once behaviour of
 // this file without booting the routing engine. Production always gets the real
 // runNativeRetryPass, exactly the way nativeRetryRunner.js takes an injectable
-// validateTarget that no real caller overrides.
+// validateTarget that no real caller overrides. Note that injecting a spy here
+// is NOT sufficient evidence on its own: a spy cannot show what the real batch
+// worker would have put on the wire, which is how the defect where this pass
+// re-drove ambiguous and migration-excluded leads survived a 59 test suite.
+// The adversarial tests in the paired test file drive the real function.
 // `write: false` is a genuine read-only scan: no Lead.update, no call into the
 // retry worker, nothing handed to a destination. It is what the Stuck Leads
 // card reads, so opening the queue can never itself resume a lead.
-export async function runStuckLeadReaperPass(db, {
+export async function runStuckLeadReaperPass(db, options = {}) {
+  const { write = true } = options;
+  if (!write) return executeStuckLeadReaperPass(db, options);
+  if (writingPassInFlight) {
+    return {
+      ran: false,
+      skipped: 'already_running',
+      reason: 'Another stuck lead reaper pass is already in progress in this process; this one is skipped rather than run concurrently.',
+      scanned: 0,
+      stuck: [],
+    };
+  }
+  writingPassInFlight = true;
+  try {
+    return await executeStuckLeadReaperPass(db, options);
+  } finally {
+    writingPassInFlight = false;
+  }
+}
+
+async function executeStuckLeadReaperPass(db, {
   nowMs = Date.now(),
   thresholdMs = STALL_THRESHOLD_MS,
   workerId = 'stuck-lead-reaper',
@@ -478,10 +613,16 @@ export async function runStuckLeadReaperPass(db, {
     };
   }
 
-  const leads = await loadQueuedLeads(db);
+  // Read once, before anything is classified, so one pass cannot half-honour
+  // the gate. A resume is only ever recorded when the mechanism that performs
+  // it is actually armed.
+  const nativeRetryEnabled = isNativeRetryEnabled(env);
+
+  const { leads, truncated } = await loadQueuedLeads(db);
 
   const stuck = [];
   const resumableLeadIds = [];
+  const gatedLeadIds = [];
   const markedLeadIds = [];
   const byDisposition = {};
   const byStage = {};
@@ -495,11 +636,24 @@ export async function runStuckLeadReaperPass(db, {
     const verdict = classifyStuckLead({ lead, attempts, nowMs, thresholdMs });
     if (!verdict) continue;
 
-    stuck.push(toCardRow(lead, verdict));
+    const row = toCardRow(lead, verdict);
+    stuck.push(row);
     byDisposition[verdict.disposition] = (byDisposition[verdict.disposition] || 0) + 1;
     byStage[verdict.stage] = (byStage[verdict.stage] || 0) + 1;
 
     if (!verdict.actionable || !write) continue;
+
+    if (verdict.disposition === REAP_DISPOSITION.RESUME_DELIVERY && !nativeRetryEnabled) {
+      // The classification stands: the durable evidence says this lead could be
+      // resumed safely. The mechanism that would do it is switched off, so
+      // nothing is handed over AND nothing is written. Writing the RESUMED
+      // marker here would tell an operator the lead had been handed to the
+      // retry worker when it had not, and would reset its stall clock so the
+      // next pass could not see it either.
+      row.held_by_native_retry_gate = true;
+      gatedLeadIds.push(lead.id);
+      continue;
+    }
 
     if (verdict.disposition === REAP_DISPOSITION.RESUME_DELIVERY) {
       // Recorded, then handed to the retry worker once for the whole pass
@@ -541,13 +695,32 @@ export async function runStuckLeadReaperPass(db, {
     }
   }
 
-  // EXACTLY ONE routing run per pass, regardless of how many leads qualified.
-  // runNativeRetryPass is a batch worker over the whole due queue, not a
-  // per-lead call, so calling it once per resumable lead would be N passes over
-  // the same queue and is the obvious way to turn a recovery into a stampede.
+  // ONE call into the retry worker per pass, scoped to exactly the leads this
+  // pass classified as safely resumable.
+  //
+  // Both halves of that sentence are load-bearing, and the second half is the
+  // repair for a real defect. runNativeRetryPass is a batch worker: calling it
+  // once per resumable lead would be N passes over the same queue and is the
+  // obvious way to turn a recovery into a stampede, which is why it is called
+  // once. But calling it once WITHOUT onlyLeadIds re-drove the entire due queue
+  // of every DeliveryAttempt in the system, including the attempts belonging to
+  // leads this very pass had just classified AMBIGUOUS_HOLD, EXCLUDED_MIGRATED
+  // or ALREADY_SOLD, and including leads that are not stuck at all and are none
+  // of this job's business. The classification decided what was written to the
+  // Lead row and shown on the card; it decided nothing about what went on the
+  // wire. A lead the card described as "never resumed automatically" was being
+  // resent in the same pass that said so.
+  //
+  // onlyLeadIds closes that: it is an allowlist applied to the worker's own
+  // due-selection, so an attempt outside it is never claimed, never leased and
+  // never delivered. Anything this pass did not explicitly approve is simply
+  // not in the batch, which is the fail-closed direction.
+  //
+  // The gate check is nativeRetryRunner.js's own documented precondition, which
+  // this file previously did not honour. See NATIVE_RETRY_WORKER_FLAG above.
   let retryResult = null;
-  if (write && resumableLeadIds.length > 0) {
-    retryResult = await retryPass(db, { workerId });
+  if (write && nativeRetryEnabled && resumableLeadIds.length > 0) {
+    retryResult = await retryPass(db, { workerId, onlyLeadIds: resumableLeadIds });
   }
 
   return {
@@ -555,16 +728,37 @@ export async function runStuckLeadReaperPass(db, {
     write,
     scanned: leads.length,
     threshold_ms: thresholdMs,
+    // Never silent. An operator can see that a pass hit its cap rather than
+    // discovering months later that the oldest stuck leads stopped appearing.
+    scan: {
+      scanned: leads.length,
+      limit: MAX_SCAN,
+      order: 'created_date',
+      truncated,
+    },
     stuck,
     counts: {
       surfaced: stuck.length,
       by_disposition: byDisposition,
       by_stage: byStage,
     },
+    native_retry_enabled: nativeRetryEnabled,
     resumed: {
       lead_ids: resumableLeadIds,
+      // "routing_runs" counts calls into the retry worker made by THIS pass. It
+      // has never been, and is not now, a claim that no other worker is running
+      // concurrently: the scheduler in nativeRetryScheduler.js drains the same
+      // due queue on its own timer. What is guaranteed for any single attempt
+      // is that it is claimed by exactly one worker (the attempt store's CAS
+      // lease) and that a lead can be sold at most once (the engine's per-lead
+      // winner claim inside reserveAndDeliver).
       routing_runs: retryResult ? 1 : 0,
       retry_pass: retryResult,
+      // Leads whose evidence says they could be resumed, held back only because
+      // NATIVE_RETRY_WORKER_ENABLED is not set. Reported so a switched-off
+      // retry worker looks like a switched-off retry worker and not like a
+      // reaper that found nothing to do.
+      held_by_native_retry_gate: gatedLeadIds,
     },
     marked_stuck: markedLeadIds,
   };

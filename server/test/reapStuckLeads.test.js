@@ -11,6 +11,19 @@
 //   3. Leads carrying migrated_at are excluded.
 //   4. Exactly one routing run and at most one sale result after recovery.
 //
+// Acceptance 4 is quoted verbatim from the unit spec, and what this file proves
+// about it is narrower than those words suggest, so it is said plainly here
+// rather than left to be assumed. What IS proven: one reaper pass makes exactly
+// one call into the retry worker no matter how many leads qualify; two
+// genuinely concurrent passes make exactly one between them, because a writing
+// pass takes an in-process lock and a colliding one is skipped; and that call is
+// scoped to the leads the pass classified as resumable. What is NOT claimed:
+// that no other worker is touching the same queue, because
+// nativeRetryScheduler.js drains it on its own timer. At-most-one-sale is real
+// but is enforced a layer below this file, by the attempt store's CAS lease
+// claim (exactly one worker ever owns an attempt) and by the engine's per-lead
+// winner claim inside reserveAndDeliver.
+//
 // Two deliberate choices about how they are proven:
 //
 // Fixtures are built through the REAL production status writers. The crashed
@@ -24,8 +37,9 @@
 // because the whole safety argument for this unit is "what may be resumed", and
 // that question must be answerable without a database, an engine, or a network.
 
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
+import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -42,10 +56,12 @@ import {
 
 import reapStuckLeads, {
   STUCK_LEAD_REAPER_FLAG,
+  NATIVE_RETRY_WORKER_FLAG,
   STALL_THRESHOLD_MS,
   REAP_DISPOSITION,
   REAP_REASON,
   isReaperEnabled,
+  isNativeRetryEnabled,
   classifyStuckLead,
   hasUnknownOutcome,
   isSafelyRetryableAttempt,
@@ -53,6 +69,13 @@ import reapStuckLeads, {
   runStuckLeadReaperPass,
   startStuckLeadReaper,
 } from '../src/functions/reapStuckLeads.js';
+
+// The REAL batch worker, not a double. Two tests below drive it end to end
+// against a local mock buyer endpoint, because the defect this file exists to
+// disprove is invisible to a spy: every one of the original 59 tests injected
+// `retryPass`, so none of them could see that the real function ignores the
+// reaper's classification entirely and re-drives the whole due queue.
+import { runNativeRetryPass } from '../src/lib/nativeRetryRunner.js';
 
 // ── Clock ─────────────────────────────────────────────────────────────────
 
@@ -130,7 +153,14 @@ function makeRetryPassSpy(result = { ran: true, mode: 'new_only', outcome: [] })
   return spy;
 }
 
+// The reaper's own flag, and nothing else. Deliberately kept as the default
+// environment for most tests: a reaper armed on its own must never reach the
+// native retry worker, which is that worker's separate rollback control.
 const ENABLED = { [STUCK_LEAD_REAPER_FLAG]: 'true' };
+
+// Both rollback controls open. Only a pass running under THIS environment is
+// allowed to hand anything to the retry worker.
+const FULLY_ENABLED = { [STUCK_LEAD_REAPER_FLAG]: 'true', [NATIVE_RETRY_WORKER_FLAG]: 'true' };
 
 // ── Fixtures built through the real production writers ────────────────────
 
@@ -180,6 +210,171 @@ function answeredAttempt(overrides = {}) {
     next_retry_at: iso(T0 + 30_000),
     run_idempotency_key: '90002',
     ...overrides,
+  };
+}
+
+// Three resumable leads with two due attempts each. Hoisted to module scope
+// because both acceptance 4 and the concurrency tests need it.
+function resumableSetFor() {
+  const leads = ['a', 'b', 'c'].map((k) => stalledAtRoutingLead({ id: `lead-${k}`, lead_id: 9100 + k.charCodeAt(0) }));
+  const attempts = leads.flatMap((l, i) => [
+    answeredAttempt({ id: `attempt-${i}-1`, lead_id: l.id }),
+    answeredAttempt({ id: `attempt-${i}-2`, lead_id: l.id, sub_delivery_id: 'sd-2', http_status: 503 }),
+  ]);
+  return { leads, attempts };
+}
+
+// ── The wire ──────────────────────────────────────────────────────────────
+//
+// Everything below this line exists because the original suite could not have
+// caught the defect it was written to prevent. All 59 of its tests injected a
+// `retryPass` double, so they observed the reaper's own report of what it had
+// decided and never what the retry worker actually put on a socket. The two
+// were not the same thing: the reaper classified per lead, and then called a
+// BATCH worker that re-drove every due attempt in the system regardless.
+//
+// These fixtures drive the REAL runNativeRetryPass against a real local HTTP
+// server standing in for a buyer endpoint, and assert on the requests that
+// arrived there. The target URL carries the route member id, so "which lead was
+// sent" is read off the request log rather than inferred.
+
+let wireServer = null;
+let wireBase = '';
+let wireLog = [];
+
+beforeAll(async () => {
+  wireServer = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', (c) => { body += c; });
+    req.on('end', () => {
+      wireLog.push({ url: req.url, body });
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ result: 'accepted' }));
+    });
+  });
+  await new Promise((r) => wireServer.listen(0, '127.0.0.1', r));
+  wireBase = `http://127.0.0.1:${wireServer.address().port}`;
+});
+
+afterAll(() => new Promise((r) => wireServer.close(r)));
+
+// The same permissive stand-in nativeRetryWorker.test.js uses, and for the same
+// reason: the real strict validator (ssrfGuard.js) correctly refuses 127.0.0.1,
+// which is exactly where an isolated loopback mock buyer lives. validateTarget
+// is the override nativeRetryRunner.js already exposes for this. Nothing else
+// about the pass is stubbed: the mode gate, the due-attempt selection, the CAS
+// lease claim, the isLeadSold pre-check, reserveAndDeliver and the scoping under
+// test are all the production code paths.
+const ALLOW_ALL_TARGETS = async () => ({ ok: true });
+
+const REAL_RETRY_PASS = (db, opts) => runNativeRetryPass(db, { ...opts, validateTarget: ALLOW_ALL_TARGETS });
+
+const EPOCH_ISO = new Date(0).toISOString();
+
+function makeWireScenario({ leads = [], attempts = [], clockMs = STALLED, distributionMode = 'new_only' } = {}) {
+  wireLog = [];
+  const leadRows = leads.map((l) => ({ ...l }));
+  const attemptRows = attempts.map((a) => ({
+    lease_until: null,
+    lease_version: 0,
+    ...a,
+    // The reaper classifies against the injected clock while the retry worker
+    // reads the real wall clock, so due times are anchored to the epoch to be
+    // unambiguously due under both. isSafelyRetryableAttempt only requires
+    // next_retry_at to be present, so this does not change any classification.
+    next_retry_at: a.next_retry_at === null ? null : EPOCH_ISO,
+    // Distinct per attempt so no two attempts share an outbound
+    // Idempotency-Key and one lead's send cannot be suppressed as a duplicate
+    // of another's.
+    idempotency_key: `idem-${a.id}`,
+    run_idempotency_key: `idem-${a.id}`,
+  }));
+  const calls = { leadUpdates: [], leadCreates: [] };
+  const health = [];
+  const capCounters = [];
+  let seq = 0;
+  const matches = (row, where) => Object.entries(where || {}).every(([k, v]) => row[k] === v);
+
+  // sub_delivery_id -> route_member_id, so each destination has its own URL.
+  const memberOfSub = new Map(attemptRows.map((a) => [a.sub_delivery_id, a.route_member_id]));
+
+  const db = {
+    calls,
+    rows: { leads: leadRows, attempts: attemptRows },
+    entities: {
+      AppSettings: { list: async () => [{ distribution_mode: distributionMode }] },
+      User: { get: async () => ({ id: 'u1', role: 'admin' }) },
+      Lead: {
+        async filter(where, _order, limit = 500, skip = 0) {
+          return leadRows.filter((r) => matches(r, where)).slice(skip, skip + limit);
+        },
+        // Falls back to a synthetic row so the control test can drive the batch
+        // worker over attempts whose leads are not part of the reaper's scan.
+        async get(id) {
+          return leadRows.find((r) => r.id === id) || { id, email: `${id}@example.test` };
+        },
+        async create(rec) { const row = { ...rec, id: `created-${++seq}` }; calls.leadCreates.push(row); leadRows.push(row); return row; },
+        async update(id, patch) {
+          calls.leadUpdates.push({ id, patch });
+          const row = leadRows.find((r) => r.id === id);
+          if (row) Object.assign(row, patch, { updated_date: iso(clockMs) });
+          return row;
+        },
+      },
+      DeliveryAttempt: {
+        async filter(where) { return attemptRows.filter((a) => matches(a, where)); },
+        async create(rec) { const row = { ...rec, id: `a-${++seq}` }; attemptRows.push(row); return row; },
+        async update(id, patch) { const a = attemptRows.find((x) => x.id === id); if (a) Object.assign(a, patch); return a; },
+        async updateMany(where, { $set }) {
+          const hits = attemptRows.filter((a) => matches(a, where));
+          for (const a of hits) Object.assign(a, $set);
+          return { updated: hits.length };
+        },
+      },
+      SubDelivery: {
+        async get(id) {
+          if (!memberOfSub.has(id)) return null;
+          return {
+            id,
+            delivery_id: 'del-1',
+            target_url: `${wireBase}/post/${memberOfSub.get(id)}`,
+            method: 'POST',
+            encoding: 'json',
+            field_map: JSON.stringify([{ src: 'email', dest: 'email' }]),
+            response_mapping: JSON.stringify({ accepted: 'accepted' }),
+          };
+        },
+      },
+      Delivery: { async get(id) { return id === 'del-1' ? { id: 'del-1', buyer_id: 'buyer-1', status: 'active' } : null; } },
+      RouteMember: {
+        async get(id) { return { id, buyer_id: 'buyer-1', price_mode: 'fixed', fixed_price: 25 }; },
+      },
+      Buyer: { async get(id) { return { id, billing_type: 'invoice' }; } },
+      DestinationHealth: {
+        async filter(q) { return health.filter((h) => matches(h, q)); },
+        async create(rec) { const row = { id: `h-${++seq}`, ...rec }; health.push(row); return row; },
+        async update(id, patch) { const h = health.find((x) => x.id === id); if (h) Object.assign(h, patch); return h; },
+      },
+      CapCounter: {
+        async filter(q) { return capCounters.filter((c) => matches(c, q)); },
+        async create(rec) { const row = { id: `cc-${++seq}`, ...rec }; capCounters.push(row); return row; },
+        async updateMany(q, { $set }) {
+          const hits = capCounters.filter((c) => matches(c, q));
+          for (const c of hits) Object.assign(c, $set);
+          return { updated: hits.length };
+        },
+      },
+      IntegrationConfig: { async filter() { return []; } },
+    },
+  };
+
+  return {
+    db,
+    // The route members that actually received a POST, in arrival order. This
+    // is the assertion that matters: it is read off the socket, not off the
+    // reaper's own summary of what it believed it was doing.
+    delivered: () => wireLog.map((entry) => entry.url.split('/').pop()),
+    attemptRow: (id) => attemptRows.find((a) => a.id === id),
   };
 }
 
@@ -560,43 +755,39 @@ describe('acceptance 3: leads carrying migrated_at are excluded', () => {
 // ── Acceptance 4: exactly one routing run, at most one sale ───────────────
 
 describe('acceptance 4: exactly one routing run and at most one sale result after recovery', () => {
-  function resumableSet() {
-    const leads = ['a', 'b', 'c'].map((k) => stalledAtRoutingLead({ id: `lead-${k}`, lead_id: 9100 + k.charCodeAt(0) }));
-    const attempts = leads.flatMap((l, i) => [
-      answeredAttempt({ id: `attempt-${i}-1`, lead_id: l.id }),
-      // A second due attempt on the same lead. A per-lead or per-attempt call
-      // into the retry worker would fan this out; the pass must not.
-      answeredAttempt({ id: `attempt-${i}-2`, lead_id: l.id, sub_delivery_id: 'sd-2', http_status: 503 }),
-    ]);
-    return { leads, attempts };
-  }
+  // Three resumable leads, two due attempts each. A per-lead or per-attempt
+  // call into the retry worker would fan this out; the pass must not.
+  const resumableSet = resumableSetFor;
 
-  it('hands the whole batch to the retry worker in exactly one routing run', async () => {
+  it('hands the whole batch to the retry worker in exactly one call, scoped to exactly those leads', async () => {
     const { leads, attempts } = resumableSet();
     const db = makeDb({ leads, attempts });
     const retryPass = makeRetryPassSpy();
 
-    const out = await runStuckLeadReaperPass(db, { nowMs: STALLED, retryPass, env: ENABLED });
+    const out = await runStuckLeadReaperPass(db, { nowMs: STALLED, retryPass, env: FULLY_ENABLED });
 
     expect(out.resumed.lead_ids).toEqual(['lead-a', 'lead-b', 'lead-c']);
-    // Three leads, six due attempts, one routing run.
+    // Three leads, six due attempts, one call into the retry worker.
     expect(retryPass).toHaveBeenCalledTimes(1);
     expect(out.resumed.routing_runs).toBe(1);
+    // And that one call is scoped. Without onlyLeadIds it is a batch pass over
+    // every due attempt in the system, which is the B2 defect.
+    expect(retryPass.mock.calls[0][1].onlyLeadIds).toEqual(['lead-a', 'lead-b', 'lead-c']);
   });
 
-  it('a second pass immediately after does not produce a second routing run for the same leads', async () => {
+  it('a second pass immediately after does not produce a second call into the retry worker for the same leads', async () => {
     const { leads, attempts } = resumableSet();
     const db = makeDb({ leads, attempts });
     const retryPass = makeRetryPassSpy();
 
-    await runStuckLeadReaperPass(db, { nowMs: STALLED, retryPass, env: ENABLED });
+    await runStuckLeadReaperPass(db, { nowMs: STALLED, retryPass, env: FULLY_ENABLED });
     expect(retryPass).toHaveBeenCalledTimes(1);
 
     // The resume marker bumped updated_date, which resets each lead's stall
     // clock. A scheduler ticking a minute later therefore sees work in
     // progress, not a stalled lead, and does not re-drive it. This is what
     // stops "recovered" from becoming "recovered repeatedly".
-    const second = await runStuckLeadReaperPass(db, { nowMs: STALLED + 60_000, retryPass, env: ENABLED });
+    const second = await runStuckLeadReaperPass(db, { nowMs: STALLED + 60_000, retryPass, env: FULLY_ENABLED });
     expect(second.stuck).toHaveLength(0);
     expect(second.resumed.routing_runs).toBe(0);
     expect(retryPass).toHaveBeenCalledTimes(1);
@@ -604,7 +795,7 @@ describe('acceptance 4: exactly one routing run and at most one sale result afte
 
   it('the resume marker keeps the lead at queued and records why it was resumed', async () => {
     const db = makeDb({ leads: [stalledAtRoutingLead()], attempts: [answeredAttempt()] });
-    await runStuckLeadReaperPass(db, { nowMs: STALLED, retryPass: makeRetryPassSpy(), env: ENABLED });
+    await runStuckLeadReaperPass(db, { nowMs: STALLED, retryPass: makeRetryPassSpy(), env: FULLY_ENABLED });
 
     expect(db.calls.leadUpdates).toHaveLength(1);
     const { patch } = db.calls.leadUpdates[0];
@@ -668,9 +859,382 @@ describe('acceptance 4: exactly one routing run and at most one sale result afte
   it('the resume is delegated to the existing retry worker, with the pass worker id, not reimplemented here', async () => {
     const db = makeDb({ leads: [stalledAtRoutingLead()], attempts: [answeredAttempt()] });
     const retryPass = makeRetryPassSpy();
-    await runStuckLeadReaperPass(db, { nowMs: STALLED, retryPass, workerId: 'reaper-test', env: ENABLED });
+    await runStuckLeadReaperPass(db, { nowMs: STALLED, retryPass, workerId: 'reaper-test', env: FULLY_ENABLED });
 
-    expect(retryPass).toHaveBeenCalledWith(db, { workerId: 'reaper-test' });
+    expect(retryPass).toHaveBeenCalledWith(db, { workerId: 'reaper-test', onlyLeadIds: ['lead-routing'] });
+  });
+});
+
+// ── B1: the reaper must not defeat the retry worker's own rollback control ──
+//
+// nativeRetryRunner.js's header states that NATIVE_RETRY_WORKER_ENABLED is the
+// caller's responsibility. nativeRetryWorker.js checks it and refuses;
+// nativeRetryScheduler.js checks it and creates no timer. This file previously
+// did neither, so setting one flag (STUCK_LEAD_REAPER_ENABLED) silently armed a
+// second, wider retry mechanism the operator had deliberately left off.
+
+describe('B1: NATIVE_RETRY_WORKER_ENABLED gates the reaper too, exactly as it gates the other two callers', () => {
+  it('is off when absent and on only for the exact string "true", matching the other callers', () => {
+    expect(isNativeRetryEnabled({})).toBe(false);
+    for (const value of ['', '1', 'yes', 'TRUE', 'True', 'on', 'false', ' true']) {
+      expect(isNativeRetryEnabled({ [NATIVE_RETRY_WORKER_FLAG]: value }), `"${value}" must not arm the retry worker`).toBe(false);
+    }
+    expect(isNativeRetryEnabled({ [NATIVE_RETRY_WORKER_FLAG]: 'true' })).toBe(true);
+  });
+
+  // The proof the QA's reproduction demanded: the REAL runNativeRetryPass, not
+  // an injected spy, with the variable absent from the environment, and a lead
+  // that is unambiguously resumable sitting there ready to be sent. Zero
+  // delivery attempts must reach the wire.
+  it('makes ZERO delivery attempts through the real runNativeRetryPass when the variable is unset', async () => {
+    const scenario = makeWireScenario({
+      leads: [stalledAtRoutingLead({ id: 'lead-resumable' })],
+      attempts: [answeredAttempt({ id: 'att-resumable', lead_id: 'lead-resumable', sub_delivery_id: 'sd-1', route_member_id: 'rm-1' })],
+    });
+
+    const out = await runStuckLeadReaperPass(scenario.db, {
+      nowMs: STALLED,
+      // No retryPass override. This is the real batch worker.
+      retryPass: REAL_RETRY_PASS,
+      env: ENABLED,                 // reaper armed, retry worker NOT armed
+    });
+
+    expect(scenario.delivered()).toEqual([]);
+    expect(out.native_retry_enabled).toBe(false);
+    expect(out.resumed.routing_runs).toBe(0);
+    expect(out.resumed.retry_pass).toBeNull();
+    // Held, not resumed, and reported as held rather than as nothing found.
+    expect(out.resumed.lead_ids).toEqual([]);
+    expect(out.resumed.held_by_native_retry_gate).toEqual(['lead-resumable']);
+    expect(out.stuck[0].held_by_native_retry_gate).toBe(true);
+    // And no RESUMED marker was written, because nothing was resumed. Writing
+    // one would both lie to the operator and reset the lead's stall clock so
+    // the next pass could not see it either.
+    expect(scenario.db.calls.leadUpdates).toHaveLength(0);
+  });
+
+  it('with the same fixture and BOTH flags set, the same lead really is delivered, so the gate is what made the difference', async () => {
+    const scenario = makeWireScenario({
+      leads: [stalledAtRoutingLead({ id: 'lead-resumable' })],
+      attempts: [answeredAttempt({ id: 'att-resumable', lead_id: 'lead-resumable', sub_delivery_id: 'sd-1', route_member_id: 'rm-1' })],
+    });
+
+    const out = await runStuckLeadReaperPass(scenario.db, {
+      nowMs: STALLED, retryPass: REAL_RETRY_PASS, env: FULLY_ENABLED,
+    });
+
+    expect(scenario.delivered()).toEqual(['rm-1']);
+    expect(out.native_retry_enabled).toBe(true);
+    expect(out.resumed.lead_ids).toEqual(['lead-resumable']);
+    expect(out.resumed.routing_runs).toBe(1);
+  });
+});
+
+// ── B2: the classification controls the wire, not just the card ─────────────
+//
+// The defect these two tests exist to disprove, in one sentence:
+// runNativeRetryPass is a batch worker over the ENTIRE due queue, so the
+// reaper's careful per-lead verdict decided what got written and displayed and
+// decided nothing at all about what got sent. A lead the card rendered as
+// "Never resumed automatically" was resent in the very same pass.
+//
+// Both tests drive the REAL runNativeRetryPass against a real local HTTP
+// endpoint and assert on what actually arrived there, keyed by route member, so
+// they check the wire and not the reaper's own report of itself.
+
+describe('B2: only leads the reaper classified as resumable are ever sent', () => {
+  it('an AMBIGUOUS_HOLD lead alongside a resumable one: only the resumable one is delivered', async () => {
+    const scenario = makeWireScenario({
+      leads: [
+        stalledAtRoutingLead({ id: 'lead-resumable' }),
+        stalledAtRoutingLead({ id: 'lead-ambiguous' }),
+      ],
+      attempts: [
+        // Known outcome: a real HTTP status came back. Safe to re-drive.
+        answeredAttempt({ id: 'att-resumable', lead_id: 'lead-resumable', sub_delivery_id: 'sd-1', route_member_id: 'rm-1' }),
+        // The real "fetch failed" shape from BLOCKERS.md item 3: status error,
+        // no http_status. The request left this process and nothing came back,
+        // so a resend could be the second half of a double delivery. This is
+        // due in the retry worker's own queue, which is precisely why an
+        // unscoped batch pass picked it up.
+        answeredAttempt({
+          id: 'att-ambiguous', lead_id: 'lead-ambiguous', sub_delivery_id: 'sd-amb', route_member_id: 'rm-amb',
+          http_status: null, error_class: 'fetch failed',
+        }),
+      ],
+    });
+
+    const out = await runStuckLeadReaperPass(scenario.db, {
+      nowMs: STALLED, retryPass: REAL_RETRY_PASS, env: FULLY_ENABLED,
+    });
+
+    // The classification is right, and always was.
+    const byId = Object.fromEntries(out.stuck.map((r) => [r.id, r]));
+    expect(byId['lead-ambiguous'].disposition).toBe(REAP_DISPOSITION.AMBIGUOUS_HOLD);
+    expect(byId['lead-ambiguous'].resumable).toBe(false);
+    expect(byId['lead-resumable'].disposition).toBe(REAP_DISPOSITION.RESUME_DELIVERY);
+
+    // The wire is what was wrong. Before the fix this was ['rm-1', 'rm-amb'].
+    expect(scenario.delivered()).toEqual(['rm-1']);
+    expect(scenario.delivered()).not.toContain('rm-amb');
+
+    // And the ambiguous lead's attempt row was not touched at all: no lease
+    // taken, no lease_version bumped, no status moved. Scoping excludes it from
+    // the worker's due-selection, so it is never even claimed.
+    const ambAttempt = scenario.attemptRow('att-ambiguous');
+    expect(ambAttempt.status).toBe('error');
+    expect(ambAttempt.lease_until == null).toBe(true);
+    expect(ambAttempt.lease_version || 0).toBe(0);
+    expect(ambAttempt.attempt_number).toBe(1);
+  });
+
+  it('an EXCLUDED_MIGRATED lead alongside a resumable one: only the resumable one is delivered', async () => {
+    // Built through the real migration patch builder, the same way acceptance 3
+    // builds it, so this is the row shape the backfill actually produces.
+    const historical = {
+      id: 'lead-migrated',
+      lead_id: 70002,
+      supplier_name: 'Legacy Import',
+      final_status: LEGACY_STATUS.ERROR,
+      created_date: iso(T0 - 90 * 24 * 3600 * 1000),
+    };
+    const migrated = {
+      ...historical,
+      ...leadStatusPatch(historical, { at: new Date(T0 - 24 * 3600 * 1000) }),
+      updated_date: iso(T0 - 24 * 3600 * 1000),
+    };
+
+    const scenario = makeWireScenario({
+      leads: [stalledAtRoutingLead({ id: 'lead-resumable' }), migrated],
+      attempts: [
+        answeredAttempt({ id: 'att-resumable', lead_id: 'lead-resumable', sub_delivery_id: 'sd-1', route_member_id: 'rm-1' }),
+        // A stale, perfectly due attempt row attached to pre-cutover history.
+        // Re-driving it posts pre-cutover data to a real buyer, which is D4
+        // risk 3 arriving through the recovery path.
+        answeredAttempt({ id: 'att-migrated', lead_id: 'lead-migrated', sub_delivery_id: 'sd-mig', route_member_id: 'rm-mig' }),
+      ],
+    });
+
+    const out = await runStuckLeadReaperPass(scenario.db, {
+      nowMs: STALLED, retryPass: REAL_RETRY_PASS, env: FULLY_ENABLED,
+    });
+
+    const byId = Object.fromEntries(out.stuck.map((r) => [r.id, r]));
+    expect(byId['lead-migrated'].disposition).toBe(REAP_DISPOSITION.EXCLUDED_MIGRATED);
+
+    // Before the fix this was ['rm-1', 'rm-mig'].
+    expect(scenario.delivered()).toEqual(['rm-1']);
+    expect(scenario.delivered()).not.toContain('rm-mig');
+    expect(scenario.attemptRow('att-migrated').status).toBe('error');
+    expect(scenario.attemptRow('att-migrated').lease_version || 0).toBe(0);
+  });
+
+  it('a due attempt belonging to a lead that is not stuck at all is not swept up by the reaper pass', async () => {
+    // The third class the QA named. A lead that is still moving is none of this
+    // job's business, and an unscoped batch pass re-drove its attempts too,
+    // simply because the reaper happened to run. Draining the whole due queue
+    // is the scheduler's job (nativeRetryScheduler.js), on its own timer.
+    const scenario = makeWireScenario({
+      leads: [
+        stalledAtRoutingLead({ id: 'lead-resumable' }),
+        stalledAtRoutingLead({ id: 'lead-moving', updated_date: iso(STALLED - 60_000) }),
+      ],
+      attempts: [
+        answeredAttempt({ id: 'att-resumable', lead_id: 'lead-resumable', sub_delivery_id: 'sd-1', route_member_id: 'rm-1' }),
+        answeredAttempt({ id: 'att-moving', lead_id: 'lead-moving', sub_delivery_id: 'sd-mov', route_member_id: 'rm-mov' }),
+      ],
+    });
+
+    const out = await runStuckLeadReaperPass(scenario.db, {
+      nowMs: STALLED, retryPass: REAL_RETRY_PASS, env: FULLY_ENABLED,
+    });
+
+    expect(out.stuck.map((r) => r.id)).toEqual(['lead-resumable']);
+    expect(scenario.delivered()).toEqual(['rm-1']);
+  });
+
+  it('the scoped parameter really is what excludes them: the same pass unscoped delivers all three', async () => {
+    // The control. This is the pre-fix behaviour, reproduced deliberately by
+    // calling the batch worker the way the reaper used to call it, so the two
+    // tests above are shown to be measuring the scoping and not some unrelated
+    // property of the fixture (for instance an attempt that was never due).
+    const scenario = makeWireScenario({
+      leads: [stalledAtRoutingLead({ id: 'lead-resumable' })],
+      attempts: [
+        answeredAttempt({ id: 'att-resumable', lead_id: 'lead-resumable', sub_delivery_id: 'sd-1', route_member_id: 'rm-1' }),
+        answeredAttempt({
+          id: 'att-ambiguous', lead_id: 'lead-ambiguous', sub_delivery_id: 'sd-amb', route_member_id: 'rm-amb',
+          http_status: null, error_class: 'fetch failed',
+        }),
+        answeredAttempt({ id: 'att-migrated', lead_id: 'lead-migrated', sub_delivery_id: 'sd-mig', route_member_id: 'rm-mig' }),
+      ],
+    });
+
+    const unscoped = await runNativeRetryPass(scenario.db, { workerId: 'control', validateTarget: ALLOW_ALL_TARGETS });
+
+    expect(unscoped.ran).toBe(true);
+    // Every due attempt in the system, which is exactly the batch worker's
+    // documented job and exactly why the reaper must not call it unscoped.
+    expect(scenario.delivered().sort()).toEqual(['rm-1', 'rm-amb', 'rm-mig']);
+    expect(unscoped.scoped_lead_ids).toBeUndefined();
+  });
+});
+
+// ── S1: what concurrency actually guarantees ───────────────────────────────
+
+describe('S1: concurrent writing passes serialize, and the safety claim is stated accurately', () => {
+  it('two genuinely concurrent passes produce exactly one call into the retry worker', async () => {
+    const { leads, attempts } = resumableSetFor();
+    const db = makeDb({ leads, attempts });
+    const retryPass = makeRetryPassSpy();
+
+    const [first, second] = await Promise.all([
+      runStuckLeadReaperPass(db, { nowMs: STALLED, retryPass, env: FULLY_ENABLED }),
+      runStuckLeadReaperPass(db, { nowMs: STALLED, retryPass, env: FULLY_ENABLED }),
+    ]);
+
+    // One ran, one was skipped. Before this, both ran and both called in.
+    const ran = [first, second].filter((r) => r.ran === true);
+    const skipped = [first, second].filter((r) => r.skipped === 'already_running');
+    expect(ran).toHaveLength(1);
+    expect(skipped).toHaveLength(1);
+    expect(skipped[0].stuck).toEqual([]);
+    expect(retryPass).toHaveBeenCalledTimes(1);
+    expect(ran[0].resumed.routing_runs).toBe(1);
+  });
+
+  it('a dry run is never blocked by a writing pass, because it writes and sends nothing', async () => {
+    const { leads, attempts } = resumableSetFor();
+    const db = makeDb({ leads, attempts });
+    const retryPass = makeRetryPassSpy();
+
+    const [write, read] = await Promise.all([
+      runStuckLeadReaperPass(db, { nowMs: STALLED, retryPass, env: FULLY_ENABLED }),
+      runStuckLeadReaperPass(db, { nowMs: STALLED, retryPass, env: FULLY_ENABLED, write: false }),
+    ]);
+
+    expect(write.ran).toBe(true);
+    expect(read.ran).toBe(true);
+    expect(read.stuck.length).toBeGreaterThan(0);
+    expect(retryPass).toHaveBeenCalledTimes(1);
+  });
+
+  it('the lock is released even when a pass throws, so one failure cannot wedge the reaper', async () => {
+    const db = makeDb({ leads: [stalledAtRoutingLead()], attempts: [answeredAttempt()] });
+    const boom = vi.fn(async () => { throw new Error('retry worker exploded'); });
+
+    await expect(runStuckLeadReaperPass(db, { nowMs: STALLED, retryPass: boom, env: FULLY_ENABLED }))
+      .rejects.toThrow('retry worker exploded');
+
+    const after = await runStuckLeadReaperPass(db, { nowMs: STALLED, retryPass: makeRetryPassSpy(), env: FULLY_ENABLED });
+    expect(after.ran).toBe(true);
+  });
+
+  it('the module states what is guaranteed rather than claiming a single global routing run', () => {
+    const raw = readFileSync(
+      path.join(path.dirname(fileURLToPath(import.meta.url)), '../src/functions/reapStuckLeads.js'),
+      'utf8',
+    );
+    // The accurate claim, kept in the source so the next reader is not misled:
+    // per-attempt exclusivity comes from the store's CAS lease and at-most-one
+    // sale from the engine's winner claim, one layer below this file.
+    expect(raw).toMatch(/CAS\s+lease/);
+    expect(raw).toMatch(/winner claim/);
+    // And the inaccurate one is gone.
+    expect(raw).not.toMatch(/EXACTLY ONE routing run/);
+  });
+});
+
+// ── S2: a dead letter with no answer is an unknown outcome, not a clean one ──
+
+describe('S2: a dead-lettered attempt with no HTTP status is treated as an unknown outcome', () => {
+  it('holds it rather than reporting that nothing was delivered', () => {
+    const verdict = classifyStuckLead({
+      lead: stalledAtRoutingLead(),
+      attempts: [answeredAttempt({
+        status: 'dead_letter', http_status: null, error_class: 'timeout', next_retry_at: null,
+      })],
+      nowMs: STALLED,
+    });
+    expect(verdict.disposition).toBe(REAP_DISPOSITION.AMBIGUOUS_HOLD);
+    expect(verdict.resumable).toBe(false);
+    // The specific claim that was wrong. An attempt that timed out repeatedly
+    // may well have been received and processed before the connection died.
+    expect(verdict.reason).not.toMatch(/nothing was delivered/i);
+  });
+
+  it('a dead letter that DID get an answer is still a known outcome and is not held on that basis', () => {
+    // The destination answered 400. Nothing is unknown about it, so this must
+    // not be swept into the ambiguous bucket by an over-broad rule.
+    expect(hasUnknownOutcome(stalledAtRoutingLead(), [answeredAttempt({
+      status: 'dead_letter', http_status: 400, next_retry_at: null,
+    })])).toBe(false);
+  });
+
+  it('is reported through hasUnknownOutcome directly, for both the null and undefined shapes', () => {
+    for (const http_status of [null, undefined]) {
+      expect(hasUnknownOutcome(stalledAtRoutingLead(), [answeredAttempt({
+        status: 'dead_letter', http_status, next_retry_at: null,
+      })])).toBe(true);
+    }
+  });
+});
+
+// ── S3: the scan cannot silently hide the oldest stuck leads ────────────────
+
+describe('S3: the scan finds the oldest stuck leads regardless of table size, and says when it truncated', () => {
+  it('orders oldest first, so a cap truncates the newest rows rather than the stuck ones', async () => {
+    const seen = [];
+    const db = makeDb({ leads: [crashedBeforeRoutingLead()] });
+    const inner = db.entities.Lead.filter;
+    db.entities.Lead.filter = async (where, order, limit, skip) => {
+      seen.push(order);
+      return inner(where, order, limit, skip);
+    };
+
+    await runStuckLeadReaperPass(db, { nowMs: STALLED, retryPass: makeRetryPassSpy(), env: ENABLED });
+
+    // '-created_date' (newest first) is what made the oldest stuck leads
+    // invisible past the cap. Stuck leads are old by definition.
+    expect(seen.every((o) => o === 'created_date')).toBe(true);
+    expect(seen).not.toContain('-created_date');
+  });
+
+  it('the oldest stuck lead is still found when the queue is larger than one page', async () => {
+    // One genuinely old stuck lead buried under a page and a half of newer
+    // queued rows that are still moving. Newest-first paging would have put it
+    // last; oldest-first puts it first.
+    const oldest = crashedBeforeRoutingLead({
+      id: 'lead-oldest', created_date: iso(T0 - 30 * 24 * 3600 * 1000), updated_date: iso(T0 - 30 * 24 * 3600 * 1000),
+    });
+    const newer = Array.from({ length: 600 }, (_, i) => stalledAtRoutingLead({
+      id: `moving-${i}`, created_date: iso(T0 + i), updated_date: iso(STALLED - 60_000),
+    }));
+    const db = makeDb({ leads: [oldest, ...newer] });
+    // The in-memory Lead.filter ignores sort, so order the rows the way the
+    // real repository's ORDER BY created_date ASC would return them.
+    db.rows.leads.sort((a, b) => Date.parse(a.created_date) - Date.parse(b.created_date));
+
+    const out = await runStuckLeadReaperPass(db, { nowMs: STALLED, retryPass: makeRetryPassSpy(), env: ENABLED });
+
+    expect(out.scanned).toBe(601);
+    expect(out.stuck.map((r) => r.id)).toEqual(['lead-oldest']);
+    expect(out.scan.truncated).toBe(false);
+  });
+
+  it('reports truncation explicitly when the cap is hit, instead of losing rows silently', async () => {
+    // A queued backlog larger than MAX_SCAN. The pass still does bounded work,
+    // but it now says so.
+    const many = Array.from({ length: 5200 }, (_, i) => stalledAtRoutingLead({
+      id: `q-${i}`, created_date: iso(T0 + i), updated_date: iso(STALLED - 60_000),
+    }));
+    const db = makeDb({ leads: many });
+
+    const out = await runStuckLeadReaperPass(db, { nowMs: STALLED, retryPass: makeRetryPassSpy(), env: ENABLED });
+
+    expect(out.scan.truncated).toBe(true);
+    expect(out.scan.limit).toBe(5000);
+    expect(out.scanned).toBe(5000);
   });
 });
 

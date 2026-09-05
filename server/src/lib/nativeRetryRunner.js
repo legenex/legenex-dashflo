@@ -65,8 +65,60 @@ async function resolveMemberForRetry(db, attempt) {
   return engine.buildMemberForRetry(rm, buyer, deliveryCfg);
 }
 
-export async function runNativeRetryPass(db, { workerId, validateTarget: overrideValidateTarget }) {
+// Optional per-lead scoping for the due queue.
+//
+// Why this exists, stated plainly because it is a safety mechanism and not a
+// convenience: runNativeRetryPass is a BATCH worker over every due
+// DeliveryAttempt in the system. That is exactly right for its two original
+// callers (nativeRetryWorker.js and nativeRetryScheduler.js), whose whole job
+// is "drain the due queue". It is wrong for a caller that has already decided,
+// per lead, which leads may safely be re-sent and which must never be:
+// reapStuckLeads.js classifies a stuck lead as AMBIGUOUS_HOLD,
+// EXCLUDED_MIGRATED or ALREADY_SOLD precisely to keep it out of a resend, and
+// before this parameter existed its call into this batch pass re-drove those
+// leads' attempts anyway, alongside the ones it had approved. The
+// classification governed only what was written to the Lead row and shown on
+// the Stuck Leads card, never what actually went on the wire.
+//
+// The shape is an ALLOWLIST, not an exclude list, and that is deliberate. An
+// exclude list fails open: a lead the caller forgot to name, or failed to
+// classify because a query threw halfway through its scan, is still sent. An
+// allowlist fails closed: anything the caller did not explicitly approve is
+// simply not in the batch. For a mechanism whose failure mode is a duplicate
+// commercial send, fail-closed is the only defensible default.
+//
+// Backward compatibility is exact. `onlyLeadIds` omitted (or null) returns the
+// store untouched, so nativeRetryWorker.js and nativeRetryScheduler.js get
+// byte-identical behavior to before: same query, same batch, same limit.
+//
+// The filter is applied at listDue rather than at deliverFn on purpose. An
+// attempt outside the scope is never even claimed, so no lease is taken, no
+// lease_version is bumped and no row is written. Scoping a pass cannot leave a
+// side effect on the attempts it excluded.
+//
+// One throughput note, not a safety one: the entity store's listDue reads at
+// most `limit` (100) due rows ordered by next_retry_at ascending and this
+// filter is applied to that page. A scoped lead whose attempt is not in the
+// oldest 100 due rows is simply picked up on a later pass. Ordering is oldest
+// first, and a stuck lead's attempt is by definition old, so in practice it
+// sorts to the front of that page rather than off the end of it.
+function scopeStoreToLeads(store, onlyLeadIds) {
+  if (onlyLeadIds === undefined || onlyLeadIds === null) return store;
+  const allowed = new Set([].concat(onlyLeadIds).map((id) => String(id)));
+  return {
+    ...store,
+    async listDue(nowMs, limit) {
+      const due = await store.listDue(nowMs, limit);
+      return (Array.isArray(due) ? due : []).filter((a) => allowed.has(String(a?.lead_id)));
+    },
+  };
+}
+
+export async function runNativeRetryPass(db, { workerId, validateTarget: overrideValidateTarget, onlyLeadIds }) {
   const validateTarget = overrideValidateTarget || defaultValidateTarget;
+  const scopedLeadIds = (onlyLeadIds === undefined || onlyLeadIds === null)
+    ? null
+    : new Set([].concat(onlyLeadIds).map((id) => String(id)));
   const settingsArr = await db.entities.AppSettings.list();
   const mode = String((settingsArr[0] && settingsArr[0].distribution_mode) || 'legacy_only');
   if (!NATIVE_MODES.has(mode)) {
@@ -83,6 +135,17 @@ export async function runNativeRetryPass(db, { workerId, validateTarget: overrid
   const isLeadSold = (leadId) => engine.isLeadAlreadySold(capStore, leadId);
 
   const deliverFn = async (attempt) => {
+    // Second layer, behind the listDue filter above. Today runRetryWorker only
+    // ever calls deliverFn with rows it read from listDue, so this can never
+    // fire; it exists so that a future change to the worker loop cannot
+    // silently reopen the exact defect this scoping was added to close. It
+    // throws rather than returning a failed status because a scoped attempt
+    // reaching the send path is an invariant breach, not a delivery outcome,
+    // and returning a status here would make runRetryWorker write backoff or
+    // dead-letter state onto a row the caller said not to touch.
+    if (scopedLeadIds && !scopedLeadIds.has(String(attempt?.lead_id))) {
+      throw new Error(`native retry pass is scoped and must not deliver attempt ${attempt?.id} for lead ${attempt?.lead_id}`);
+    }
     let member;
     try {
       member = await resolveMemberForRetry(db, attempt);
@@ -146,8 +209,11 @@ export async function runNativeRetryPass(db, { workerId, validateTarget: overrid
   // batch-start timestamp - see runRetryWorker's own comment for why this
   // matters once a real backlog (up to 100 due attempts processed
   // sequentially) is in play.
-  const outcome = await engine.runRetryWorker(store, deliverFn, {
+  const outcome = await engine.runRetryWorker(scopeStoreToLeads(store, onlyLeadIds), deliverFn, {
     nowMs: Date.now(), workerId, healthStore, isLeadSold, now: () => Date.now(),
   });
+  // scoped_lead_ids is added ONLY when the caller asked for scoping, so the
+  // return shape the two pre-existing callers see is unchanged.
+  if (scopedLeadIds) return { ran: true, mode, outcome, scoped_lead_ids: [...scopedLeadIds] };
   return { ran: true, mode, outcome };
 }
