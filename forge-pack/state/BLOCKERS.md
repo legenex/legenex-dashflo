@@ -52,3 +52,20 @@ ambiguous outcome rather than cascading, (b) make `requireAccept` mandatory or a
 with `http_status === null` rather than string-matching `error_class`. This should land and be verified
 before W4-REAPER (which assumes ambiguous outcomes already surface correctly) and before Gate C.
 Raised: 2026-09-05
+
+## NEW-UNIT-NEEDED  Buyer Draft to Active has no delivery-test gate
+Blocked by: no work unit currently owns `client/src/pages/operations/OperationsBuyers.jsx`'s status transition.
+Evidence: W9-ONBOARDING verified, while completing D9, that D9's own acceptance line ("Draft to Active
+gated on a passing delivery test") does not exist in the live code. `OperationsBuyers.jsx`'s `transition()`
+is an instant status-only write (`api.entities.Buyer.update(buyer.id, { status: nextStatus })`) with no
+delivery-test precondition at all - an operator can promote any Draft buyer straight to Active with zero
+proof its delivery endpoint actually works. This is separate from GAP-59 (onboarding pipeline no longer
+blocks on missing Xero/Stripe, fixed) and from GAP-57 (vertical capture, fixed) - both of those are done;
+this one is not, and was out of W9-ONBOARDING's file ownership (`client/src/components/tables/**` is
+forbidden for that unit, and OperationsBuyers.jsx's transition control lives in operations-page territory).
+Smallest unblock: a small bounded unit owning `OperationsBuyers.jsx`'s transition control (or wherever the
+canonical status-change action lives) plus a delivery-test call (the existing `campaignDeliveryTest.js`/
+`deliveryMockSend.js` machinery from W6-FIXTURES's read context is the natural mechanism to gate on) that
+blocks Draft to Active until a delivery test against that buyer's configured destination has passed.
+Should land before Gate C, since D9 names this as a completion requirement, not an enhancement.
+Raised: 2026-09-05
