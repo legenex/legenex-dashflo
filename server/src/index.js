@@ -6,6 +6,7 @@ import path from 'node:path';
 import { config } from './config.js';
 import { ensureSchema } from './db/schema.js';
 import { ensureMigrationImportSchema } from './db/migrationImportSchema.js';
+import { ensureInvariantConstraints } from './db/invariantConstraints.js';
 import { attachUser } from './middleware/auth.js';
 import { csrfGuard, allowedOrigins } from './middleware/csrf.js';
 import { assertStartupConfig } from './lib/startupChecks.js';
@@ -29,6 +30,10 @@ async function main() {
   assertStartupConfig(config);
 
   await ensureSchema();
+  // Additive constraints closing an app-only enforcement gap the W7-INVARIANTS
+  // audit found (CapReservation had no DB-level uniqueness despite its own
+  // schema comment claiming one). See server/src/db/invariantConstraints.js.
+  await ensureInvariantConstraints();
   await ensureMigrationImportSchema();
   const loaded = await loadFunctions();
   console.log(`[dashos] loaded ${Object.keys(loaded).length} functions`);
