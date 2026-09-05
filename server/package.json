@@ -13,6 +13,7 @@
     "backfill:api-key-hashes": "node scripts/backfill-api-key-hashes.js",
     "migrate:key-namespace": "node scripts/migrate-key-namespace.js",
     "backfill:buyer-identity": "node scripts/backfill-buyer-identity.js",
+    "migrate:status-vocabulary": "node scripts/migrate-status-vocabulary.js",
     "recover:config": "node scripts/recover-configuration.js"
   },
   "dependencies": {

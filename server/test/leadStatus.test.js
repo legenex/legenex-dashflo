@@ -53,7 +53,11 @@ import {
   triggerKeyForInboundStatus,
   remapTriggerArray,
   statusPatch,
+  newVocabularyFields,
   leadStatusPatch,
+  assertNoMoneyFieldWritten,
+  lastLiveActivityMs,
+  hasMigrationMarker,
   isExcludedFromRedrive,
   isRedriveEligible,
 } from '../src/lib/leadStatus.js';
@@ -425,17 +429,78 @@ describe('W2-STATUS D4 risk 2: this module can never touch money', () => {
 });
 
 describe('W2-STATUS D4 risk 3: historical failures are never re-driven', () => {
-  it('excludes any lead carrying migrated_at, and only those', () => {
-    expect(isExcludedFromRedrive({ migrated_at: '2026-09-05T00:00:00.000Z' })).toBe(true);
+  const MIGRATED = '2026-09-05T00:00:00.000Z';
+  const BEFORE = '2026-08-01T00:00:00.000Z';
+  const AFTER = '2026-11-20T00:00:00.000Z';
+
+  it('excludes a migrated row whose failed state is the one the migration left it in', () => {
+    expect(isExcludedFromRedrive({ migrated_at: MIGRATED })).toBe(true);
+    expect(isExcludedFromRedrive({ migrated_at: MIGRATED, processed_at: BEFORE })).toBe(true);
+    expect(isExcludedFromRedrive({ migrated_at: MIGRATED, leadbyte_outcome_at: BEFORE })).toBe(true);
     expect(isExcludedFromRedrive({})).toBe(false);
     expect(isExcludedFromRedrive(null)).toBe(false);
-    expect(isRedriveEligible({ migrated_at: '2026-09-05T00:00:00.000Z' })).toBe(false);
+    expect(isRedriveEligible({ migrated_at: MIGRATED })).toBe(false);
     expect(isRedriveEligible({ lead_status: 'queued', processing_state: 'failed' })).toBe(true);
+  });
+
+  // Adversarial QA finding S3. The predicate used to be
+  // Boolean(lead.migrated_at), and migrated_at is permanent and never
+  // reconsidered, so a lead that migrated cleanly and then genuinely failed,
+  // live, months later carried a marker that made it invisible to W4-REAPER
+  // for the rest of its life. Nothing would have logged that it had been
+  // skipped: it would simply have sat at queued + failed with nobody coming
+  // for it, which is a quieter and worse failure than the flood the marker
+  // exists to prevent.
+  it('does NOT exclude a row that failed again, for real, AFTER the migration ran', () => {
+    const failedAgain = {
+      lead_status: 'queued',
+      processing_state: 'failed',
+      migrated_at: MIGRATED,
+      // A live processLead run. processLead.js writes processed_at on every
+      // branch it takes, and this module cannot write it: it is not in
+      // STATUS_PATCH_FIELDS, so a value later than the stamp can only have
+      // come from a live path after the migration.
+      processed_at: AFTER,
+    };
+    expect(isExcludedFromRedrive(failedAgain)).toBe(false);
+    expect(isRedriveEligible(failedAgain)).toBe(true);
+
+    // The same via the other live signal: an outcome postback.
+    expect(isRedriveEligible({ migrated_at: MIGRATED, leadbyte_outcome_at: AFTER })).toBe(true);
+    // And the newest activity wins when a row carries both.
+    expect(isRedriveEligible({
+      migrated_at: MIGRATED, processed_at: BEFORE, leadbyte_outcome_at: AFTER,
+    })).toBe(true);
+  });
+
+  it('stays excluded when it cannot tell, because a wrong inclusion delivers real leads to real buyers', () => {
+    // Both "cannot tell" shapes resolve to excluded on purpose. The cost of a
+    // wrong exclusion is one lead an operator can still find by hand; the cost
+    // of a wrong inclusion is redelivering historical leads to buyers.
+    expect(isExcludedFromRedrive({ migrated_at: 'not a date', processed_at: AFTER })).toBe(true);
+    expect(isExcludedFromRedrive({ migrated_at: MIGRATED, processed_at: 'not a date' })).toBe(true);
+    // Exactly-equal timestamps are the migration's own instant, not new work.
+    expect(isExcludedFromRedrive({ migrated_at: MIGRATED, processed_at: MIGRATED })).toBe(true);
+  });
+
+  it('separates "already migrated" from "not re-drivable", which are different questions', () => {
+    // The two used to be the same predicate. Once isExcludedFromRedrive became
+    // a time comparison, reusing it for idempotency would have made the
+    // backfill re-stamp every migrated row that had since been touched, which
+    // would have rewritten provenance on exactly the rows that failed again.
+    const migratedThenFailedAgain = {
+      id: 'a', final_status: LEGACY_STATUS.ERROR, migrated_at: MIGRATED, processed_at: AFTER,
+    };
+    expect(hasMigrationMarker(migratedThenFailedAgain)).toBe(true);
+    expect(isExcludedFromRedrive(migratedThenFailedAgain)).toBe(false);
+    // Still never patched again: the marker is what makes the backfill
+    // idempotent, and it is still there.
+    expect(leadStatusPatch(migratedThenFailedAgain)).toBeNull();
   });
 
   it('a migrated lead is never patched again, so a second run cannot re-stamp it', () => {
     const migrated = {
-      id: 'a', final_status: LEGACY_STATUS.ERROR, migrated_at: '2026-09-05T00:00:00.000Z',
+      id: 'a', final_status: LEGACY_STATUS.ERROR, migrated_at: MIGRATED,
     };
     expect(leadStatusPatch(migrated)).toBeNull();
   });
@@ -448,6 +513,107 @@ describe('W2-STATUS D4 risk 3: historical failures are never re-driven', () => {
     expect(livePatch.processing_state).toBe(PROCESSING_STATE.FAILED);
     expect(livePatch.migrated_at).toBeUndefined();
     expect(isRedriveEligible(livePatch)).toBe(true);
+  });
+
+  it('reports the newest live activity, and null when the row records none', () => {
+    expect(lastLiveActivityMs({ processed_at: BEFORE })).toBe(Date.parse(BEFORE));
+    expect(lastLiveActivityMs({ processed_at: BEFORE, leadbyte_outcome_at: AFTER }))
+      .toBe(Date.parse(AFTER));
+    expect(lastLiveActivityMs({ leadbyte_outcome_at: BEFORE, processed_at: AFTER }))
+      .toBe(Date.parse(AFTER));
+    expect(lastLiveActivityMs({})).toBeNull();
+    expect(lastLiveActivityMs(null)).toBeNull();
+    // updated_date is deliberately NOT a signal: the repository sets it on the
+    // migration's own write, so it is always a hair later than the stamp that
+    // write laid down, and reading it would mark every migrated row eligible
+    // the instant the backfill finished.
+    expect(lastLiveActivityMs({ updated_date: AFTER })).toBeNull();
+  });
+});
+
+describe('W2-STATUS: the live-path helper writes the new fields and never final_status', () => {
+  // Adversarial QA finding B2. server/src/functions/webhook.js and
+  // server/src/functions/leadbyteWebhook.js call this, and they must be unable
+  // to write final_status through it: both files have their own delicate rules
+  // about whether final_status may move at all, and a helper that carried it
+  // would make writing it on a path that had decided not to a one-character
+  // mistake.
+  it('emits the new vocabulary and omits final_status entirely', () => {
+    const fields = newVocabularyFields(LEGACY_STATUS.SOLD);
+    expect(fields).toEqual({
+      lead_status: LEAD_STATUS.SOLD,
+      processing_state: PROCESSING_STATE.SETTLED,
+      is_qualified: true,
+    });
+    expect('final_status' in fields).toBe(false);
+    // And it is the same mapping, not a second copy of it.
+    const { final_status: legacyValue, ...rest } = statusPatch(LEGACY_STATUS.SOLD);
+    expect(legacyValue).toBe(LEGACY_STATUS.SOLD);
+    expect(fields).toEqual(rest);
+  });
+
+  it('covers every legacy value, so no live write can produce a null lead_status', () => {
+    for (const legacy of LEGACY_STATUS_VALUES) {
+      const fields = newVocabularyFields(legacy);
+      expect(isLeadStatus(fields.lead_status), `${legacy} produced ${fields.lead_status}`).toBe(true);
+      expect(isProcessingState(fields.processing_state)).toBe(true);
+      expect(fields.final_status).toBeUndefined();
+      expect(fields.migrated_at).toBeUndefined();
+    }
+  });
+
+  it('never stamps a migration provenance code on a live write', () => {
+    // The three MIGRATED_FROM_ codes exist because a HISTORICAL row records no
+    // machine reason. A lead created a microsecond ago has not been migrated
+    // from anything, and a later reader would take the code at face value.
+    // Before this repair, the descriptor fallback meant every lead created by
+    // processLead.js carried MIGRATED_FROM_PROCESSING, and the webhook mirror
+    // would have spread that to two more live paths.
+    for (const legacy of [LEGACY_STATUS.PROCESSING, LEGACY_STATUS.QUALIFIED, LEGACY_STATUS.ERROR]) {
+      expect(newVocabularyFields(legacy).status_reason).toBeUndefined();
+      expect(statusPatch(legacy).status_reason).toBeUndefined();
+    }
+    // The backfill, which is the one thing allowed to write them, still does.
+    expect(leadStatusPatch({ id: 'p', final_status: LEGACY_STATUS.ERROR }).status_reason)
+      .toBe(STATUS_REASON.MIGRATED_FROM_ERROR);
+    // And a caller asking for one explicitly is a bug, not a value to accept.
+    expect(() => statusPatch(LEGACY_STATUS.ERROR, { reason: STATUS_REASON.MIGRATED_FROM_ERROR }))
+      .toThrow(/migration provenance code/);
+  });
+});
+
+describe('W2-STATUS D4 risk 2: the money guard actually throws', () => {
+  // Adversarial QA finding M2. The test that carried this guard's name only
+  // re-asserted the two static field lists, so the throw was never executed by
+  // anything and a future edit could have emptied the function body without a
+  // single test noticing. Every patch this module emits passes through this
+  // exact function, so calling it directly IS exercising the production path.
+  it('refuses every one of the eight money flags, by name, with the reason', () => {
+    for (const moneyField of MONEY_FIELDS_NEVER_WRITTEN) {
+      expect(
+        () => assertNoMoneyFieldWritten({ lead_status: LEAD_STATUS.SOLD, [moneyField]: true }, 'test'),
+        `${moneyField} was allowed through`,
+      ).toThrow(new RegExp(`refused to write money flag "${moneyField}"`));
+    }
+  });
+
+  it('refuses a field that is neither a money flag nor a declared status field', () => {
+    expect(() => assertNoMoneyFieldWritten({ revenue: 100 }, 'test'))
+      .toThrow(/is not a declared status field/);
+    expect(() => assertNoMoneyFieldWritten({ buyer_id: 'b1' }, 'test'))
+      .toThrow(/is not a declared status field/);
+  });
+
+  it('lets a legitimate status patch through unchanged, so the guard is not just a wall', () => {
+    const patch = { lead_status: LEAD_STATUS.SOLD, processing_state: PROCESSING_STATE.SETTLED };
+    expect(assertNoMoneyFieldWritten(patch, 'test')).toBe(patch);
+    // Every real emitter goes through it, so a money key cannot survive one.
+    for (const key of Object.keys(statusPatch(LEGACY_STATUS.SOLD, { reason: 'SOLD' }))) {
+      expect(MONEY_FIELDS_NEVER_WRITTEN).not.toContain(key);
+    }
+    for (const key of Object.keys(leadStatusPatch({ id: 'g', final_status: LEGACY_STATUS.SOLD }))) {
+      expect(MONEY_FIELDS_NEVER_WRITTEN).not.toContain(key);
+    }
   });
 });
 
@@ -467,7 +633,15 @@ describe('W2-STATUS: leadStatusPatch is additive and idempotent', () => {
     expect(patch.final_status).toBeUndefined();
   });
 
-  it('returns null for a lead already holding every target value', () => {
+  // Adversarial QA finding S2. This used to assert null, on the reasoning that
+  // a row with nothing to change is a row with nothing to write. The flaw is
+  // what the marker then means: this row WAS examined by the migration and WAS
+  // confirmed correct, and it came out indistinguishable from a row the
+  // migration never reached. Claim 4 of the unit is that every migrated row
+  // carries migrated_at, and it was silently false for exactly the rows a
+  // reader would most want to ask about, which since finding B2 was fixed is
+  // every lead a live webhook wrote before the migration got to it.
+  it('stamps a row that already held every target value, because examined IS migrated', () => {
     const alreadyThere = {
       id: 'l2',
       final_status: LEGACY_STATUS.SOLD,
@@ -475,7 +649,10 @@ describe('W2-STATUS: leadStatusPatch is additive and idempotent', () => {
       processing_state: PROCESSING_STATE.SETTLED,
       is_qualified: true,
     };
-    expect(leadStatusPatch(alreadyThere, { at })).toBeNull();
+    const patch = leadStatusPatch(alreadyThere, { at });
+    // The marker, and ONLY the marker. Nothing is rewritten, so the additive
+    // guarantee and the "rollback is dropping the new keys" plan both hold.
+    expect(patch).toEqual({ migrated_at: at.toISOString() });
   });
 
   it('returns null for an unmapped or absent final_status rather than guessing', () => {

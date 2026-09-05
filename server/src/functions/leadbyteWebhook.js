@@ -12,6 +12,22 @@
 // delivery, connector, CAPI, or HLR logic. It never writes trustedform_valid
 // or cert_source, and never overwrites the inbound pipeline fields.
 
+// W2-STATUS, adversarial QA finding B2. This endpoint creates and updates
+// Leads on a live path and wrote final_status only, so every lead it touched
+// after the seven-status release would have carried a NULL lead_status,
+// invisible to the new vocabulary and to anything W3-UI-STATUS later builds on
+// it. The mapping is NOT reimplemented here: newVocabularyFields is the same
+// statusPatch the migration and processLead.js use, with final_status removed,
+// so this file's own rules about when final_status may be written (the
+// precedence guard in the update branch below, which is unchanged) stay the
+// only thing that decides it. See server/src/lib/leadStatus.js.
+import {
+  LEGACY_STATUS,
+  PROCESSING_STATE,
+  mapLegacyStatus,
+  newVocabularyFields,
+} from '../lib/leadStatus.js';
+
 // ── Identity + precedence helpers (inlined from the shared leadIdentity module) ──
 
 // Precedence order, lowest to highest:
@@ -375,6 +391,24 @@ export default async function leadbyteWebhook(ctx) {
       ) {
         delete patch.final_status;
       }
+      // W2-STATUS B2: mirror the new vocabulary onto whatever final_status
+      // this row ends up holding. Strictly additive.
+      //
+      // Placed AFTER the precedence guard above on purpose. The guard may
+      // delete patch.final_status to stop a late or replayed postback
+      // downgrading a lead, and mirroring before it ran would have written a
+      // lead_status the guard had just refused to write to final_status: the
+      // downgrade this endpoint blocks would have happened anyway, in the
+      // field everything is about to start reading. Reading the effective
+      // value here means the two fields cannot disagree, whichever way the
+      // guard went. The guard itself, and the order it enforces, are
+      // untouched by this repair (that order contradicts D1 and is a separate,
+      // larger fix recorded in forge-pack/state/BLOCKERS.md).
+      const mirroredStatus = patch.final_status || clean(existing.final_status);
+      if (mirroredStatus && mapLegacyStatus(mirroredStatus)) {
+        Object.assign(patch, newVocabularyFields(mirroredStatus));
+      }
+
       // Never overwrite an existing non-zero revenue with a null/zero outcome value.
       if (patch.revenue == null || Number(patch.revenue) === 0) {
         if (Number(existing.revenue) > 0) delete patch.revenue;
@@ -410,7 +444,15 @@ export default async function leadbyteWebhook(ctx) {
           dupMapped.merged_reason = 'identity_match_leadbyte_webhook';
           dupMapped.merged_prior_status = dup.final_status || null;
           await db.entities.Lead.update(dup.id, {
-            final_status: 'Duplicate',
+            final_status: LEGACY_STATUS.DUPLICATE,
+            // W2-STATUS B2. The collapse is a status write like any other and
+            // is the one place this file sets a status it did not receive, so
+            // it needs the mirror too. D4 maps the retiring Duplicate value
+            // onto rejected with REJECTED_DUPLICATE, and the survivor's id is
+            // the duplicate_of_lead_id link D4 asks for, known here for free.
+            // Without this these rows would have been the only leads on the
+            // system reaching rejected with no lead_status at all.
+            ...newVocabularyFields(LEGACY_STATUS.DUPLICATE, { duplicateOfLeadId: existing.id }),
             archived: true,
             mapped_fields: JSON.stringify(dupMapped),
           });
@@ -480,8 +522,30 @@ export default async function leadbyteWebhook(ctx) {
         if (hit?.name) supplierName = hit.name;
       } catch { /* keep the sid fallback */ }
 
+      // W2-STATUS B2: the same additive mirror on the create path.
+      //
+      // A LeadByte outcome whose status maps to none of the four values this
+      // endpoint recognises still creates a lead, and leaving lead_status null
+      // there would put the row straight back into the invisible state finding
+      // B2 is about. The value mirrored in that case is the retiring
+      // Processing value, because that is what the row will actually hold:
+      // `outcome` carries final_status only when mapFinalStatus resolved one,
+      // and Lead.final_status carries Processing as a schema default
+      // otherwise. Under D4 it maps to lead_status queued.
+      //
+      // processing_state is overridden to received rather than D4's routing,
+      // for the same reason processLead.js's own intake create does it:
+      // routing describes a historical row that never got past Processing.
+      //
+      // final_status is unaffected by any of this and is still decided
+      // entirely by mapFinalStatus, exactly as before.
+      const createdStatusFields = finalStatus
+        ? newVocabularyFields(finalStatus)
+        : newVocabularyFields(LEGACY_STATUS.PROCESSING, { processingState: PROCESSING_STATE.RECEIVED });
+
       const created = await db.entities.Lead.create({
         ...outcome,
+        ...createdStatusFields,
         archived: false,
         first_name: contactFirst || undefined,
         last_name: contactLast || undefined,
